@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenVPN-WEB 控制台</title>
+    <script>
+      (function () {
+        try {
+          var themes = ['midnight', 'aurora', 'emerald', 'daylight'];
+          var theme = window.localStorage.getItem('openvpn-admin-theme');
+          if (themes.indexOf(theme) > -1) {
+            document.documentElement.dataset.theme = theme;
+          }
+        } catch (error) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

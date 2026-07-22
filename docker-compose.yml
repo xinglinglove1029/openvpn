@@ -1,0 +1,18 @@
+services:
+  openvpn:
+    image: xinglinglove/openvpn:latest
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "1194:1194/udp"
+      - "8833:8833"
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+      - OVPN_GATEWAY=false
+    volumes:
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro

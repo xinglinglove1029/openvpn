@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenVPN 运维控制台</title>
+    <script>
+      (function () {
+        try {
+          var themes = ['midnight', 'aurora', 'emerald', 'daylight'];
+          var theme = window.localStorage.getItem('openvpn-admin-theme');
+          if (themes.indexOf(theme) > -1) {
+            document.documentElement.dataset.theme = theme;
+          }
+        } catch (error) {}
+      })();
+
+      window.__OPENVPN_ADMIN__ = {
+        page: '{{ .page }}',
+        sysUser: '{{ .sysUser }}',
+        version: '{{ .version }}',
+        clientUrls: {{ .clientUrlsJson }}
+      };
+    </script>
+    <link rel="icon" href="/static/cropped-openvpn-32x32.png" sizes="32x32" />
+    <link rel="stylesheet" href="/static/admin/assets/app.css?v={{ .assetVersion }}" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/static/admin/assets/app.js?v={{ .assetVersion }}"></script>
+  </body>
+</html>

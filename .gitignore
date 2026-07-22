@@ -1,0 +1,13 @@
+.idea
+.vscode
+node_modules
+data/
+*.tsbuildinfo
+/build/openvpn-web
+/build/openvpn-web.exe
+
+/dist/
+/bin/
+ovpn.db
+config.json
+

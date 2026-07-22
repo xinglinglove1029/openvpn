@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.vscode
+data
+dist
+bin
+node_modules
+frontend/admin/node_modules
+frontend/admin/dist
+frontend/admin/tsconfig.tsbuildinfo
+internal/openvpnweb/templates/static/admin/assets
+build/openvpn-web
+build/openvpn-web.exe
+*.log
+ovpn.db
+config.json
