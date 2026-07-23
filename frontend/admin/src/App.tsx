@@ -315,7 +315,7 @@ function getClientBytes(client: OnlineClient, direction: 'received' | 'sent') {
     ? [client.bytesReceived, client.bytes_received, client.recvBytes]
     : [client.bytesSent, client.bytes_sent, client.sendBytes];
   for (const value of candidates) {
-    if (value === null || value === undefined || value === '') continue;
+    if (value == null) continue;
     const num = Number(value);
     if (Number.isFinite(num)) return num;
   }
