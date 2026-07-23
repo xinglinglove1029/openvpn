@@ -45,8 +45,6 @@ archives:
 checksum:
   name_template: 'openvpn-web_sha256_checksums.txt'
   algorithm: sha256
-upx:
-  - enabled: true
 changelog:
   sort: asc
   filters:
