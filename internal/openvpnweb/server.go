@@ -272,7 +272,7 @@ func parseCrl(crlPath string) (*CertData, error) {
 
 	block, _ := pem.Decode(crlData)
 	if block == nil {
-		return nil, fmt.Errorf("鏃犳硶瑙ｆ瀽璇佷功鏂囦欢")
+		return nil, fmt.Errorf("无法解析证书文件")
 	}
 
 	crl, err := x509.ParseRevocationList(block.Bytes)
@@ -634,16 +634,16 @@ func Run(info BuildInfo) {
 							session.Set("user", u.Username)
 							session.Save()
 							resetLoginFail(cip)
-							c.JSON(200, gin.H{"message": "鐧诲綍鎴愬姛", "redirect": "/"})
+							c.JSON(200, gin.H{"message": "登录成功", "redirect": "/"})
 						} else {
-							c.JSON(401, gin.H{"message": "MFA楠岃瘉澶辫触"})
+							c.JSON(401, gin.H{"message": "MFA 验证失败"})
 						}
 
 						return
 					}
 				}
 
-				c.JSON(401, gin.H{"message": "鐧诲綍瓒呮椂", "redirect": "/login"})
+				c.JSON(401, gin.H{"message": "登录超时", "redirect": "/login"})
 				return
 			}
 
@@ -651,7 +651,7 @@ func Run(info BuildInfo) {
 				user := u.Info()
 				if user.MfaSecret != "" {
 					cc.Set("valid_user", u.Username, 1*time.Minute)
-					c.JSON(200, gin.H{"message": "闇€瑕丮FA楠岃瘉"})
+					c.JSON(200, gin.H{"message": "需要 MFA 验证"})
 					return
 				}
 
@@ -660,7 +660,7 @@ func Run(info BuildInfo) {
 
 				resetLoginFail(cip)
 
-				c.JSON(200, gin.H{"message": "鐧诲綍鎴愬姛", "redirect": "/", "user": gin.H{"id": user.ID, "isFirstLogin": *user.IsFirstLogin}})
+				c.JSON(200, gin.H{"message": "登录成功", "redirect": "/", "user": gin.H{"id": user.ID, "isFirstLogin": *user.IsFirstLogin}})
 				return
 			}
 		}
@@ -777,7 +777,7 @@ func Run(info BuildInfo) {
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "鏇存柊鎴愬姛"})
+		c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 	})
 
 	r.POST("/email/send", func(c *gin.Context) {
@@ -819,10 +819,10 @@ func Run(info BuildInfo) {
 							out = []byte(err.Error())
 						}
 						logger.Error(context.Background(), string(out))
-						c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("%s鐢ㄦ埛璁よ瘉澶辫触", msg)})
+						c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("%s用户验证失败", msg)})
 					} else {
 						ov.sendCommand("signal SIGHUP")
-						c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("%s鐢ㄦ埛璁よ瘉鎴愬姛", msg)})
+						c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("%s用户验证成功", msg)})
 					}
 				}
 			case "renewCert":
@@ -834,21 +834,21 @@ func Run(info BuildInfo) {
 						out = []byte(err.Error())
 					}
 					logger.Error(context.Background(), string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "鏇存柊璇佷功澶辫触"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新证书失败"})
 					return
 				}
 
 				ov.sendCommand("signal SIGHUP")
-				c.JSON(http.StatusOK, gin.H{"message": "鏇存柊璇佷功鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "更新证书成功"})
 			case "restartSrv":
 				_, err := ov.sendCommand("signal SIGHUP")
 				if err != nil {
 					logger.Error(context.Background(), err.Error())
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "閲嶅惎鏈嶅姟澶辫触"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "重启服务失败"})
 					return
 				}
 
-				c.JSON(http.StatusOK, gin.H{"message": "閲嶅惎鏈嶅姟鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "重启服务成功"})
 			case "getConfig":
 				data, err := os.ReadFile(filepath.Join(ovData, "server.conf"))
 				if err != nil {
@@ -903,7 +903,7 @@ func Run(info BuildInfo) {
 			if err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"message": err.Error()})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"message": "鐧诲綍鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "登录成功"})
 			}
 		})
 
@@ -947,7 +947,7 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"message": "娣诲姞鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "添加成功"})
 		})
 
 		ovpn.PATCH("/group", func(c *gin.Context) {
@@ -966,7 +966,7 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"message": "鏇存柊鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 		})
 
 		ovpn.DELETE("/group/:id", func(c *gin.Context) {
@@ -979,7 +979,7 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"message": "鍒犻櫎鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 		})
 
 		ovpn.GET("/user", func(c *gin.Context) {
@@ -1092,7 +1092,7 @@ func Run(info BuildInfo) {
 			file, err := c.FormFile("file")
 			if err != nil {
 				if strings.Contains(err.Error(), "no such file") {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "娌℃湁涓婁紶鏂囦欢"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "没有上传文件"})
 					return
 				}
 			} else {
@@ -1146,7 +1146,7 @@ func Run(info BuildInfo) {
 					}
 				}
 
-				c.JSON(http.StatusOK, gin.H{"message": "瀵煎叆鐢ㄦ埛鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "导入用户成功"})
 				return
 			}
 
@@ -1187,11 +1187,11 @@ func Run(info BuildInfo) {
 							return
 						}
 
-						sendEmail(u.Email, "鐢ㄦ埛寮€閫氶€氱煡", buf.String())
+						sendEmail(u.Email, "用户开通通知", buf.String())
 					}()
 				}
 
-				c.JSON(http.StatusOK, gin.H{"message": "娣诲姞鐢ㄦ埛鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "添加用户成功"})
 			}
 		})
 
@@ -1254,7 +1254,7 @@ func Run(info BuildInfo) {
 					}()
 				}
 
-				c.JSON(http.StatusOK, gin.H{"message": "鐢ㄦ埛鏇存柊鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "用户更新成功"})
 			}
 		})
 
@@ -1266,7 +1266,7 @@ func Run(info BuildInfo) {
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"message": "鍒犻櫎鐢ㄦ埛鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "删除用户成功"})
 			}
 		})
 
@@ -1458,7 +1458,7 @@ func Run(info BuildInfo) {
 				cmd = exec.Command("easyrsa", "gen-crl")
 				if out, err = cmd.CombinedOutput(); err != nil {
 					logger.Error(context.Background(), string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "鏇存柊CRL璇佷功澶辫触"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新 CRL 证书失败"})
 				}
 			} else {
 				if len(out) == 0 {
@@ -1517,7 +1517,7 @@ func Run(info BuildInfo) {
 			}
 			LogNotifyError(event, NotifyClientEvent(event))
 
-			c.JSON(http.StatusOK, gin.H{"message": "娣诲姞璁板綍鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "添加记录成功"})
 		})
 
 		ovpn.GET("/notify/logs", func(c *gin.Context) {
@@ -1679,7 +1679,7 @@ func Run(info BuildInfo) {
 			if user, ok := session.Get("user").(string); ok {
 				cu := User{Username: user}.Info()
 				if u.ID != cu.ID {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "闈炴硶璇锋眰"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
 					return
 				}
 			}
@@ -1837,7 +1837,7 @@ func Run(info BuildInfo) {
 			if user, ok := session.Get("user").(string); ok {
 				cu := User{Username: user}.Info()
 				if u.ID != cu.ID {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "闈炴硶璇锋眰"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
 					return
 				}
 			}
@@ -1861,7 +1861,7 @@ func Run(info BuildInfo) {
 			if user, ok := session.Get("user").(string); ok {
 				cu := User{Username: user}.Info()
 				if !(u.ID == cu.ID || cu.Username == adminUsername) {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "闈炴硶璇锋眰"})
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
 					return
 				}
 			}

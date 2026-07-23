@@ -626,22 +626,22 @@ func FirewallHandler(c *gin.Context) {
 			err := setNftBlackList(vip, "add")
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "绂佺綉澶辫触"})
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "禁止失败"})
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"message": "绂佺綉鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "禁止成功"})
 		case "remove_blacklist":
 			vip := c.PostForm("vip")
 
 			err := setNftBlackList(vip, "delete")
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "瑙ｉ櫎缃戠粶闄愬埗澶辫触"})
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "删除网络限制失败"})
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"message": "瑙ｉ櫎缃戠粶闄愬埗鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "删除网络限制成功"})
 		case "set_rateLimit":
 			vip := c.PostForm("vip")
 			upload := c.PostForm("upload")
@@ -652,14 +652,14 @@ func FirewallHandler(c *gin.Context) {
 			err := setNftQosChain("upload", vip, upload, uploadUnit)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "璁剧疆涓婁紶閫熺巼澶辫触"})
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "设置上传速率失败"})
 				return
 			}
 
 			err = setNftQosChain("download", vip, download, downloadUnit)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "璁剧疆涓嬭浇閫熺巼澶辫触"})
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "设置下载速率失败"})
 				return
 			}
 
@@ -754,7 +754,7 @@ func FirewallHandler(c *gin.Context) {
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"message": "娣诲姞鎴愬姛"})
+				c.JSON(http.StatusOK, gin.H{"message": "添加成功"})
 			}
 		}
 	case http.MethodPatch:
@@ -829,7 +829,7 @@ func FirewallHandler(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"message": "鏇存柊鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 		}
 	case http.MethodDelete:
 		var f Firewall
@@ -856,7 +856,7 @@ func FirewallHandler(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"message": "鍒犻櫎鎴愬姛"})
+			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 		}
 	}
 }

@@ -90,11 +90,11 @@ func (u *User) Get(id string) User {
 
 func (u *User) Create() error {
 	if u.Username == "" || u.Password == "" {
-		return fmt.Errorf("闈炴硶璇锋眰")
+		return fmt.Errorf("非法请求")
 	}
 
 	if u.Username == adminUsername {
-		return fmt.Errorf("鐢ㄦ埛鍚嶄笌绯荤粺璐︽埛鍐茬獊")
+		return fmt.Errorf("用户名与系统账户冲突")
 	}
 
 	result := db.Create(&u)
@@ -210,7 +210,7 @@ func (u *User) Login(clogin bool) error {
 		if clogin {
 			if viper.GetBool("system.base.validate_client_config") {
 				if commonName != strings.TrimSuffix(u.OvpnConfig, ".ovpn") {
-					return fmt.Errorf("浣跨敤闈炴硶閰嶇疆鏂囦欢鐧诲綍")
+					return fmt.Errorf("使用非法配置文件登录")
 				}
 			}
 

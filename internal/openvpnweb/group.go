@@ -63,7 +63,7 @@ func (g *Group) All() []Group {
 
 func (g *Group) Update() error {
 	if g.ID == 0 {
-		return errors.New("鍒嗙粍ID涓嶈兘涓虹┖")
+		return errors.New("分组 ID 不能为空")
 	}
 
 	updates := map[string]interface{}{
@@ -73,7 +73,9 @@ func (g *Group) Update() error {
 		updates["config"] = g.Config
 	}
 
-	if g.ParentID != nil {
+	if g.ID == 1 {
+		updates["parent_id"] = nil
+	} else if g.ParentID != nil {
 		if *g.ParentID == g.ID {
 			return errors.New("上级分组不能选择自己")
 		}
@@ -92,10 +94,8 @@ func (g *Group) Update() error {
 		}
 
 		updates["parent_id"] = *g.ParentID
-	}
-
-	if g.ID == 1 {
-		updates["parent_id"] = nil
+	} else {
+		return errors.New("必须指定父节点")
 	}
 
 	result := db.Model(&Group{}).Where("id = ?", g.ID).Updates(updates)

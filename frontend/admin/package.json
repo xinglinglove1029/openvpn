@@ -12,6 +12,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "latest",
+    "lucide-react": "^1.26.0",
     "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest",

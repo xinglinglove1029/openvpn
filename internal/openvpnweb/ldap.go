@@ -89,7 +89,7 @@ func (l *LdapConn) Auth(clogin bool, username, password, commonName string) erro
 		if viper.GetBool("system.base.validate_client_config") {
 			configName := sr.Entries[0].GetAttributeValue(ldapUserAttrConfigName)
 			if commonName != strings.TrimSuffix(configName, ".ovpn") {
-				return fmt.Errorf("浣跨敤闈炴硶閰嶇疆鏂囦欢鐧诲綍")
+				return fmt.Errorf("使用非法配置文件登录")
 			}
 		}
 

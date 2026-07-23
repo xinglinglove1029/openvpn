@@ -15,14 +15,14 @@ type History struct {
 	ID            uint      `gorm:"primarykey" json:"id" form:"id"`
 	Vip           string    `gorm:"column:vip;comment:'VPN IP'" json:"vip" form:"vip"`
 	Vip6          string    `gorm:"column:vip6;comment:'VPN IPV6'" json:"vip6" form:"vip6"`
-	Rip           string    `gorm:"column:rip;comment:'鐢ㄦ埛 IP'" json:"rip" form:"rip"`
-	Rip6          string    `gorm:"column:rip6;comment:'鐢ㄦ埛 IPV6'" json:"rip6" form:"rip6"`
-	CommonName    string    `gorm:"column:common_name;comment:'瀹㈡埛绔悕绉?" json:"common_name" form:"common_name"`
-	Username      string    `gorm:"column:username;comment:'鐢ㄦ埛鍚?" json:"username" form:"username"`
-	BytesReceived float64   `gorm:"comment:'涓嬭浇娴侀噺'" form:"bytes_received" json:"bytes_received"`
-	BytesSent     float64   `gorm:"comment:'涓婁紶娴侀噺'" json:"bytes_sent" form:"bytes_sent"`
-	TimeUnix      int64     `gorm:"comment:'涓婄嚎鏃堕棿'" json:"time_unix" form:"time_unix"`
-	TimeDuration  int64     `gorm:"column:time_duration;comment:'鍦ㄧ嚎鏃堕暱'" json:"time_duration" form:"time_duration"`
+	Rip           string    `gorm:"column:rip;comment:'用户 IP'" json:"rip" form:"rip"`
+	Rip6          string    `gorm:"column:rip6;comment:'用户 IPV6'" json:"rip6" form:"rip6"`
+	CommonName    string    `gorm:"column:common_name;comment:'客户端名称'" json:"common_name" form:"common_name"`
+	Username      string    `gorm:"column:username;comment:'用户名'" json:"username" form:"username"`
+	BytesReceived float64   `gorm:"comment:'下行流量'" form:"bytes_received" json:"bytes_received"`
+	BytesSent     float64   `gorm:"comment:'上传流量'" json:"bytes_sent" form:"bytes_sent"`
+	TimeUnix      int64     `gorm:"comment:'上线时间'" json:"time_unix" form:"time_unix"`
+	TimeDuration  int64     `gorm:"column:time_duration;comment:'在线时长'" json:"time_duration" form:"time_duration"`
 	CreatedAt     time.Time `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 }
 

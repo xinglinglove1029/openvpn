@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import { User, Lock, KeyRound, Mail, ShieldCheck, ChevronDown, ChevronLeft, ChevronRight, Circle, AlertTriangle, FolderTree } from 'lucide-react';
 import { api } from './api';
 import type { FormEvent } from 'react';
 import type {
@@ -290,16 +291,19 @@ function isValidAccount(value: unknown) {
   return /^\S{2,64}$/.test(trimText(value));
 }
 
-function formatBytes(value?: number) {
-  if (!value || Number.isNaN(value)) return '0 B';
+function formatBytes(value?: number | string | null) {
+  if (value === null || value === undefined || value === '') return '0 B';
+  const numValue = typeof value === 'number' ? value : Number(String(value).replace(/[^\d.eE+\-]/g, ''));
+  if (!Number.isFinite(numValue) || numValue <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
+  let size = numValue;
   let unitIndex = 0;
   while (size >= 1024 && unitIndex < units.length - 1) {
     size /= 1024;
     unitIndex += 1;
   }
-  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+  const fixed = Number(size.toFixed(2));
+  return `${fixed} ${units[unitIndex]}`;
 }
 
 function getClientName(client: OnlineClient) {
@@ -307,9 +311,15 @@ function getClientName(client: OnlineClient) {
 }
 
 function getClientBytes(client: OnlineClient, direction: 'received' | 'sent') {
-  return direction === 'received'
-    ? client.bytesReceived || client.bytes_received || client.recvBytes
-    : client.bytesSent || client.bytes_sent || client.sendBytes;
+  const candidates = direction === 'received'
+    ? [client.bytesReceived, client.bytes_received, client.recvBytes]
+    : [client.bytesSent, client.bytes_sent, client.sendBytes];
+  for (const value of candidates) {
+    if (value === null || value === undefined || value === '') continue;
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return 0;
 }
 
 function parseDateOnly(value?: string) {
@@ -563,7 +573,7 @@ function ConfirmDialog({ state, onClose, notify }: { state: ConfirmState; onClos
     }
   }
 
-  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-panel glass-panel confirm-panel"><div className="confirm-icon">!</div><div><span className="confirm-eyebrow">Safety Check</span><h2>{state.title}</h2><p>{state.message}</p></div><div className="modal-actions"><button className="ghost-action" type="button" onClick={onClose} disabled={saving}>取消</button><button className={state.danger ? 'danger-action' : 'primary-action'} type="button" onClick={submit} disabled={saving}>{saving ? '处理中...' : '确认执行'}</button></div></div></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal-panel glass-panel confirm-panel"><div className="confirm-icon" aria-label="warning"><AlertTriangle size={24} /></div><div><span className="confirm-eyebrow">Safety Check</span><h2>{state.title}</h2><p>{state.message}</p></div><div className="modal-actions"><button className="ghost-action" type="button" onClick={onClose} disabled={saving}>取消</button><button className={state.danger ? 'danger-action' : 'primary-action'} type="button" onClick={submit} disabled={saving}>{saving ? '处理中...' : '确认执行'}</button></div></div></div>;
 }
 
 function Toolbar({ children }: { children: React.ReactNode }) {
@@ -573,20 +583,20 @@ function Toolbar({ children }: { children: React.ReactNode }) {
 function ThemeSwitcher({ theme, onChange }: { theme: ThemeKey; onChange: (theme: ThemeKey) => void }) {
   const [open, setOpen] = useState(false);
   const selected = themeOptions.find((item) => item.key === theme) || themeOptions[0];
-  return <div className={`theme-switcher ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><span className="theme-label">主题</span><button className="theme-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((value) => !value)}><span><strong>{selected.label}</strong><em>{selected.description}</em></span><i>?</i></button>{open && <div className="theme-menu" role="listbox">{themeOptions.map((item) => <button key={item.key} className={`theme-option ${item.key === theme ? 'active' : ''}`} type="button" role="option" aria-selected={item.key === theme} onClick={() => { onChange(item.key); setOpen(false); }}><span className={`theme-dot theme-dot-${item.key}`} /><span><strong>{item.label}</strong><em>{item.description}</em></span></button>)}</div>}</div>;
+  return <div className={`theme-switcher ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><span className="theme-label">主题</span><button className="theme-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((value) => !value)}><span><strong>{selected.label}</strong><em>{selected.description}</em></span><ChevronDown size={16} className="trigger-chevron" aria-hidden="true" /></button>{open && <div className="theme-menu" role="listbox">{themeOptions.map((item) => <button key={item.key} className={`theme-option ${item.key === theme ? 'active' : ''}`} type="button" role="option" aria-selected={item.key === theme} onClick={() => { onChange(item.key); setOpen(false); }}><span className={`theme-dot theme-dot-${item.key}`} /><span><strong>{item.label}</strong><em>{item.description}</em></span></button>)}</div>}</div>;
 }
 
 function SettingSelect({ label, value, options, onChange }: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value) || options[0];
 
-  return <div className={`field-line setting-select ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><span>{label}</span><button className="setting-select-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span><strong>{selected?.label || '请选择'}</strong>{selected?.description && <em>{selected.description}</em>}</span><i>?</i></button>{open && <div className="setting-select-menu" role="listbox">{options.map((option) => <button key={option.value} className={`setting-select-option ${option.value === value ? 'active' : ''}`} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }}><strong>{option.label}</strong>{option.description && <em>{option.description}</em>}</button>)}</div>}</div>;
+  return <div className={`field-line setting-select ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><span>{label}</span><button className="setting-select-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span><strong>{selected?.label || '请选择'}</strong>{selected?.description && <em>{selected.description}</em>}</span><ChevronDown size={16} className="trigger-chevron" aria-hidden="true" /></button>{open && <div className="setting-select-menu" role="listbox">{options.map((option) => <button key={option.value} className={`setting-select-option ${option.value === value ? 'active' : ''}`} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }}><strong>{option.label}</strong>{option.description && <em>{option.description}</em>}</button>)}</div>}</div>;
 }
 
 function CompactSelect({ value, options, onChange, placeholder }: { value: string; options: SelectOption[]; onChange: (value: string) => void; placeholder?: string }) {
   const [open, setOpen] = useState(false);
   const selected = options.find((option) => option.value === value);
-  return <div className={`compact-select ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><button className="compact-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span>{selected?.label || placeholder || '请选择'}</span><i>?</i></button>{open && <div className="compact-menu" role="listbox">{options.map((option) => <button key={option.value} className={`compact-option ${option.value === value ? 'active' : ''}`} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }}><strong>{option.label}</strong>{option.description && <em>{option.description}</em>}</button>)}</div>}</div>;
+  return <div className={`compact-select ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><button className="compact-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span>{selected?.label || placeholder || '请选择'}</span><ChevronDown size={14} className="trigger-chevron" aria-hidden="true" /></button>{open && <div className="compact-menu" role="listbox">{options.map((option) => <button key={option.value} className={`compact-option ${option.value === value ? 'active' : ''}`} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); }}><strong>{option.label}</strong>{option.description && <em>{option.description}</em>}</button>)}</div>}</div>;
 }
 
 function PaginationBar({ page, pageSize, pageCount, total, start, end, onPageChange, onPageSizeChange }: { page: number; pageSize: number; pageCount: number; total: number; start: number; end: number; onPageChange: (page: number) => void; onPageSizeChange: (pageSize: number) => void }) {
@@ -605,12 +615,19 @@ function DatePicker({ value, onChange, placeholder = '年 / 月 / 日', allowCle
     if (selectedDate) setViewDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
   }, [value]);
 
-  return <div className={`date-picker ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><button className="compact-trigger date-trigger" type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span className={value ? '' : 'is-placeholder'}>{value ? formatDateLabel(value) : placeholder}</span><i>?</i></button>{open && <div className="date-popover"><div className="date-head"><button type="button" onClick={() => setViewDate((date) => addMonths(date, -1))}>?</button><strong>{viewDate.getFullYear()}年{String(viewDate.getMonth() + 1).padStart(2, '0')}月</strong><button type="button" onClick={() => setViewDate((date) => addMonths(date, 1))}>?</button></div><div className="date-weekdays">{['日', '一', '二', '三', '四', '五', '六'].map((item) => <span key={item}>{item}</span>)}</div><div className="date-grid">{days.map((day) => { const muted = day.getMonth() !== viewDate.getMonth(); const active = Boolean(selectedDate && sameDate(day, selectedDate)); const current = sameDate(day, today); return <button key={day.toISOString()} className={`${muted ? 'muted' : ''} ${active ? 'active' : ''} ${current ? 'today' : ''}`} type="button" onClick={() => { onChange(toDateInputValue(day)); setOpen(false); }}>{day.getDate()}</button>; })}</div><div className="date-actions">{allowClear && <button type="button" onClick={() => { onChange(''); setOpen(false); }}>清空</button>}<button type="button" onClick={() => { onChange(toDateInputValue(new Date())); setOpen(false); }}>今天</button></div></div>}</div>;
+  return <div className={`date-picker ${open ? 'is-open' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}><button className="compact-trigger date-trigger" type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span className={value ? '' : 'is-placeholder'}>{value ? formatDateLabel(value) : placeholder}</span><ChevronDown size={14} className="trigger-chevron" aria-hidden="true" /></button>{open && <div className="date-popover"><div className="date-head"><button type="button" aria-label="上一月" onClick={() => setViewDate((date) => addMonths(date, -1))}><ChevronLeft size={16} /></button><strong>{viewDate.getFullYear()}年{String(viewDate.getMonth() + 1).padStart(2, '0')}月</strong><button type="button" aria-label="下一月" onClick={() => setViewDate((date) => addMonths(date, 1))}><ChevronRight size={16} /></button></div><div className="date-weekdays">{['日', '一', '二', '三', '四', '五', '六'].map((item) => <span key={item}>{item}</span>)}</div><div className="date-grid">{days.map((day) => { const muted = day.getMonth() !== viewDate.getMonth(); const active = Boolean(selectedDate && sameDate(day, selectedDate)); const current = sameDate(day, today); return <button key={day.toISOString()} className={`${muted ? 'muted' : ''} ${active ? 'active' : ''} ${current ? 'today' : ''}`} type="button" onClick={() => { onChange(toDateInputValue(day)); setOpen(false); }}>{day.getDate()}</button>; })}</div><div className="date-actions">{allowClear && <button type="button" onClick={() => { onChange(''); setOpen(false); }}>清空</button>}<button type="button" onClick={() => { onChange(toDateInputValue(new Date())); setOpen(false); }}>今天</button></div></div>}</div>;
 }
 
-function TextInput({ label, value, onChange, type = 'text', error, required, autoFocus, placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string; required?: boolean; autoFocus?: boolean; placeholder?: string }) {
+const iconMap = { user: User, lock: Lock, key: KeyRound, mail: Mail, shield: ShieldCheck } as const;
+
+function FieldIcon({ name, size = 16 }: { name: keyof typeof iconMap; size?: number }) {
+  const Cmp = iconMap[name];
+  return <Cmp size={size} className="field-icon-svg" aria-hidden="true" />;
+}
+
+function TextInput({ label, value, onChange, type = 'text', error, required, autoFocus, placeholder, icon }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string; required?: boolean; autoFocus?: boolean; placeholder?: string; icon?: keyof typeof iconMap }) {
   if (type === 'date') return <div className={`field-line ${error ? 'has-error' : ''}`}><span>{label}{required && <b>*</b>}</span><DatePicker value={value} onChange={onChange} />{error && <small className="field-error">{error}</small>}</div>;
-  return <label className={`field-line ${error ? 'has-error' : ''}`}><span>{label}{required && <b>*</b>}</span><input type={type} value={value} required={required} autoFocus={autoFocus} placeholder={placeholder} aria-invalid={Boolean(error)} onChange={(event) => onChange(event.target.value)} />{error && <small className="field-error">{error}</small>}</label>;
+  return <label className={`field-line ${error ? 'has-error' : ''}`}><span className="field-label-text">{label}{required && <b>*</b>}</span><span className={`field-input-wrap ${icon ? 'has-icon' : ''}`}>{icon && <span className="field-icon-wrap"><FieldIcon name={icon} /></span>}<input type={type} value={value} required={required} autoFocus={autoFocus} placeholder={placeholder} aria-invalid={Boolean(error)} onChange={(event) => onChange(event.target.value)} /></span>{error && <small className="field-error">{error}</small>}</label>;
 }
 
 function TextAreaInput({ label, value, onChange, error }: { label: string; value: string; onChange: (value: string) => void; error?: string }) {
@@ -793,27 +810,27 @@ function LoginPage() {
       <div className="reference-mobile-bg" />
       <div className="reference-login-card">
         <div className="reference-card-heading">
-          <div className="reference-card-icon" aria-hidden="true">锁</div>
+          <div className="reference-card-icon" aria-hidden="true"><Lock size={22} color="#fff" /></div>
           <div><strong>{mode === 'first-password' ? '首次登录' : mode === 'mfa' ? '安全验证' : '欢迎回来'}</strong><span>{saving ? '处理中...' : mode === 'mfa' ? '请完成 MFA 验证' : '请使用管理员账号登录'}</span></div>
         </div>
         {mode === 'login' && <form className="form-grid one-column reference-login-fields" noValidate onSubmit={(event) => { event.preventDefault(); void submitLogin(); }}>
-          <TextInput label="账号" value={username} onChange={setUsername} error={errors.username} required autoFocus placeholder="请输入 OpenVPN 管理账号" />
-          <TextInput label="密码" value={password} type="password" onChange={setPassword} error={errors.password} required placeholder="请输入登录密码" />
+          <TextInput label="账号" value={username} onChange={setUsername} error={errors.username} required autoFocus placeholder="请输入 OpenVPN 管理账号" icon="user" />
+          <TextInput label="密码" value={password} type="password" onChange={setPassword} error={errors.password} required placeholder="请输入登录密码" icon="lock" />
           <CheckInput label="7 天内保持登录" checked={remember7d} onChange={setRemember7d} />
           {loginError && <div className="inline-error reference-login-error">{loginError}</div>}
           <div className="modal-actions wide-field reference-login-actions"><button type="submit" disabled={saving}>{saving ? '登录中...' : '登 录'}</button></div>
         </form>}
         {mode === 'mfa' && <form className="form-grid one-column reference-login-fields" noValidate onSubmit={submitMfa}>
-          <TextInput label="MFA 动态验证码" value={passcode} onChange={setPasscode} error={errors.passcode} required autoFocus placeholder="请输入 6 位动态验证码" />
+          <TextInput label="MFA 动态验证码" value={passcode} onChange={setPasscode} error={errors.passcode} required autoFocus placeholder="请输入 6 位动态验证码" icon="key" />
           <p className="modal-hint">请输入认证器 App 中当前 6 位动态验证码。</p>
           {loginError && <div className="inline-error reference-login-error">{loginError}</div>}
           <div className="modal-actions wide-field reference-login-actions"><button type="button" className="ghost-action" onClick={() => setMode('login')}>返回登录</button><button type="submit" disabled={saving}>{saving ? '验证中...' : '完成验证'}</button></div>
         </form>}
         {mode === 'first-password' && <form className="form-grid one-column reference-login-fields" noValidate onSubmit={submitFirstPassword}>
-          <TextInput label="当前密码" value={currentPass} type="password" onChange={setCurrentPass} error={errors.currentPass} required autoFocus placeholder="请输入当前密码" />
-          <TextInput label="新密码" value={newPassword} type="password" onChange={setNewPassword} error={errors.newPassword} required placeholder="至少 12 位强密码" />
+          <TextInput label="当前密码" value={currentPass} type="password" onChange={setCurrentPass} error={errors.currentPass} required autoFocus placeholder="请输入当前密码" icon="lock" />
+          <TextInput label="新密码" value={newPassword} type="password" onChange={setNewPassword} error={errors.newPassword} required placeholder="至少 12 位强密码" icon="shield" />
           <PasswordStrength value={newPassword} />
-          <TextInput label="确认新密码" value={newPasswordAgain} type="password" onChange={setNewPasswordAgain} error={errors.newPasswordAgain} required placeholder="请再次输入新密码" />
+          <TextInput label="确认新密码" value={newPasswordAgain} type="password" onChange={setNewPasswordAgain} error={errors.newPasswordAgain} required placeholder="请再次输入新密码" icon="lock" />
           {loginError && <div className="inline-error reference-login-error">{loginError}</div>}
           <div className="modal-actions wide-field reference-login-actions"><button type="submit" disabled={saving}>{saving ? '保存中...' : '保存并进入门户'}</button></div>
         </form>}
@@ -1130,7 +1147,7 @@ function UsersPanel({ groups, selectedGroupId, setSelectedGroupId, usersState, c
   }
 
   const selectedGroup = groups.find((item) => item.id === selectedGroupId);
-  return <div className="split-layout"><aside className="glass-panel tree-panel"><div className="section-heading row-heading"><div><span>Group Tree</span><h2>用户组</h2></div><button className="mini-button" type="button" onClick={() => openModal({ type: 'group-form', mode: 'add', parentGroup: selectedGroup })}>新增</button></div><div className="tree-list">{tree.map((group) => <button key={group.id} className={selectedGroupId === group.id ? 'active' : ''} style={{ paddingLeft: 14 + group.depth * 18 }} type="button" onClick={() => setSelectedGroupId(group.id)}><span className="tree-glyph">{group.parent_id ? '└' : '◆'}</span><span className="tree-name" title={group.name}>{group.name}</span></button>)}</div>{selectedGroup && <div className="panel-actions vertical-actions"><button type="button" onClick={() => openModal({ type: 'group-form', mode: 'edit', group: selectedGroup })}>编辑分组</button><button type="button" onClick={() => openModal({ type: 'group-config', group: selectedGroup, content: selectedGroup.config || '' })}>组配置</button><button type="button" onClick={() => deleteGroup(selectedGroup)}>删除分组</button></div>}</aside><section className="glass-panel table-card full-height"><div className="section-heading row-heading"><div><span>Identity Matrix</span><h2>VPN 账号</h2></div><Toolbar><label className="upload-button">导入 CSV<input type="file" accept=".csv" onChange={(event) => importUsers(event.target.files?.[0])} /></label><a className="mini-button" href="/user/template">模板</a><a className="mini-button" href={`/ovpn/user/export?gid=${selectedGroupId}`}>导出分组</a><button type="button" onClick={() => openModal({ type: 'user-form', mode: 'add' })}>添加用户</button></Toolbar></div><div className="switch-line inline-switch"><div><strong>账号密码认证</strong><span>控制 auth-user-pass-verify 认证开关</span></div><Toggle checked={Boolean(usersState.data?.authUser)} onChange={toggleAuthUser} /></div><div className="filter-bar"><input className="toolbar-input" value={userSearch} placeholder="搜索账号 / 姓名 / 邮箱 / 固定 IP" onChange={(event) => setUserSearch(event.target.value)} /><CompactSelect value={statusFilter} options={userStatusOptions} onChange={setStatusFilter} /><CompactSelect value={mfaFilter} options={mfaFilterOptions} onChange={setMfaFilter} /><CompactSelect value={expireFilter} options={expireFilterOptions} onChange={setExpireFilter} /></div>{selectedUserIds.length > 0 && <div className="batch-bar"><strong>已选择 {selectedUserIds.length} 个账号</strong><button type="button" onClick={() => batchAction('批量启用账号', '确认启用这些账号吗？', (user) => api.patchForm('/ovpn/user', { id: user.id, isEnable: true }), '批量启用完成')}>启用</button><button type="button" onClick={() => batchAction('批量禁用账号', '确认禁用这些账号吗？', (user) => api.patchForm('/ovpn/user', { id: user.id, isEnable: false }), '批量禁用完成', true)}>禁用</button><button type="button" onClick={() => batchAction('批量重置 MFA', '确认重置这些账号的 MFA 吗？', (user) => api.delete(`/client/mfa/${user.id}`), '批量 MFA 重置完成', true)}>重置 MFA</button><button type="button" onClick={exportSelectedUsers}>导出选中</button><button type="button" onClick={() => batchAction('批量删除账号', '确认删除这些账号吗？该操作不可恢复。', (user) => api.delete(`/ovpn/user/${user.id}`), '批量删除完成', true)}>删除</button></div>}{users.length ? filteredUsers.length ? <><div className="responsive-table"><table><thead><tr><th><input type="checkbox" checked={allVisibleSelected} onChange={(event) => toggleVisibleUsers(event.target.checked)} /></th><th>账号</th><th>姓名</th><th>邮箱</th><th>固定 IP</th><th>配置文件</th><th>MFA</th><th>状态</th><th>有效期</th><th>操作</th></tr></thead><tbody>{userPagination.pagedItems.map((user) => { const expire = expiryStatus(user); return <tr key={user.id || user.username}><td><input type="checkbox" checked={Boolean(user.id && selectedUserIds.includes(user.id))} onChange={(event) => toggleSelectedUser(user, event.target.checked)} /></td><td>{user.username}</td><td>{user.name || '-'}</td><td>{user.email || '-'}</td><td>{user.ipAddr || '-'}</td><td>{user.ovpnConfig || '-'}</td><td>{user.mfaSecret ? '开启' : '-'}</td><td><span className={`status-pill ${user.isEnable === false ? 'danger' : 'success'}`}>{user.isEnable === false ? '禁用' : '启用'}</span></td><td><span className={`status-pill ${expire.className}`}>{user.expireDate || expire.label}</span></td><td><div className="row-actions"><button type="button" onClick={() => openModal({ type: 'user-form', mode: 'edit', user })}>编辑</button><button type="button" onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}>{user.isEnable === false ? '启用' : '禁用'}</button><button type="button" onClick={() => openModal({ type: 'reset-password', user })}>重置密码</button><button type="button" onClick={() => resetMfa(user)}>重置 MFA</button><button type="button" onClick={() => deleteUser(user)}>删除</button></div></td></tr>; })}</tbody></table></div><PaginationBar page={userPagination.page} pageSize={userPagination.pageSize} pageCount={userPagination.pageCount} total={userPagination.total} start={userPagination.start} end={userPagination.end} onPageChange={userPagination.setPage} onPageSizeChange={userPagination.setPageSize} /></> : <EmptyState title="没有匹配的 VPN 账号" description="调整关键词、状态、MFA 或有效期筛选后再试。" /> : <EmptyState title="当前分组暂无用户" description={clients.length ? '点击添加用户即可绑定客户端配置。' : '可以先添加客户端配置，再创建账号。'} />}</section></div>;
+  return <div className="split-layout"><aside className="glass-panel tree-panel"><div className="section-heading row-heading"><div><span>Group Tree</span><h2>用户组</h2></div><button className="mini-button" type="button" onClick={() => openModal({ type: 'group-form', mode: 'add', parentGroup: selectedGroup })}>新增</button></div><div className="tree-list">{tree.map((group) => <button key={group.id} className={selectedGroupId === group.id ? 'active' : ''} style={{ paddingLeft: 14 + group.depth * 18 }} type="button" onClick={() => setSelectedGroupId(group.id)}><span className="tree-glyph" aria-hidden="true"><Circle size={8} fill="currentColor" strokeWidth={0} /></span><span className="tree-name" title={group.name}>{group.name}</span></button>)}</div>{selectedGroup && <div className="panel-actions vertical-actions"><button type="button" onClick={() => openModal({ type: 'group-form', mode: 'edit', group: selectedGroup })}>编辑分组</button><button type="button" onClick={() => openModal({ type: 'group-config', group: selectedGroup, content: selectedGroup.config || '' })}>组配置</button><button type="button" onClick={() => deleteGroup(selectedGroup)}>删除分组</button></div>}</aside><section className="glass-panel table-card full-height"><div className="section-heading row-heading"><div><span>Identity Matrix</span><h2>VPN 账号</h2></div><Toolbar><label className="upload-button">导入 CSV<input type="file" accept=".csv" onChange={(event) => importUsers(event.target.files?.[0])} /></label><a className="mini-button" href="/user/template">模板</a><a className="mini-button" href={`/ovpn/user/export?gid=${selectedGroupId}`}>导出分组</a><button type="button" onClick={() => openModal({ type: 'user-form', mode: 'add' })}>添加用户</button></Toolbar></div><div className="switch-line inline-switch"><div><strong>账号密码认证</strong><span>控制 auth-user-pass-verify 认证开关</span></div><Toggle checked={Boolean(usersState.data?.authUser)} onChange={toggleAuthUser} /></div><div className="filter-bar"><input className="toolbar-input" value={userSearch} placeholder="搜索账号 / 姓名 / 邮箱 / 固定 IP" onChange={(event) => setUserSearch(event.target.value)} /><CompactSelect value={statusFilter} options={userStatusOptions} onChange={setStatusFilter} /><CompactSelect value={mfaFilter} options={mfaFilterOptions} onChange={setMfaFilter} /><CompactSelect value={expireFilter} options={expireFilterOptions} onChange={setExpireFilter} /></div>{selectedUserIds.length > 0 && <div className="batch-bar"><strong>已选择 {selectedUserIds.length} 个账号</strong><button type="button" onClick={() => batchAction('批量启用账号', '确认启用这些账号吗？', (user) => api.patchForm('/ovpn/user', { id: user.id, isEnable: true }), '批量启用完成')}>启用</button><button type="button" onClick={() => batchAction('批量禁用账号', '确认禁用这些账号吗？', (user) => api.patchForm('/ovpn/user', { id: user.id, isEnable: false }), '批量禁用完成', true)}>禁用</button><button type="button" onClick={() => batchAction('批量重置 MFA', '确认重置这些账号的 MFA 吗？', (user) => api.delete(`/client/mfa/${user.id}`), '批量 MFA 重置完成', true)}>重置 MFA</button><button type="button" onClick={exportSelectedUsers}>导出选中</button><button type="button" onClick={() => batchAction('批量删除账号', '确认删除这些账号吗？该操作不可恢复。', (user) => api.delete(`/ovpn/user/${user.id}`), '批量删除完成', true)}>删除</button></div>}{users.length ? filteredUsers.length ? <><div className="responsive-table"><table><thead><tr><th><input type="checkbox" checked={allVisibleSelected} onChange={(event) => toggleVisibleUsers(event.target.checked)} /></th><th>账号</th><th>姓名</th><th>邮箱</th><th>固定 IP</th><th>配置文件</th><th>MFA</th><th>状态</th><th>有效期</th><th>操作</th></tr></thead><tbody>{userPagination.pagedItems.map((user) => { const expire = expiryStatus(user); return <tr key={user.id || user.username}><td><input type="checkbox" checked={Boolean(user.id && selectedUserIds.includes(user.id))} onChange={(event) => toggleSelectedUser(user, event.target.checked)} /></td><td>{user.username}</td><td>{user.name || '-'}</td><td>{user.email || '-'}</td><td>{user.ipAddr || '-'}</td><td>{user.ovpnConfig || '-'}</td><td>{user.mfaSecret ? '开启' : '-'}</td><td><span className={`status-pill ${user.isEnable === false ? 'danger' : 'success'}`}>{user.isEnable === false ? '禁用' : '启用'}</span></td><td><span className={`status-pill ${expire.className}`}>{user.expireDate || expire.label}</span></td><td><div className="row-actions"><button type="button" onClick={() => openModal({ type: 'user-form', mode: 'edit', user })}>编辑</button><button type="button" onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}>{user.isEnable === false ? '启用' : '禁用'}</button><button type="button" onClick={() => openModal({ type: 'reset-password', user })}>重置密码</button><button type="button" onClick={() => resetMfa(user)}>重置 MFA</button><button type="button" onClick={() => deleteUser(user)}>删除</button></div></td></tr>; })}</tbody></table></div><PaginationBar page={userPagination.page} pageSize={userPagination.pageSize} pageCount={userPagination.pageCount} total={userPagination.total} start={userPagination.start} end={userPagination.end} onPageChange={userPagination.setPage} onPageSizeChange={userPagination.setPageSize} /></> : <EmptyState title="没有匹配的 VPN 账号" description="调整关键词、状态、MFA 或有效期筛选后再试。" /> : <EmptyState title="当前分组暂无用户" description={clients.length ? '点击添加用户即可绑定客户端配置。' : '可以先添加客户端配置，再创建账号。'} />}</section></div>;
 }
 
 function ClientsPanel({ clients, settings, notify, reload, openModal, confirmAction }: { clients: ClientRecord[]; settings?: SettingsResponse; notify: (type: Toast['type'], message: string) => void; reload: () => void; openModal: (modal: ModalState) => void; confirmAction: (state: ConfirmState) => void }) {
@@ -1218,7 +1235,7 @@ function HistoryPanel({ initial }: { initial: HistoryResponse }) {
   const rows = state.data?.data || initial.data || [];
   const historyPagination = usePagination(rows, `${search}|${qt}|${reloadKey}`);
 
-  return <section className="glass-panel table-card full-height"><div className="section-heading row-heading"><div><span>Telemetry Log</span><h2>连接历史</h2></div><Toolbar><DatePicker value={range.start} allowClear={false} onChange={(next) => setRange((value) => ({ ...value, start: next }))} /><DatePicker value={range.end} allowClear={false} onChange={(next) => setRange((value) => ({ ...value, end: next }))} /><input className="toolbar-input" value={search} placeholder="搜索用户/IP" onChange={(event) => setSearch(event.target.value)} /><button type="button" onClick={() => setReloadKey((value) => value + 1)}>查询</button><a className="mini-button" href={`/ovpn/history/export?qt=${qt}`}>导出</a></Toolbar></div>{state.error && <p className="inline-error">{state.error}</p>}{rows.length ? <><div className="responsive-table"><table><thead><tr><th>用户</th><th>客户端</th><th>VPN IP</th><th>来源 IP</th><th>下载</th><th>上传</th><th>上线时间</th><th>在线时长</th></tr></thead><tbody>{historyPagination.pagedItems.map((item, index) => <tr key={item.id || historyPagination.start + index}><td>{item.username || '-'}</td><td>{item.common_name || item.commonName || '-'}</td><td>{item.vip || item.vip6 || '-'}</td><td>{item.rip || item.rip6 || '-'}</td><td>{formatBytes(item.bytes_received || item.bytesReceived)}</td><td>{formatBytes(item.bytes_sent || item.bytesSent)}</td><td>{item.time_unix ? new Date(item.time_unix * 1000).toLocaleString() : '-'}</td><td>{item.time_duration || '-'}</td></tr>)}</tbody></table></div><PaginationBar page={historyPagination.page} pageSize={historyPagination.pageSize} pageCount={historyPagination.pageCount} total={historyPagination.total} start={historyPagination.start} end={historyPagination.end} onPageChange={historyPagination.setPage} onPageSizeChange={historyPagination.setPageSize} /></> : <EmptyState title="暂无历史记录" description="客户端下线后，OpenVPN hook 会写入这里并触发通知。" />}</section>;
+  return <section className="glass-panel table-card full-height"><div className="section-heading row-heading"><div><span>Telemetry Log</span><h2>连接历史</h2></div><Toolbar><DatePicker value={range.start} allowClear={false} onChange={(next) => setRange((value) => ({ ...value, start: next }))} /><DatePicker value={range.end} allowClear={false} onChange={(next) => setRange((value) => ({ ...value, end: next }))} /><input className="toolbar-input" value={search} placeholder="搜索用户/IP" onChange={(event) => setSearch(event.target.value)} /><button type="button" onClick={() => setReloadKey((value) => value + 1)}>查询</button><a className="mini-button" href={`/ovpn/history/export?qt=${qt}`}>导出</a></Toolbar></div>{state.error && <p className="inline-error">{state.error}</p>}{rows.length ? <><div className="responsive-table"><table><thead><tr><th>用户</th><th>客户端</th><th>VPN IP</th><th>来源 IP</th><th>下载</th><th>上传</th><th>上线时间</th><th>在线时长</th></tr></thead><tbody>{historyPagination.pagedItems.map((item, index) => <tr key={item.id || historyPagination.start + index}><td>{item.username || '-'}</td><td>{item.common_name || item.commonName || '-'}</td><td>{item.vip || item.vip6 || '-'}</td><td>{item.rip || item.rip6 || '-'}</td><td>{formatBytes(getClientBytes(item as unknown as OnlineClient, 'received') || Number(item.bytes_received ?? item.bytesReceived ?? 0))}</td><td>{formatBytes(getClientBytes(item as unknown as OnlineClient, 'sent') || Number(item.bytes_sent ?? item.bytesSent ?? 0))}</td><td>{item.time_unix ? new Date(item.time_unix * 1000).toLocaleString() : '-'}</td><td>{item.time_duration || '-'}</td></tr>)}</tbody></table></div><PaginationBar page={historyPagination.page} pageSize={historyPagination.pageSize} pageCount={historyPagination.pageCount} total={historyPagination.total} start={historyPagination.start} end={historyPagination.end} onPageChange={historyPagination.setPage} onPageSizeChange={historyPagination.setPageSize} /></> : <EmptyState title="暂无历史记录" description="客户端下线后，OpenVPN hook 会写入这里并触发通知。" />}</section>;
 }
 
 function CertsPanel({ certs, openModal }: { certs: CertRecord[]; openModal: (modal: ModalState) => void }) {
@@ -1383,8 +1400,8 @@ function AdminModal({ modal, groups, clients, selectedGroupId, notify, reload, c
   const tree = buildTree(groups);
   const groupNameInitial = modal.type === 'group-form' && modal.mode === 'edit' ? modal.group.name || '' : '';
   const groupParentInitial = modal.type === 'group-form'
-    ? String(modal.mode === 'edit' ? modal.group.parent_id || 1 : modal.parentGroup?.id || selectedGroupId || 1)
-    : String(selectedGroupId || 1);
+    ? String(modal.mode === 'edit' ? (modal.group.parent_id ?? 0) : (modal.parentGroup?.id ?? selectedGroupId ?? 0))
+    : String(selectedGroupId ?? 0);
   const [saving, setSaving] = useState(false);
   const [content, setContent] = useState('content' in modal ? modal.content : '');
   const [name, setName] = useState(modal.type === 'user-form' ? modal.user?.name || '' : groupNameInitial);
@@ -1480,8 +1497,10 @@ function AdminModal({ modal, groups, clients, selectedGroupId, notify, reload, c
   function validateGroupForm() {
     const nextErrors: FieldErrors = {};
     if (!trimText(name)) nextErrors.name = '分组名称不能为空';
-    if (!isPositiveInteger(parentId)) nextErrors.parentId = '请选择有效的上级分组';
+    const normalizedParent = Number(parentId);
+    if (!Number.isInteger(normalizedParent) || normalizedParent < 0) nextErrors.parentId = '请选择有效的上级分组';
     if (modal.type === 'group-form' && modal.mode === 'edit' && String(modal.group.id) === parentId) nextErrors.parentId = '上级分组不能选择自己';
+    if (modal.type === 'group-form' && parentId === '0' && !(modal.mode === 'edit' && modal.group.id === 1)) nextErrors.parentId = '只有默认分组可以设置为无上级分组';
     return nextErrors;
   }
 
@@ -1550,10 +1569,11 @@ function AdminModal({ modal, groups, clients, selectedGroupId, notify, reload, c
   if (modal.type === 'group-form') {
     const title = modal.mode === 'add' ? '新增用户组' : `编辑用户组：${modal.group?.name}`;
     const blockedParentIds = modal.mode === 'edit' ? new Set([modal.group.id, ...getDescendantGroupIds(groups, modal.group.id)]) : new Set<number>();
-    const parentOptions = tree.filter((item) => !blockedParentIds.has(item.id)).map((item) => ({ value: String(item.id), label: `${'— '.repeat(item.depth)}${item.name}` }));
+    const isDefaultGroup = modal.mode === 'edit' && modal.group.id === 1;
+    const parentOptions = [...(isDefaultGroup ? [{ value: '0', label: '— 无上级分组 —' }] : []), ...tree.filter((item) => !blockedParentIds.has(item.id)).map((item) => ({ value: String(item.id), label: `${'— '.repeat(item.depth)}${item.name}` }))];
     const form = modal.mode === 'add'
-      ? { name: trimText(name), parent_id: parentId }
-      : { id: modal.group.id, name: trimText(name), parent_id: parentId };
+      ? { name: trimText(name), parent_id: parentId === '0' || parentId === 'null' ? null : parentId }
+      : { id: modal.group.id, name: trimText(name), parent_id: parentId === '0' || parentId === 'null' ? null : parentId };
     return <Modal title={title} onClose={close}><form className="modal-body form-grid" noValidate onSubmit={(event) => submitForm(event, validateGroupForm, () => modal.mode === 'add' ? api.postForm('/ovpn/group', form) : api.patchForm('/ovpn/group', form), '用户组已保存')}><FormErrorSummary errors={errors} /><TextInput label="分组名称" value={name} onChange={setValue(setName, 'name')} error={errors.name} required autoFocus /><SelectInput label="上级分组" value={parentId} options={parentOptions} onChange={setValue(setParentId, 'parentId')} error={errors.parentId} required /><div className="modal-actions wide-field"><button type="submit" disabled={saving}>{saving ? '保存中...' : '保存分组'}</button></div></form></Modal>;
   }
 

@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --page-bg: #050713;
   --page-bg-layer:
     radial-gradient(circle at 18% 12%, rgba(44, 132, 255, 0.34), transparent 32rem),
@@ -574,14 +574,14 @@ a {
   line-height: 1.1;
 }
 
-.theme-trigger i {
+.theme-trigger .trigger-chevron {
   margin-left: auto;
   color: var(--accent);
-  font-style: normal;
   transition: transform 0.2s ease;
+  flex-shrink: 0;
 }
 
-.theme-switcher.is-open .theme-trigger i {
+.theme-switcher.is-open .theme-trigger .trigger-chevron {
   transform: rotate(180deg);
 }
 
@@ -665,13 +665,13 @@ a {
   line-height: 1.15;
 }
 
-.setting-select-trigger i {
+.setting-select-trigger .trigger-chevron {
   color: var(--accent);
-  font-style: normal;
   transition: transform 0.2s ease;
+  flex-shrink: 0;
 }
 
-.setting-select.is-open .setting-select-trigger i {
+.setting-select.is-open .setting-select-trigger .trigger-chevron {
   transform: rotate(180deg);
 }
 
@@ -1147,14 +1147,14 @@ button:disabled {
   white-space: nowrap;
 }
 
-.compact-trigger i {
+.compact-trigger .trigger-chevron {
   color: var(--accent);
-  font-style: normal;
-  line-height: 1;
   transition: transform 0.2s ease;
+  flex-shrink: 0;
 }
 
-.compact-select.is-open .compact-trigger i {
+.compact-select.is-open .compact-trigger .trigger-chevron,
+.date-picker.is-open .date-trigger .trigger-chevron {
   transform: rotate(180deg);
 }
 
@@ -1253,6 +1253,9 @@ button:disabled {
 }
 
 .date-head button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 38px;
   height: 34px;
   border-color: var(--panel-border);
@@ -1602,6 +1605,21 @@ tbody tr:hover {
 
 .tree-glyph {
   flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  margin-left: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  opacity: 0.72;
+}
+
+.tree-list button[style*="padding-left: 32"] .tree-glyph,
+.tree-list button[style*="padding-left: 50"] .tree-glyph,
+.tree-list button[style*="padding-left: 68"] .tree-glyph {
+  opacity: 0.5;
 }
 
 .tree-name {
@@ -2151,17 +2169,17 @@ tbody tr:hover {
 }
 
 .confirm-icon {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 52px;
   height: 52px;
-  place-items: center;
+  flex-shrink: 0;
   border: 1px solid color-mix(in srgb, var(--danger) 44%, var(--panel-border));
   border-radius: 18px;
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   box-shadow: 0 16px 40px color-mix(in srgb, var(--danger) 18%, transparent);
-  font-size: 24px;
-  font-weight: 900;
 }
 
 .confirm-eyebrow {
@@ -2783,8 +2801,11 @@ tbody tr:hover {
   border-radius: 16px;
   background: var(--login-icon-bg);
   box-shadow: 0 14px 34px color-mix(in srgb, var(--accent) 28%, transparent);
-  font-size: 17px;
-  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
 }
 
 .reference-card-heading strong {
@@ -2807,7 +2828,8 @@ tbody tr:hover {
 }
 
 .reference-login-fields {
-  gap: 18px;
+  display: grid;
+  gap: 10px;
 }
 
 .reference-login-card .field-line,
@@ -2869,6 +2891,38 @@ tbody tr:hover {
 
 .reference-login-card .field-line input::placeholder {
   color: var(--login-placeholder-text);
+}
+
+.reference-login-card .field-input-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.reference-login-card .field-input-wrap.has-icon input {
+  padding-left: 42px;
+}
+
+.reference-login-card .field-icon-wrap {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.reference-login-card .field-icon-svg {
+  color: var(--login-label-text);
+  opacity: 0.72;
+}
+
+.reference-login-card .field-line:focus-within .field-icon-svg {
+  opacity: 1;
+  color: color-mix(in srgb, var(--accent) 80%, var(--login-label-text));
 }
 
 .reference-login-card .field-line.has-error input,
