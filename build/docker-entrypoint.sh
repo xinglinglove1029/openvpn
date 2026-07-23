@@ -34,7 +34,7 @@ init_config() {
 	OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "false"' $SYSTEM_CONFIG)
 	OVPN_SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' $SYSTEM_CONFIG)
 	OVPN_SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // "fdaf:f178:e916:6dd0::/64"' $SYSTEM_CONFIG)
-	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' $SYSTEM_CONFIG)
+	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' $SYSTEM_CONFIG)
 
 	cat <<EOF >$OVPN_DATA/server.conf
 port $OVPN_PORT
@@ -221,7 +221,7 @@ send_notify() {
 	set +e
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	event="$1"
-	api="${ovpn_notify_api:-http://127.0.0.1:$(jq -r '.system.base.web_port // "8833"' $ovpn_data/config.json)/ovpn/notify}"
+	api="${ovpn_notify_api:-http://127.0.0.1:$(jq -r '.system.base.web_port // "8888"' $ovpn_data/config.json)/ovpn/notify}"
 	data="event=$event&vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
 	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $api -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
@@ -292,7 +292,7 @@ EOF
 
 set_firewall() {
 	set +e
-	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' $ovpn_data/config.json)
+	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' $ovpn_data/config.json)
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=add_ovips"
 	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"
@@ -305,7 +305,7 @@ set_firewall() {
 
 delete_firewall() {
 	set +e
-	WEB_PORT=$(jq -r '.system.base.web_port // "8833"' $ovpn_data/config.json)
+	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' $ovpn_data/config.json)
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=delete_ovips"
 	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"

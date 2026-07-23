@@ -6,7 +6,7 @@ COPY frontend/admin/package*.json ./frontend/admin/
 RUN cd frontend/admin && npm ci
 
 COPY frontend/admin ./frontend/admin
-COPY internal/openvpnweb/templates/react-admin.html ./internal/openvpnweb/templates/react-admin.html
+COPY internal/openvpnweb/templates/index.html ./internal/openvpnweb/templates/index.html
 COPY internal/openvpnweb/templates/static/cropped-openvpn-32x32.png ./internal/openvpnweb/templates/static/cropped-openvpn-32x32.png
 RUN cd frontend/admin && npm run build
 
@@ -70,7 +70,7 @@ VOLUME ["/data"]
 ENV GIN_MODE=release
 ENV OVPN_DATA=/data
 
-EXPOSE 1194/udp 8833
+EXPOSE 1194/udp 8888
 
 USER root
 WORKDIR /data

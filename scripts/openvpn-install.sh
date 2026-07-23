@@ -166,7 +166,7 @@ main(){
     $SUPERVISOR_START
     rm -rf $TMP_DIR
 
-    echo "安装完成！http://<ip>:8833 访问openvpn-web，用户名：admin，密码：admin"
+    echo "安装完成！http://<ip>:8888 访问openvpn-web，用户名：admin，密码：admin"
 }
 
 

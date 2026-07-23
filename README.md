@@ -2,7 +2,7 @@
 
 OpenVPN 运维控制台是一个面向个人、团队和小型企业运维场景的 Web 管理台。后端使用 Go，前端使用 React + Vite，提供账号、客户端、用户组、防火墙、系统设置、通知告警、操作审计和连接态势总览等能力。
 
-本项目采用现代化的前端架构，使用 React + Vite 构建。所有用户交互界面（包括登录页、用户自助服务页和管理员后台）均通过 `internal/openvpnweb/templates/react-admin.html` 这一单一入口文件承载。该文件作为应用的宿主页，配合 Go 的 `embed` 机制，将编译后的前端资源无缝集成进后端二进制文件，实现了真正的单体应用部署。
+本项目采用现代化的前端架构，使用 React + Vite 构建。所有用户交互界面（包括登录页、用户自助服务页和管理员后台）均通过 `internal/openvpnweb/templates/index.html` 这一单一入口文件承载。该文件作为应用的宿主页，配合 Go 的 `embed` 机制，将编译后的前端资源无缝集成进后端二进制文件，实现了真正的单体应用部署。
 
 ## 功能特性
 
@@ -19,7 +19,7 @@ openvpn/
 |-- cmd/openvpn-web/                         # Go 程序入口
 |-- internal/openvpnweb/                     # Go Web 服务和业务代码
 |   `-- templates/                           # Go embed 模板和静态资源
-|       |-- react-admin.html                 # /login、/、/admin 的 React 宿主页
+|       `-- index.html                     # /login、/、/admin 的 React 宿主页
 |       `-- static/admin/                    # React 构建产物
 |-- frontend/admin/                          # React 源码
 |-- build/                                   # Docker 镜像文件和 OpenVPN 辅助脚本
@@ -49,8 +49,8 @@ docker compose logs -f
 访问地址：
 
 ```text
-http://127.0.0.1:8833/login
-http://127.0.0.1:8833/admin
+http://127.0.0.1:8888/login
+http://127.0.0.1:8888/admin
 ```
 
 默认管理员账号：
@@ -75,7 +75,7 @@ docker run -d \
   --name openvpn \
   --cap-add=NET_ADMIN \
   -p 1194:1194/udp \
-  -p 8833:8833 \
+  -p 8888:8888 \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=admin \
   -e OVPN_GATEWAY=false \

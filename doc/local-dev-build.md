@@ -9,7 +9,7 @@ openvpn/
 |-- cmd/openvpn-web/                         # Go 程序入口
 |-- internal/openvpnweb/                     # Go Web 服务和业务代码
 |   `-- templates/                           # Go embed 模板和静态资源
-|       |-- react-admin.html                 # /login、/、/admin 的 React 宿主页
+|       `-- index.html                     # /login、/、/admin 的 React 宿主页
 |       `-- static/
 |           |-- cropped-openvpn-32x32.png    # favicon
 |           `-- admin/                       # React 构建产物
@@ -151,8 +151,8 @@ go run .\cmd\openvpn-web
 启动后访问：
 
 ```text
-http://127.0.0.1:8833/login
-http://127.0.0.1:8833/admin
+http://127.0.0.1:8888/login
+http://127.0.0.1:8888/admin
 ```
 
 默认管理员账号：
@@ -191,7 +191,7 @@ docker compose logs -f
 访问：
 
 ```text
-http://127.0.0.1:8833/login
+http://127.0.0.1:8888/login
 ```
 
 停止环境：
@@ -227,7 +227,7 @@ docker images xinglinglove1029/openvpn
 docker run --rm -it \
   --cap-add=NET_ADMIN \
   -p 1194:1194/udp \
-  -p 8833:8833 \
+  -p 8888:8888 \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=admin \
   -e OVPN_GATEWAY=false \
@@ -490,9 +490,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dis
 服务启动后可以先验证这些地址：
 
 ```bash
-curl http://127.0.0.1:8833/login
-curl http://127.0.0.1:8833/admin
-curl http://127.0.0.1:8833/ovpn/dashboard/summary
+curl http://127.0.0.1:8888/login
+curl http://127.0.0.1:8888/admin
+curl http://127.0.0.1:8888/ovpn/dashboard/summary
 ```
 
 后台核心流程建议手动检查：
@@ -506,7 +506,7 @@ curl http://127.0.0.1:8833/ovpn/dashboard/summary
 
 ## 11. 静态资源缓存说明
 
-React 构建后的 `app.js`、`app.css` 会被 Go embed 进二进制。`react-admin.html` 会追加资源版本参数，降低浏览器缓存旧资源的概率。
+React 构建后的 `app.js`、`app.css` 会被 Go embed 进二进制。`index.html` 会追加资源版本参数，降低浏览器缓存旧资源的概率。
 
 开发时建议按下面顺序操作：
 

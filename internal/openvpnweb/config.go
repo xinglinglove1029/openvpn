@@ -110,8 +110,8 @@ func initConfig() {
 	sk := genRandomString(50)
 	passwd, _ := bcrypt.GenerateFromPassword([]byte("admin"), 12)
 
-	viper.SetDefault("system.base.site_url", "http://127.0.0.1:8833")
-	viper.SetDefault("system.base.web_port", "8833")
+	viper.SetDefault("system.base.site_url", "http://127.0.0.1:8888")
+	viper.SetDefault("system.base.web_port", "8888")
 	viper.SetDefault("system.base.secret_key", sk)
 	viper.SetDefault("system.base.server_cn", "ovpn_"+genRandomString(16))
 	viper.SetDefault("system.base.server_name", "server_"+genRandomString(16))

@@ -576,7 +576,7 @@ func Run(info BuildInfo) {
 	r.StaticFS("/static", http.FS(f))
 
 	r.GET("/login", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "react-admin.html", reactRuntime("login", conf.Client.ClientUrl))
+		c.HTML(http.StatusOK, "index.html", reactRuntime("login", conf.Client.ClientUrl))
 	})
 
 	r.POST("/login", func(c *gin.Context) {
@@ -695,7 +695,7 @@ func Run(info BuildInfo) {
 			}
 		}
 
-		c.HTML(http.StatusOK, "react-admin.html", reactRuntime("client", conf.Client.ClientUrl))
+		c.HTML(http.StatusOK, "index.html", reactRuntime("client", conf.Client.ClientUrl))
 	})
 
 	r.GET("/admin", func(c *gin.Context) {
@@ -707,7 +707,7 @@ func Run(info BuildInfo) {
 			}
 		}
 
-		c.HTML(http.StatusOK, "react-admin.html", reactRuntime("admin", conf.Client.ClientUrl))
+		c.HTML(http.StatusOK, "index.html", reactRuntime("admin", conf.Client.ClientUrl))
 	})
 
 	r.GET("/settings", func(c *gin.Context) {
