@@ -1,6 +1,6 @@
 services:
   openvpn:
-    image: xinglinglove/openvpn:latest
+    image: xinglinglove1029/openvpn:latest
     build:
       context: .
       dockerfile: build/Dockerfile

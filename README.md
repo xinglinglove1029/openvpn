@@ -2,7 +2,7 @@
 
 OpenVPN 运维控制台是一个面向个人、团队和小型企业运维场景的 Web 管理台。后端使用 Go，前端使用 React + Vite，提供账号、客户端、用户组、防火墙、系统设置、通知告警、操作审计和连接态势总览等能力。
 
-项目当前只保留新版 React 前端。登录页、用户自助页和管理员后台均由 `internal/openvpnweb/templates/react-admin.html` 承载，旧版前端页面和静态资源已移除。
+本项目采用现代化的前端架构，使用 React + Vite 构建。所有用户交互界面（包括登录页、用户自助服务页和管理员后台）均通过 `internal/openvpnweb/templates/react-admin.html` 这一单一入口文件承载。该文件作为应用的宿主页，配合 Go 的 `embed` 机制，将编译后的前端资源无缝集成进后端二进制文件，实现了真正的单体应用部署。旧版前端页面和冗余静态资源已全部移除，确保项目结构的清晰与高效。
 
 ## 功能特性
 
@@ -39,7 +39,7 @@ Go 包结构采用常见的 `cmd/` + `internal/` 布局：`cmd/openvpn-web` 只�
 
 ### Docker Compose
 
-根目录只保留一个 Compose 文件，镜像名称统一为 `xinglinglove/openvpn:latest`。
+根目录只保留一个 Compose 文件，镜像名称统一为 `xinglinglove1029/openvpn:latest`。
 
 ```bash
 docker compose up -d --build
@@ -80,7 +80,7 @@ docker run -d \
   -e ADMIN_PASSWORD=admin \
   -e OVPN_GATEWAY=false \
   -v $(pwd)/data:/data \
-  xinglinglove/openvpn:latest
+  xinglinglove1029/openvpn:latest
 ```
 
 ## 本地开发
@@ -117,7 +117,7 @@ go run .\cmd\openvpn-web
 
 ### 多平台服务端压缩包
 
-这里打包的是 `openvpn-web` 管理服务端程序，不是 Windows / macOS 桌面 OpenVPN 客户端。完整 OpenVPN 网关运行依赖 Linux 网络栈、OpenVPN、iptables/nftables 和 supervisor，生产部署优先使用 Docker 镜像 `xinglinglove/openvpn:latest`。
+这里打包的是 `openvpn-web` 管理服务端程序，不是 Windows / macOS 桌面 OpenVPN 客户端。完整 OpenVPN 网关运行依赖 Linux 网络栈、OpenVPN、iptables/nftables 和 supervisor，生产部署优先使用 Docker 镜像 `xinglinglove1029/openvpn:latest`。
 
 Linux 产物按 CPU 架构区分，不按 Ubuntu、Debian、CentOS、Alpine 等发行版分别命名。原因是 Go 程序使用 `CGO_ENABLED=0` 静态编译，`openvpn-web` 自身通常只需要匹配 `linux + CPU 架构`；不同发行版差异主要体现在 OpenVPN、iptables、supervisor 等系统依赖，由 Docker 镜像或 `scripts/openvpn-install.sh` 处理。
 
@@ -143,7 +143,7 @@ dist/openvpn-web_sha256_checksums.txt
 ### 单架构 Docker 镜像
 
 ```bash
-docker build -f build/Dockerfile -t xinglinglove/openvpn:latest .
+docker build -f build/Dockerfile -t xinglinglove1029/openvpn:latest .
 ```
 
 ### 多架构 Docker 镜像
@@ -156,7 +156,7 @@ docker buildx inspect --bootstrap
 docker buildx build \
   --platform linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7 \
   -f build/Dockerfile \
-  -t xinglinglove/openvpn:latest \
+  -t xinglinglove1029/openvpn:latest \
   --push \
   .
 ```
@@ -171,15 +171,15 @@ docker buildx build \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   -f build/Dockerfile \
-  -t xinglinglove/openvpn:latest \
-  -t xinglinglove/openvpn:$VERSION \
+  -t xinglinglove1029/openvpn:latest \
+  -t xinglinglove1029/openvpn:$VERSION \
   --push \
   .
 ```
 
 ## GitHub 自动发布
 
-项目内置 `.github/workflows/build.yml`。推送 tag 后，GitHub Actions 会自动构建多平台二进制，并发布多架构 Docker 镜像到 `xinglinglove/openvpn`。
+项目内置 `.github/workflows/build.yml`。推送 tag 后，GitHub Actions 会自动构建多平台二进制，并发布多架构 Docker 镜像到 `xinglinglove1029/openvpn`。
 
 ```bash
 git tag v1.0.0
@@ -189,7 +189,7 @@ git push origin v1.0.0
 需要在 GitHub 仓库配置 Actions Secrets：
 
 ```text
-DOCKERHUB_USERNAME=xinglinglove
+DOCKERHUB_USERNAME=xinglinglove1029
 DOCKERHUB_TOKEN=<Docker Hub Access Token>
 ```
 
@@ -197,8 +197,8 @@ DOCKERHUB_TOKEN=<Docker Hub Access Token>
 
 - GitHub Release 压缩包：Linux、Windows、macOS 多平台服务端版本
 - GitHub Release 校验文件：`openvpn-web_sha256_checksums.txt`
-- Docker Hub 镜像：`xinglinglove/openvpn:latest`
-- Docker Hub 镜像：`xinglinglove/openvpn:<tag>`，例如 `xinglinglove/openvpn:v1.0.0`
+- Docker Hub 镜像：`xinglinglove1029/openvpn:latest`
+- Docker Hub 镜像：`xinglinglove1029/openvpn:<tag>`，例如 `xinglinglove1029/openvpn:v1.0.0`
 
 详细二次开发、Docker 镜像构建和 GitHub 发布说明见 `doc/local-dev-build.md`。
 

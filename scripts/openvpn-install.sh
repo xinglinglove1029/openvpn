@@ -3,7 +3,7 @@ set -e
 
 #安装数据目录
 OVPN_DATA="/data/openvpn"
-OPENVPN_WEB_REPO="${OPENVPN_WEB_REPO:-xinglinglove/openvpn}"
+OPENVPN_WEB_REPO="${OPENVPN_WEB_REPO:-xinglinglove1029/openvpn}"
 
 OPENVPN_VERSION="2.6.17"
 

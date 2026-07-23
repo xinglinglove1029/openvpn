@@ -61,7 +61,7 @@ This archive contains the openvpn-web management server binary.
 It is not an OpenVPN desktop client.
 
 Recommended production deployment:
-- Use the Docker image xinglinglove/openvpn for the full OpenVPN + openvpn-web runtime.
+- Use the Docker image xinglinglove1029/openvpn for the full OpenVPN + openvpn-web runtime.
 
 Generic binary usage:
 - Linux/macOS: chmod +x ./openvpn-web && OVPN_DATA=/path/to/data ./openvpn-web

@@ -179,7 +179,7 @@ http://127.0.0.1:8833/admin
 
 Docker 调试会运行 OpenVPN、`openvpn-web`、supervisor 等完整环境，适合验证客户端生成、上线/下线通知、OpenVPN hook、防火墙等功能。
 
-项目根目录只保留一个 `docker-compose.yml`，镜像名称统一为 `xinglinglove/openvpn:latest`。
+项目根目录只保留一个 `docker-compose.yml`，镜像名称统一为 `xinglinglove1029/openvpn:latest`。
 
 ### 6.1 启动完整环境
 
@@ -205,7 +205,7 @@ docker compose down
 ### 6.2 单独构建 Docker 镜像
 
 ```bash
-docker build -f build/Dockerfile -t xinglinglove/openvpn:latest .
+docker build -f build/Dockerfile -t xinglinglove1029/openvpn:latest .
 ```
 
 这个命令会执行完整多阶段构建：
@@ -218,7 +218,7 @@ docker build -f build/Dockerfile -t xinglinglove/openvpn:latest .
 构建完成后查看镜像：
 
 ```bash
-docker images xinglinglove/openvpn
+docker images xinglinglove1029/openvpn
 ```
 
 本地运行镜像：
@@ -232,14 +232,14 @@ docker run --rm -it \
   -e ADMIN_PASSWORD=admin \
   -e OVPN_GATEWAY=false \
   -v $(pwd)/data:/data \
-  xinglinglove/openvpn:latest
+  xinglinglove1029/openvpn:latest
 ```
 
 推送到 Docker Hub：
 
 ```bash
 docker login
-docker push xinglinglove/openvpn:latest
+docker push xinglinglove1029/openvpn:latest
 ```
 
 ### 6.3 本地构建多架构 Docker 镜像
@@ -259,7 +259,7 @@ docker buildx inspect --bootstrap
 docker buildx build \
   --platform linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7 \
   -f build/Dockerfile \
-  -t xinglinglove/openvpn:latest \
+  -t xinglinglove1029/openvpn:latest \
   --push \
   .
 ```
@@ -274,8 +274,8 @@ docker buildx build \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   -f build/Dockerfile \
-  -t xinglinglove/openvpn:latest \
-  -t xinglinglove/openvpn:$VERSION \
+  -t xinglinglove1029/openvpn:latest \
+  -t xinglinglove1029/openvpn:$VERSION \
   --push \
   .
 ```
@@ -286,7 +286,7 @@ docker buildx build \
 docker buildx build \
   --platform linux/amd64 \
   -f build/Dockerfile \
-  -t xinglinglove/openvpn:local \
+  -t xinglinglove1029/openvpn:local \
   --load \
   .
 ```
@@ -294,7 +294,7 @@ docker buildx build \
 查看远端镜像架构：
 
 ```bash
-docker buildx imagetools inspect xinglinglove/openvpn:latest
+docker buildx imagetools inspect xinglinglove1029/openvpn:latest
 ```
 
 ### 6.4 Dockerfile 维护说明
@@ -337,7 +337,7 @@ git push origin v1.0.0
 需要配置：
 
 ```text
-DOCKERHUB_USERNAME=xinglinglove
+DOCKERHUB_USERNAME=xinglinglove1029
 DOCKERHUB_TOKEN=<Docker Hub Access Token>
 ```
 
@@ -351,8 +351,8 @@ Docker Hub Token 创建路径：`Docker Hub -> Account Settings -> Security -> N
 
 - GitHub Release 附件：`openvpn-web-linux-x86_64.tar.gz`、`openvpn-web-linux-aarch64.tar.gz`、`openvpn-web-windows-x86_64.zip` 等服务端压缩包。
 - GitHub Release 附件：`openvpn-web_sha256_checksums.txt`。
-- Docker Hub 镜像：`xinglinglove/openvpn:latest`。
-- Docker Hub 镜像：`xinglinglove/openvpn:<tag>`，例如 `xinglinglove/openvpn:v1.0.0`。
+- Docker Hub 镜像：`xinglinglove1029/openvpn:latest`。
+- Docker Hub 镜像：`xinglinglove1029/openvpn:<tag>`，例如 `xinglinglove1029/openvpn:v1.0.0`。
 
 ### 7.4 支持的平台架构
 
@@ -383,7 +383,7 @@ darwin/arm64
 
 - `DOCKERHUB_USERNAME` 是否为 `xinglinglove`。
 - `DOCKERHUB_TOKEN` 是否是 Access Token，不是网页登录密码。
-- Docker Hub 中是否已经创建或允许自动创建 `xinglinglove/openvpn` 仓库。
+- Docker Hub 中是否已经创建或允许自动创建 `xinglinglove1029/openvpn` 仓库。
 - GitHub Actions 是否允许读取仓库代码并写入 Release。
 
 如果多架构构建失败，优先检查：
@@ -401,7 +401,7 @@ Linux 包按 CPU 架构区分，不按 Ubuntu、Debian、CentOS、Alpine 等发�
 
 - `openvpn-web` 是 `CGO_ENABLED=0` 静态编译的 Go 程序，通常只需要匹配操作系统和 CPU 架构。
 - 发行版差异主要是 OpenVPN、iptables/nftables、supervisor、EasyRSA 等系统依赖不同。
-- 推荐生产使用 Docker 镜像 `xinglinglove/openvpn:latest`，它已经把完整运行环境一起打包。
+- 推荐生产使用 Docker 镜像 `xinglinglove1029/openvpn:latest`，它已经把完整运行环境一起打包。
 - 如果不用 Docker，可使用 `scripts/openvpn-install.sh`，脚本会按发行版安装系统依赖，再下载匹配架构的 Linux 压缩包。
 
 ### 8.1 推荐：本地脚本打包
