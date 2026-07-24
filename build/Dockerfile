@@ -52,6 +52,9 @@ RUN apk add --no-cache \
     openvpn \
     sqlite \
     supervisor \
+    tzdata \
+  && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+  && echo "Asia/Shanghai" > /etc/timezone \
   && wget https://github.com/OpenVPN/easy-rsa/releases/download/v3.2.6/EasyRSA-3.2.6.tgz \
   && tar -ozxf EasyRSA-3.2.6.tgz \
   && mv EasyRSA-3.2.6 /usr/share/easy-rsa \
@@ -69,6 +72,7 @@ VOLUME ["/data"]
 
 ENV GIN_MODE=release
 ENV OVPN_DATA=/data
+ENV TZ=Asia/Shanghai
 
 EXPOSE 1194/udp 8888
 
