@@ -19,3 +19,7 @@ config.json
 /run.cmd
 /check_app.cjs
 
+# BMAD-METHOD 生成工件目录（planning/implementation artifacts）
+# _bmad/ .claude/ .agents/ .trae/ 是团队共享配置，需提交
+/_bmad-output/
+
