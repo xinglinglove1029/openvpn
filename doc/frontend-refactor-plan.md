@@ -13,7 +13,7 @@
 - **Tailwind CSS v4**: 原子化 CSS，通过 `@theme inline` 桥接 CSS 变量
 - **lucide-react**: 图标库
 - **sonner**: Toast 通知
-- **react-hook-form + zod**: 表单与校验
+- **原生表单**: 自实现校验函数（`lib/validators.ts`），不依赖表单库
 
 ### 1.3 状态管理
 - **React Context**: 轻量级全局状态（`auth` / `theme` / `systemStatus`）
@@ -49,7 +49,6 @@ frontend/src/
 │   ├── ConfirmDialog.tsx         # 确认对话框
 │   ├── DataTable.tsx             # 通用数据表格
 │   ├── DatePickerField.tsx       # 日期选择字段
-│   ├── FormField.tsx             # 表单字段（label + input + error）
 │   ├── GlowButton.tsx            # 发光按钮
 │   ├── HeroOrbitScene.tsx        # 首页 3D 轨道场景
 │   ├── ManagementStatus.tsx      # Management 接口呼吸灯
@@ -95,21 +94,18 @@ frontend/src/
 │   ├── checkbox.tsx
 │   ├── dialog.tsx
 │   ├── dropdown-menu.tsx
-│   ├── form.tsx
 │   ├── input.tsx
 │   ├── label.tsx
 │   ├── popover.tsx
 │   ├── progress.tsx
 │   ├── radio-group.tsx
-│   ├── scroll-area.tsx
 │   ├── select.tsx
 │   ├── separator.tsx
 │   ├── sonner.tsx                # Toast 容器
 │   ├── switch.tsx
 │   ├── table.tsx
 │   ├── tabs.tsx
-│   ├── textarea.tsx
-│   └── tooltip.tsx
+│   └── textarea.tsx
 │
 └── styles/
     └── index.css                 # 全局样式（Tailwind 主题 + FX 变量 + 组件样式）
@@ -119,7 +115,7 @@ frontend/src/
 
 ```tsx
 // main.tsx
-import App from './App.new';
+import App from './App';
 import './styles/index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -130,7 +126,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 ```
 
 ```tsx
-// App.new.tsx —— Provider 嵌套顺序：Theme > Auth > SystemStatus > Router
+// App.tsx —— Provider 嵌套顺序：Theme > Auth > SystemStatus > Router
 function App() {
   return (
     <ThemeProvider>
@@ -519,7 +515,32 @@ npm run build
 5. **移动端适配**: 响应式断点优化
 6. **旧代码清理**: 已完成（移除了旧版 `App.tsx` 单文件和 `styles.css`，目录从 `frontend/admin/` 简化为 `frontend/`）
 
-## 十六、参考资料
+## 十六、已完成的优化记录
+
+### 16.1 局部刷新（避免跨区域联动刷新）
+
+账号管理页（`pages/Users/index.tsx`）采用**双 reloadKey**策略，分组树与用户列表各自独立刷新，互不影响：
+
+| 操作 | 触发的刷新 | 影响 |
+|------|-----------|------|
+| 编辑/启用/禁用/删除用户、重置密码/MFA、批量操作、导入 CSV | `refreshUsers` → `usersReloadKey++` | 仅用户列表重新请求 |
+| 新增/编辑/删除分组、组配置保存 | `refreshGroups` → `reloadKey++` | 仅分组树重新请求 |
+| 删除当前选中分组 | `setSelectedGroupId(1)` + `refreshGroups` | 切换默认组，用户列表因 `selectedGroupId` 变化自动刷新 |
+
+**实现要点：**
+- `groupsState` / `clientsState` 依赖 `[reloadKey]`
+- `usersState` 依赖 `[selectedGroupId, usersReloadKey]`
+- PageHeader 刷新按钮调用 `refreshUsers`（轻量刷新）
+- 删除分组后 `selectedGroupId` 回退到 1，用户列表由 `selectedGroupId` 变化驱动，无需额外刷新
+
+### 16.2 滚动条悬停闪烁修复
+
+横向滚动条悬停闪烁的根因是 `:hover` 状态触发了元素 `transform` 位移，导致鼠标相对位置反复变化。修复策略：
+- 卡片 hover 不使用 `transform: translateY()` 位移
+- 表格行 hover 不使用 `transform: translateX()` 位移
+- 滚动条 thumb 不使用 `:hover` 渐变切换，改为纯色 + `transition` 平滑过渡
+
+## 十七、参考资料
 
 - [React Router v7 文档](https://reactrouter.com/)
 - [shadcn/ui 组件库](https://ui.shadcn.com/)

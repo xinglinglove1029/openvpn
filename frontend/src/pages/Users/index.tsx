@@ -101,10 +101,17 @@ function useNotify() {
 export default function UsersPage() {
   const { notify } = useNotify();
   const [reloadKey, setReloadKey] = useState(0);
+  // 用户列表独立刷新 key：编辑/启用/禁用/删除等用户操作只刷新用户列表，不影响分组树和客户端列表
+  const [usersReloadKey, setUsersReloadKey] = useState(0);
   const [selectedGroupId, setSelectedGroupId] = useState(1);
   const [confirmState, setConfirmState] = useState<ConfirmState>();
 
-  const refresh = () => setReloadKey((v) => v + 1);
+  const refreshAll = () => {
+    setReloadKey((v) => v + 1);
+    setUsersReloadKey((v) => v + 1);
+  };
+  const refreshGroups = () => setReloadKey((v) => v + 1);
+  const refreshUsers = () => setUsersReloadKey((v) => v + 1);
 
   const groupsState = useAsync(
     () => api.get<unknown>('/ovpn/group').then((v) => normalizeList<GroupRecord>(v, ['groups', 'data'])),
@@ -119,7 +126,7 @@ export default function UsersPage() {
       api
         .get<{ users?: UserRecord[]; authUser?: boolean }>(`/ovpn/group/${selectedGroupId}/users`)
         .then((v) => ({ users: normalizeList<UserRecord>(v, ['users', 'data']), authUser: v.authUser })),
-    [selectedGroupId, reloadKey],
+    [selectedGroupId, usersReloadKey],
   );
 
   const groups = groupsState.data || [];
@@ -133,7 +140,7 @@ export default function UsersPage() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Identity" title="账号管理" description="管理VPN用户账号和权限">
-        <Button size="sm" onClick={refresh}>
+        <Button size="sm" onClick={refreshUsers}>
           刷新
         </Button>
       </PageHeader>
@@ -147,7 +154,7 @@ export default function UsersPage() {
           users={usersState.data?.users || []}
           usersLoading={usersState.loading}
           notify={notify}
-          reload={refresh}
+          reload={refreshGroups}
           confirmAction={setConfirmState}
         />
 
@@ -158,7 +165,7 @@ export default function UsersPage() {
           usersState={usersState}
           clients={clients}
           notify={notify}
-          reload={refresh}
+          reload={refreshUsers}
           confirmAction={setConfirmState}
         />
       </div>
