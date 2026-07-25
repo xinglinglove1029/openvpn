@@ -2,13 +2,13 @@ FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /src
 
-COPY frontend/admin/package*.json ./frontend/admin/
-RUN cd frontend/admin && npm ci
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm ci
 
-COPY frontend/admin ./frontend/admin
+COPY frontend ./frontend
 COPY internal/openvpnweb/templates/index.html ./internal/openvpnweb/templates/index.html
 COPY internal/openvpnweb/templates/static/cropped-openvpn-32x32.png ./internal/openvpnweb/templates/static/cropped-openvpn-32x32.png
-RUN cd frontend/admin && npm run build
+RUN cd frontend && npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.25.4-alpine AS backend-builder
 
