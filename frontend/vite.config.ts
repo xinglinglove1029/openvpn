@@ -6,7 +6,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const configDir = fileURLToPath(new URL('.', import.meta.url));
-const adminOutDir = path.resolve(configDir, '../../internal/openvpnweb/templates/static/admin');
+const adminOutDir = path.resolve(configDir, '../internal/openvpnweb/templates/static/admin');
 
 function removeViteHtmlShell() {
   return {

@@ -26,10 +26,9 @@
 ## 二、目录结构
 
 ```
-frontend/admin/src/
-├── main.tsx                      # 入口文件，挂载 App.new
-├── App.new.tsx                   # 应用根组件（Provider 嵌套 + Router）
-├── App.tsx                       # 旧版单文件应用（保留过渡）
+frontend/src/
+├── main.tsx                      # 入口文件，挂载 App
+├── App.tsx                       # 应用根组件（Provider 嵌套 + Router）
 ├── api.ts                        # API 层（fetch 封装，统一错误处理）
 ├── types.ts                      # 全局类型定义
 │
@@ -489,7 +488,7 @@ function useNotificationHub()
 ### 14.1 启动开发服务器
 
 ```bash
-cd frontend/admin
+cd frontend
 npm install
 npm run dev
 # 访问 http://127.0.0.1:5173
@@ -500,7 +499,7 @@ npm run dev
 ### 14.2 构建生产产物
 
 ```bash
-cd frontend/admin
+cd frontend
 npm run build
 ```
 
@@ -508,7 +507,7 @@ npm run build
 
 ### 14.3 路径别名
 
-- `@` → `frontend/admin/src/`
+- `@` → `frontend/src/`
 - 导入示例：`import { useAuth } from '@/store/auth'`
 
 ## 十五、后续优化建议
@@ -518,7 +517,7 @@ npm run build
 3. **国际化**: 抽取文案到 i18n 资源文件
 4. **单元测试**: 使用 Vitest + React Testing Library 编写测试
 5. **移动端适配**: 响应式断点优化
-6. **旧代码清理**: 移除 `App.tsx` 和 `styles.css`（已被 `App.new.tsx` 和 `styles/index.css` 替代）
+6. **旧代码清理**: 已完成（移除了旧版 `App.tsx` 单文件和 `styles.css`，目录从 `frontend/admin/` 简化为 `frontend/`）
 
 ## 十六、参考资料
 
