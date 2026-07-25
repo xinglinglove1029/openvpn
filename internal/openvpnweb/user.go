@@ -89,7 +89,7 @@ func (u *User) Get(id string) User {
 }
 
 func (u *User) Create() error {
-	if u.Username == "" || u.Password == "" {
+	if u.Username == "" || u.Password == "" || strings.TrimSpace(u.Name) == "" {
 		return fmt.Errorf("非法请求")
 	}
 

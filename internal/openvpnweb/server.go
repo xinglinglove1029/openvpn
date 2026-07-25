@@ -482,6 +482,9 @@ func AuthMiddleWare() gin.HandlerFunc {
 		}
 
 		if user, ok := user.(string); ok {
+			// 暴露到 gin.Context，供下游 handler（未读数、标记已读、ws 等）使用
+			c.Set("user", user)
+
 			if c.Request.URL.Path != "/" && !strings.HasPrefix(c.Request.URL.Path, "/client") && user != adminUsername {
 				c.Redirect(302, "/")
 				c.Abort()
@@ -539,7 +542,20 @@ func Run(info BuildInfo) {
 
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
-	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{})
+	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{})
+
+	// 注册所有通知渠道实现（webhook/email/dingtalk/feishu/wecom/discord/slack/telegram/mattermost）
+	registerNotifiers()
+
+	// 启动 WebSocket Hub（用于站内信实时推送）
+	WsHubInstance().Run()
+
+	// 启动系统监控采集器：周期采集 CPU/内存/磁盘/网络，通过 WebSocket 推送到首页
+	StartSystemStatsCollector(5 * time.Second)
+
+	// 启动概览数据采集器：周期采集 dashboard summary / 在线客户端 / 服务状态，通过 WebSocket 推送到首页
+	// 概览页所有卡片均通过 dashboard:stats topic 实时更新，无需前端定时器或手动刷新
+	StartDashboardStatsCollector(&ov, 5*time.Second)
 
 	r := gin.New()
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
@@ -620,7 +636,23 @@ func Run(info BuildInfo) {
 				session.Save()
 
 				resetLoginFail(cip)
-				c.JSON(200, gin.H{"message": "登录成功", "redirect": "/admin"})
+				adminUser := User{Username: u.Username}.Info()
+				adminID := adminUser.ID
+				if adminID == 0 {
+					// admin 用户在 user 表中无记录，使用 0 作为占位 ID（前端按 username 查询资料）
+					adminID = 0
+				}
+				c.JSON(200, gin.H{
+					"message":  "登录成功",
+					"redirect": "/admin",
+					"user": gin.H{
+						"id":           adminID,
+						"username":     adminUser.Username,
+						"name":         adminUser.Name,
+						"email":        adminUser.Email,
+						"isFirstLogin": false,
+					},
+				})
 				return
 			} else {
 				err = fmt.Errorf("密码错误")
@@ -629,12 +661,23 @@ func Run(info BuildInfo) {
 			if passcode != "" {
 				if validUser, ok := cc.Get("valid_user"); ok {
 					if u.Username == validUser.(string) {
-						if ValidateMfa(passcode, u.Info().MfaSecret) {
+						userInfo := u.Info()
+						if ValidateMfa(passcode, userInfo.MfaSecret) {
 							cc.Delete("valid_user")
 							session.Set("user", u.Username)
 							session.Save()
 							resetLoginFail(cip)
-							c.JSON(200, gin.H{"message": "登录成功", "redirect": "/"})
+							c.JSON(200, gin.H{
+								"message":  "登录成功",
+								"redirect": "/",
+								"user": gin.H{
+									"id":           userInfo.ID,
+									"username":     userInfo.Username,
+									"name":         userInfo.Name,
+									"email":        userInfo.Email,
+									"isFirstLogin": *userInfo.IsFirstLogin,
+								},
+							})
 						} else {
 							c.JSON(401, gin.H{"message": "MFA 验证失败"})
 						}
@@ -660,7 +703,17 @@ func Run(info BuildInfo) {
 
 				resetLoginFail(cip)
 
-				c.JSON(200, gin.H{"message": "登录成功", "redirect": "/", "user": gin.H{"id": user.ID, "isFirstLogin": *user.IsFirstLogin}})
+				c.JSON(200, gin.H{
+					"message":  "登录成功",
+					"redirect": "/",
+					"user": gin.H{
+						"id":           user.ID,
+						"username":     user.Username,
+						"name":         user.Name,
+						"email":        user.Email,
+						"isFirstLogin": *user.IsFirstLogin,
+					},
+				})
 				return
 			}
 		}
@@ -1525,6 +1578,67 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"data": queryNotifyLogs(limit)})
 		})
 
+		// 站内信：未读数 + 标记已读
+		ovpn.GET("/notify/unread-count", func(c *gin.Context) {
+			username, _ := c.Get("user")
+			uname, _ := username.(string)
+			rec := getUserNotifyRead(uname)
+			total := countUnreadNotifyLogs(rec.LastReadID)
+			c.JSON(http.StatusOK, gin.H{
+				"unread":     total,
+				"lastReadId": rec.LastReadID,
+				"maxId":      maxNotifyLogID(),
+			})
+		})
+
+		ovpn.POST("/notify/mark-read", func(c *gin.Context) {
+			username, _ := c.Get("user")
+			uname, _ := username.(string)
+			if uname == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
+				return
+			}
+			// 可选：客户端传入 lastReadId；未传则推进到当前最大 id
+			var body struct {
+				LastReadID uint `json:"lastReadId"`
+			}
+			_ = c.ShouldBind(&body)
+			target := body.LastReadID
+			if target == 0 {
+				target = maxNotifyLogID()
+			}
+			rec, err := markUserNotifyRead(uname, target)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"message":   "marked",
+				"lastReadId": rec.LastReadID,
+				"unread":    countUnreadNotifyLogs(rec.LastReadID),
+			})
+		})
+
+		// WebSocket：站内信实时推送
+		ovpn.GET("/ws/notifications", func(c *gin.Context) {
+			username, _ := c.Get("user")
+			if uname, ok := username.(string); !ok || uname == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
+				return
+			}
+			WsHubInstance().ServeWs(c.Writer, c.Request)
+		})
+
+		// 通知渠道维护：CRUD + Test
+		ovpn.GET("/channel-types", channelTypesHandler)
+		ovpn.GET("/channel", channelHandler)
+		ovpn.GET("/channel/:id", channelHandler)
+		ovpn.POST("/channel", channelHandler)
+		ovpn.PUT("/channel/:id", channelHandler)
+		ovpn.PATCH("/channel/:id", channelHandler)
+		ovpn.DELETE("/channel/:id", channelHandler)
+		ovpn.POST("/channel/:id/test", channelTestHandler)
+
 		ovpn.POST("/notify", func(c *gin.Context) {
 			bytesReceived, _ := strconv.ParseFloat(c.PostForm("bytes_received"), 64)
 			bytesSent, _ := strconv.ParseFloat(c.PostForm("bytes_sent"), 64)
@@ -1668,7 +1782,40 @@ func Run(info BuildInfo) {
 				return
 			}
 
+			if u.Username == adminUsername {
+				u.Name = viper.GetString("system.base.admin_name")
+				u.Email = viper.GetString("system.base.admin_email")
+				c.JSON(http.StatusOK, u)
+				return
+			}
+
 			c.JSON(http.StatusOK, u.Info())
+		})
+
+		client.PUT("/userinfo", func(c *gin.Context) {
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+
+			if currentUsername != adminUsername {
+				c.JSON(http.StatusForbidden, gin.H{"message": "仅系统管理员可修改个人资料"})
+				return
+			}
+
+			name := c.PostForm("name")
+			email := c.PostForm("email")
+
+			viper.Set("system.base.admin_name", name)
+			viper.Set("system.base.admin_email", email)
+			err := viper.WriteConfig()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
 		})
 
 		client.POST("/modifyPass", func(c *gin.Context) {
@@ -1676,8 +1823,16 @@ func Run(info BuildInfo) {
 			c.ShouldBind(&u)
 
 			session := sessions.Default(c)
+			currentUsername := ""
 			if user, ok := session.Get("user").(string); ok {
-				cu := User{Username: user}.Info()
+				currentUsername = user
+			}
+
+			// 校验请求中的 id 与当前登录用户一致
+			if currentUsername == adminUsername {
+				// admin 用户：忽略 u.ID 校验，密码存放在配置中
+			} else {
+				cu := User{Username: currentUsername}.Info()
 				if u.ID != cu.ID {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
 					return
@@ -1690,6 +1845,26 @@ func Run(info BuildInfo) {
 			}
 
 			if currentPass, ok := c.Request.PostForm["currentPass"]; ok {
+				if currentUsername == adminUsername {
+					if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass[0])) != nil {
+						c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
+						return
+					}
+
+					passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+						return
+					}
+
+					viper.Set("system.base.admin_password", string(passwd))
+					viper.WriteConfig()
+					adminPassword = string(passwd)
+
+					c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+					return
+				}
+
 				if u.Info().Password != currentPass[0] {
 					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
 					return

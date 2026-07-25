@@ -189,6 +189,24 @@ export interface DashboardSummary {
   risks: Array<{ level: 'danger' | 'warning' | 'info' | string; title: string; message: string }>;
 }
 
+// 概览页 WebSocket 实时推送载荷（topic: dashboard:stats）
+export interface DashboardStatsPayload {
+  summary: DashboardSummary;
+  online: OnlineClient[];
+  server: {
+    Address?: string;
+    Status?: string;
+    StatusDesc?: string;
+    RunDate?: string;
+    BytesIn?: string;
+    BytesOut?: string;
+    Nclients?: string;
+    Mode?: string;
+    Version?: string;
+  };
+  pushedAt: number;
+}
+
 export interface NotifyLogRecord {
   id: number;
   event: string;
@@ -220,11 +238,132 @@ export interface CertRecord {
   expiresIn?: number | string;
 }
 
+// 通知渠道（多渠道维护）
+export type ChannelType =
+  | 'webhook'
+  | 'email'
+  | 'dingtalk'
+  | 'feishu'
+  | 'wecom'
+  | 'discord'
+  | 'slack'
+  | 'telegram'
+  | 'mattermost';
+
+export interface ChannelTypeMeta {
+  type: ChannelType;
+  label: string;
+  icon: string;
+}
+
+export interface NotificationChannel {
+  id: number;
+  name: string;
+  type: ChannelType | string;
+  enabled: boolean;
+  // 后端以 json.RawMessage 存储；前端拿到时可能是对象或字符串
+  config?: Record<string, unknown> | string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface AdminRuntime {
   page?: 'login' | 'client' | 'admin';
   version?: string;
   sysUser?: string;
   clientUrls?: SettingsResponse['client']['client_url'];
+}
+
+/** 系统监控：单次推送的快照（WebSocket topic: system:stats） */
+export interface SystemStatsPayload {
+  timestamp: number;
+  intervalMs: number;
+  host: SystemHostInfo;
+  cpuPercent: number;
+  cpuPerCore: number[];
+  memory: SystemMemoryInfo;
+  process: SystemProcessInfo;
+  disks: SystemDiskInfo[];
+  networks: SystemNetInfo[];
+  netTotalRxBps: number;
+  netTotalTxBps: number;
+  /** 进程 Top 5：按 CPU 占用降序 */
+  topCpuProcesses: SystemProcessTop[];
+  /** 进程 Top 5：按 内存 RSS 降序 */
+  topMemProcesses: SystemProcessTop[];
+}
+
+export interface SystemHostInfo {
+  hostname: string;
+  platform: string;
+  platformVersion: string;
+  kernelVersion: string;
+  kernelArch: string;
+  uptimeSeconds: number;
+  bootTime: number;
+  cpuModel: string;
+  cpuCores: number;
+  cpuMHz: number;
+  loadAvg1: number;
+  loadAvg5: number;
+  loadAvg15: number;
+}
+
+export interface SystemMemoryInfo {
+  totalBytes: number;
+  usedBytes: number;
+  availableBytes: number;
+  usedPercent: number;
+  swapTotalBytes: number;
+  swapUsedBytes: number;
+  swapPercent: number;
+}
+
+export interface SystemProcessInfo {
+  pid: number;
+  memoryRss: number;
+  memoryVsz: number;
+  cpuPercent: number;
+  numThreads: number;
+}
+
+/** 进程 Top N 列表项 */
+export interface SystemProcessTop {
+  pid: number;
+  name: string;
+  username: string;
+  cpuPercent: number;
+  memoryRss: number;
+  memoryVsz: number;
+  status: string;
+  nice: number;
+  /** 进程启动时间（毫秒） */
+  createTime: number;
+}
+
+export interface SystemDiskInfo {
+  device: string;
+  mountpoint: string;
+  fsType: string;
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  usedPercent: number;
+}
+
+export interface SystemNetInfo {
+  name: string;
+  rxBytes: number;
+  txBytes: number;
+  rxBps: number;
+  txBps: number;
+  rxPackets: number;
+  txPackets: number;
+  rxErrors: number;
+  txErrors: number;
+  rxDrops: number;
+  txDrops: number;
+  isPhysical: boolean;
 }
 
 export interface ClientUserInfo {
@@ -234,6 +373,8 @@ export interface ClientUserInfo {
   email?: string;
   ldapAuth?: boolean;
   isFirstLogin?: boolean;
+  /** 自定义头像：data URL（base64）或预设样式标识 */
+  avatar?: string;
 }
 
 export interface ClientMfaResponse {

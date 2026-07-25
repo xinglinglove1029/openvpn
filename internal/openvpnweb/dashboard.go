@@ -55,7 +55,9 @@ type DashboardRisk struct {
 	Message string `json:"message"`
 }
 
-func (ov *ovpn) dashboardSummary(c *gin.Context) {
+// buildDashboardSummary 构造一份完整的概览数据快照。
+// 由 HTTP handler 和 WebSocket 周期采集器共同复用，避免逻辑分叉。
+func (ov *ovpn) buildDashboardSummary() DashboardSummary {
 	now := time.Now()
 	since24h := now.Add(-24 * time.Hour).Unix()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
@@ -111,12 +113,16 @@ func (ov *ovpn) dashboardSummary(c *gin.Context) {
 	stats.BytesReceived24h = tools.FormatBytes(traffic.Received)
 	stats.BytesSent24h = tools.FormatBytes(traffic.Sent)
 
-	c.JSON(http.StatusOK, DashboardSummary{
+	return DashboardSummary{
 		Stats:    stats,
 		Trends:   dashboardTrends(since24h),
 		TopUsers: dashboardTopUsers(since24h),
 		Risks:    risks,
-	})
+	}
+}
+
+func (ov *ovpn) dashboardSummary(c *gin.Context) {
+	c.JSON(http.StatusOK, ov.buildDashboardSummary())
 }
 
 func (ov *ovpn) safeOnlineClients() ([]ClientData, bool) {

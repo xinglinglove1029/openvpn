@@ -1,0 +1,907 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw } from 'lucide-react';
+
+import { api } from '@/api';
+import type { SettingsResponse } from '@/types';
+import { messageOf } from '@/lib/format';
+import {
+  trimText,
+  isValidUrl,
+  isValidPort,
+  isValidAccount,
+  isStrongPassword,
+  isNonNegativeInteger,
+  isPositiveInteger,
+  isValidCidr,
+  isValidHostPort,
+  isValidIp,
+} from '@/lib/validators';
+
+import { PageHeader } from '@/components/PageHeader';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/ui/tabs';
+import { Input } from '@/ui/input';
+import { Label } from '@/ui/label';
+import { Switch } from '@/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
+import { Separator } from '@/ui/separator';
+import { Button } from '@/ui/button';
+import { Textarea } from '@/ui/textarea';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/ui/dialog';
+import { GlowButton } from '@/components/GlowButton';
+import { cn } from '@/lib/utils';
+
+/* ---------- 验证 ---------- */
+
+function validateSetting(key: string, value: unknown): string | undefined {
+  const text = trimText(value);
+  if (key === 'system.base.site_url' && !isValidUrl(text)) return '站点地址请输入完整的 http/https 地址';
+  if (key === 'system.base.web_port' && !isValidPort(text)) return 'Web 端口必须是 1-65535 的整数';
+  if (key === 'system.base.admin_username' && !isValidAccount(text)) return '管理员账号不能为空，长度需在 2-64 个字符内';
+  if (key === 'system.base.admin_password' && text && !isStrongPassword(text)) return '管理员新密码需至少 12 位，包含大小写字母、数字和特殊字符';
+  if (key === 'system.base.history_max_days' && !isNonNegativeInteger(text)) return '历史保留天数必须是非负整数';
+  if (key === 'system.base.max_duplicate_login' && !isNonNegativeInteger(text)) return '重复登录数必须是非负整数';
+  if (key === 'system.ldap.ldap_url' && text && !isValidUrl(text, ['ldap:', 'ldaps:'])) return 'LDAP URL 请输入 ldap:// 或 ldaps:// 地址';
+  if (key === 'openvpn.ovpn_port' && !isValidPort(text)) return 'OpenVPN 端口必须是 1-65535 的整数';
+  if (key === 'openvpn.ovpn_subnet' && !isValidCidr(text, 4)) return 'IPv4 网段请输入 CIDR 格式，例如 10.8.0.0/24';
+  if (key === 'openvpn.ovpn_subnet6' && text && !isValidCidr(text, 6)) return 'IPv6 网段请输入 CIDR 格式，例如 fd00::/64';
+  if (key === 'openvpn.ovpn_max_clients' && !isPositiveInteger(text)) return '最大客户端数量必须是正整数';
+  if (key === 'openvpn.ovpn_management' && !isValidHostPort(text)) return 'Management 请输入 host:port，例如 127.0.0.1:7505';
+  if ((key === 'openvpn.ovpn_push_dns1' || key === 'openvpn.ovpn_push_dns2') && text && !isValidIp(text)) return 'DNS 地址请输入合法 IPv4 或 IPv6';
+  return undefined;
+}
+
+/* ---------- 整页统一保存：草稿仓库 ---------- */
+
+interface DraftStore {
+  /** 当前所有字段的草稿（key -> value） */
+  drafts: Record<string, string>;
+  /** 服务端值（key -> value） */
+  originals: Record<string, string>;
+  /** 字段级错误（key -> error） */
+  errors: Record<string, string | undefined>;
+  /** 设置某 key 的草稿 */
+  setDraft: (key: string, value: string) => void;
+  /** 重置全部草稿到 originals */
+  reset: () => void;
+  /** 判断是否有任何字段被修改 */
+  isDirty: () => boolean;
+  /** 获取修改过的 key 列表 */
+  dirtyKeys: () => string[];
+  /** 校验所有草稿并收集错误；返回是否通过 */
+  validateAll: () => boolean;
+}
+
+/* ---------- 字段组件（无独立保存按钮） ---------- */
+
+interface SettingFieldProps {
+  label: string;
+  description?: string;
+  value: string | number | undefined | null;
+  settingKey: string;
+  type?: string;
+  placeholder?: string;
+  /** 为 true 时仅在值非空时才参与保存（密码字段） */
+  saveOnlyIfValue?: boolean;
+  store: DraftStore;
+}
+
+/**
+ * 设置项：把改动写入统一的草稿仓库，由父组件的"保存"按钮统一提交。
+ * 字段下方的红色错误提示仅用于本地校验。
+ */
+function SettingField({ label, description, value, settingKey, type = 'text', placeholder, saveOnlyIfValue, store }: SettingFieldProps) {
+  const initial = saveOnlyIfValue ? '' : String(value ?? '');
+  const draft = store.drafts[settingKey] ?? initial;
+  const error = store.errors[settingKey];
+
+  return (
+    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
+      <Label className="pt-2 text-right text-sm font-medium text-foreground/80">{label}</Label>
+      <div className="space-y-1.5 min-w-0">
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+        <Input
+          type={type}
+          value={draft}
+          placeholder={placeholder}
+          aria-invalid={error ? 'true' : undefined}
+          className={cn(error && 'border-destructive focus-visible:ring-destructive/40')}
+          onChange={(e) => {
+            store.setDraft(settingKey, e.target.value);
+          }}
+        />
+        {error && <p className="text-xs text-destructive">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+interface SettingSwitchProps {
+  label: string;
+  description?: string;
+  checked: boolean;
+  settingKey: string;
+  store: DraftStore;
+}
+
+function SettingSwitch({ label, description, checked, settingKey, store }: SettingSwitchProps) {
+  const draft = store.drafts[settingKey] ?? String(checked);
+  const isChecked = draft === 'true';
+
+  return (
+    <div className="flex items-center justify-between">
+      <div className="space-y-0.5">
+        <Label>{label}</Label>
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+      </div>
+      <Switch
+        checked={isChecked}
+        onCheckedChange={(next) => {
+          store.setDraft(settingKey, String(next));
+        }}
+      />
+    </div>
+  );
+}
+
+interface SettingSelectProps {
+  label: string;
+  description?: string;
+  value: string;
+  settingKey: string;
+  options: Array<{ value: string; label: string }>;
+  store: DraftStore;
+}
+
+function SettingSelectField({ label, description, value, settingKey, options, store }: SettingSelectProps) {
+  const draft = store.drafts[settingKey] ?? String(value);
+
+  return (
+    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
+      <Label className="pt-2 text-right text-sm font-medium text-foreground/80">{label}</Label>
+      <div className="space-y-1.5 min-w-0">
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+        <Select
+          value={draft}
+          onValueChange={(next) => {
+            store.setDraft(settingKey, next);
+          }}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 页面 ---------- */
+
+/** 把 SettingsResponse 扁平化为 key->value 的字符串映射 */
+function flattenSettings(settings: SettingsResponse): Record<string, string> {
+  const out: Record<string, string> = {};
+  const base = settings?.system?.base ?? ({} as SettingsResponse['system']['base']);
+  out['system.base.site_url'] = String(base.site_url ?? '');
+  out['system.base.web_port'] = String(base.web_port ?? '');
+  out['system.base.admin_username'] = String(base.admin_username ?? '');
+  // 密码字段永远不存草稿，留空表示不修改
+  out['system.base.admin_password'] = '';
+  out['system.base.history_max_days'] = String(base.history_max_days ?? '');
+  out['system.base.max_duplicate_login'] = String(base.max_duplicate_login ?? '');
+
+  const ldap = settings?.system?.ldap ?? ({} as SettingsResponse['system']['ldap']);
+  out['system.ldap.ldap_url'] = String(ldap.ldap_url ?? '');
+  out['system.ldap.ldap_base_dn'] = String(ldap.ldap_base_dn ?? '');
+  out['system.ldap.ldap_user_attribute'] = String(ldap.ldap_user_attribute ?? '');
+  out['system.ldap.ldap_bind_user_dn'] = String(ldap.ldap_bind_user_dn ?? '');
+  out['system.ldap.ldap_bind_password'] = '';
+  out['system.ldap.ldap_user_attr_ipaddr_name'] = String(ldap.ldap_user_attr_ipaddr_name ?? '');
+  out['system.ldap.ldap_user_attr_config_name'] = String(ldap.ldap_user_attr_config_name ?? '');
+  out['system.ldap.ldap_user_group_dn'] = String(ldap.ldap_user_group_dn ?? '');
+
+  const ovpn = settings?.openvpn ?? ({} as SettingsResponse['openvpn']);
+  out['openvpn.ovpn_port'] = String(ovpn.ovpn_port ?? '');
+  out['openvpn.ovpn_proto'] = String(ovpn.ovpn_proto ?? '');
+  out['openvpn.ovpn_subnet'] = String(ovpn.ovpn_subnet ?? '');
+  out['openvpn.ovpn_max_clients'] = String(ovpn.ovpn_max_clients ?? '');
+  out['openvpn.ovpn_management'] = String(ovpn.ovpn_management ?? '');
+  out['openvpn.ovpn_push_dns1'] = String(ovpn.ovpn_push_dns1 ?? '');
+  out['openvpn.ovpn_push_dns2'] = String(ovpn.ovpn_push_dns2 ?? '');
+  out['openvpn.ovpn_subnet6'] = String(ovpn.ovpn_subnet6 ?? '');
+  return out;
+}
+
+export default function SettingsPage() {
+  const [settings, setSettings] = useState<SettingsResponse>();
+  const [loading, setLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [originals, setOriginals] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({});
+  const [saving, setSaving] = useState(false);
+
+  function loadSettings() {
+    setLoading(true);
+    Promise.all([
+      api.get<SettingsResponse>('/settings'),
+      api.get<{ authUser?: boolean }>('/ovpn/group/1/users').catch(() => ({ authUser: false })),
+    ])
+      .then(([data, authData]) => {
+        setSettings(data);
+        const flat = flattenSettings(data);
+        flat['service.auth_user'] = String(authData?.authUser ?? false);
+        setOriginals(flat);
+        setDrafts(flat);
+        setErrors({});
+      })
+      .catch((err) => toast.error(messageOf(err)))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const setDraft = useCallback((key: string, value: string) => {
+    setDrafts((prev) => ({ ...prev, [key]: value }));
+    // 编辑时清掉该字段的错误
+    setErrors((prev) => (prev[key] ? { ...prev, [key]: undefined } : prev));
+  }, []);
+
+  const dirtyKeys = useMemo(() => {
+    return Object.keys(drafts).filter((k) => {
+      // 密码字段：原始值是密码原文时不做 diff（永远视为"留空不改"），否则与原值比对
+      if (k === 'system.base.admin_password' || k === 'system.ldap.ldap_bind_password') {
+        return trimText(drafts[k]) !== '';
+      }
+      return trimText(drafts[k]) !== trimText(originals[k] ?? '');
+    });
+  }, [drafts, originals]);
+
+  const isDirty = dirtyKeys.length > 0;
+
+  const validateAll = useCallback((): boolean => {
+    const next: Record<string, string | undefined> = {};
+    let ok = true;
+    for (const k of Object.keys(drafts)) {
+      const v = drafts[k];
+      // 密码字段留空跳过校验
+      if ((k === 'system.base.admin_password' || k === 'system.ldap.ldap_bind_password') && !trimText(v)) {
+        next[k] = undefined;
+        continue;
+      }
+      const err = validateSetting(k, v);
+      next[k] = err;
+      if (err) ok = false;
+    }
+    setErrors(next);
+    return ok;
+  }, [drafts]);
+
+  async function handleSave() {
+    if (!isDirty || saving) return;
+    if (!validateAll()) {
+      toast.error('请先修正页面上红色高亮的字段');
+      return;
+    }
+    setSaving(true);
+    try {
+      // 分离 auth-user（走 /ovpn/server）和普通设置（走 /settings）
+      const authUserDirty = dirtyKeys.includes('service.auth_user');
+      const payload: Record<string, string> = {};
+      for (const k of dirtyKeys) {
+        if (k === 'service.auth_user') continue;
+        payload[k] = trimText(drafts[k]);
+      }
+
+      // 提交账号密码认证开关（实时生效到 OpenVPN 服务）
+      if (authUserDirty) {
+        await api.postForm<{ message: string }>('/ovpn/server', {
+          action: 'settings',
+          key: 'auth-user',
+          value: drafts['service.auth_user'] === 'true',
+        });
+      }
+
+      // 提交普通设置
+      if (Object.keys(payload).length > 0) {
+        await api.postForm<{ message: string }>('/settings', payload);
+      }
+
+      toast.success('设置已保存');
+      // 保存成功后用 drafts 覆盖 originals（实现"保存即生效"的语义）
+      setOriginals((prev) => {
+        const next = { ...prev };
+        for (const k of dirtyKeys) next[k] = trimText(drafts[k]);
+        return next;
+      });
+      // 重新拉一次数据，确保与服务端同步
+      await loadSettings();
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleReset() {
+    setDrafts(originals);
+    setErrors({});
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader eyebrow="Control" title="系统设置" description="配置系统参数、LDAP认证和OpenVPN参数" />
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            正在加载设置…
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <div className="space-y-6">
+        <PageHeader eyebrow="Control" title="系统设置" description="配置系统参数、LDAP认证和OpenVPN参数" />
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            无法加载设置，请检查网络或刷新重试。
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const base = settings.system.base;
+  const ldap = settings.system.ldap;
+  const ovpn = settings.openvpn;
+
+  const store: DraftStore = {
+    drafts,
+    originals,
+    errors,
+    setDraft,
+    reset: handleReset,
+    isDirty: () => isDirty,
+    dirtyKeys: () => dirtyKeys,
+    validateAll,
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHeader eyebrow="Control" title="系统设置" description="配置系统参数、LDAP认证和OpenVPN参数" />
+
+      <Tabs defaultValue="base" className="w-full">
+        <TabsList>
+          <TabsTrigger value="base" className="gap-1.5">
+            <Settings className="h-4 w-4" />
+            基础控制
+          </TabsTrigger>
+          <TabsTrigger value="ldap" className="gap-1.5">
+            <Shield className="h-4 w-4" />
+            LDAP认证
+          </TabsTrigger>
+          <TabsTrigger value="openvpn" className="gap-1.5">
+            <Server className="h-4 w-4" />
+            OpenVPN参数
+          </TabsTrigger>
+          <TabsTrigger value="service" className="gap-1.5">
+            <Wrench className="h-4 w-4" />
+            服务管理
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ====== Tab 1: 基础控制 ====== */}
+        <TabsContent value="base">
+          <Card>
+            <CardHeader>
+              <CardTitle>基础控制</CardTitle>
+              <CardDescription>站点地址、管理员、系统行为等核心参数</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-6 sm:grid-cols-2">
+                <SettingField
+                  label="站点地址"
+                  value={base.site_url}
+                  settingKey="system.base.site_url"
+                  placeholder="https://example.com"
+                  store={store}
+                />
+                <SettingField
+                  label="Web 端口"
+                  value={base.web_port}
+                  settingKey="system.base.web_port"
+                  placeholder="8080"
+                  store={store}
+                />
+                <SettingField
+                  label="管理员账号"
+                  value={base.admin_username}
+                  settingKey="system.base.admin_username"
+                  store={store}
+                />
+                <SettingField
+                  label="管理员新密码"
+                  value=""
+                  settingKey="system.base.admin_password"
+                  type="password"
+                  placeholder="留空不改；建议 12 位强密码"
+                  saveOnlyIfValue
+                  store={store}
+                />
+                <SettingField
+                  label="历史保留天数"
+                  value={base.history_max_days}
+                  settingKey="system.base.history_max_days"
+                  store={store}
+                />
+                <SettingField
+                  label="重复登录数"
+                  value={base.max_duplicate_login}
+                  settingKey="system.base.max_duplicate_login"
+                  store={store}
+                />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <SettingSwitch
+                  label="自动更新 OpenVPN 配置"
+                  description="保存设置后自动同步 server.conf"
+                  checked={base.auto_update_ovpn_config}
+                  settingKey="system.base.auto_update_ovpn_config"
+                  store={store}
+                />
+                <SettingSwitch
+                  label="校验客户端配置"
+                  description="登录时校验用户绑定的配置文件"
+                  checked={base.validate_client_config}
+                  settingKey="system.base.validate_client_config"
+                  store={store}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ====== Tab 2: LDAP认证 ====== */}
+        <TabsContent value="ldap">
+          <Card>
+            <CardHeader>
+              <CardTitle>LDAP 认证</CardTitle>
+              <CardDescription>配置 LDAP 外部认证源，启用后本地 VPN 账号不参与认证</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <SettingSwitch
+                label="启用 LDAP"
+                description="启用后本地 VPN 账号不参与认证"
+                checked={ldap.ldap_auth}
+                settingKey="system.ldap.ldap_auth"
+                store={store}
+              />
+
+              <Separator />
+
+              <div className="grid gap-6 sm:grid-cols-2">
+                <SettingField
+                  label="LDAP URL"
+                  value={ldap.ldap_url}
+                  settingKey="system.ldap.ldap_url"
+                  placeholder="ldap://ldap.example.com:389"
+                  store={store}
+                />
+                <SettingField
+                  label="Base DN"
+                  value={ldap.ldap_base_dn}
+                  settingKey="system.ldap.ldap_base_dn"
+                  placeholder="dc=example,dc=com"
+                  store={store}
+                />
+                <SettingField
+                  label="用户属性"
+                  value={ldap.ldap_user_attribute}
+                  settingKey="system.ldap.ldap_user_attribute"
+                  placeholder="uid"
+                  store={store}
+                />
+                <SettingField
+                  label="绑定 DN"
+                  value={ldap.ldap_bind_user_dn}
+                  settingKey="system.ldap.ldap_bind_user_dn"
+                  store={store}
+                />
+                <SettingField
+                  label="绑定密码"
+                  value={ldap.ldap_bind_password}
+                  settingKey="system.ldap.ldap_bind_password"
+                  type="password"
+                  store={store}
+                />
+                <SettingField
+                  label="IP 属性名"
+                  value={ldap.ldap_user_attr_ipaddr_name}
+                  settingKey="system.ldap.ldap_user_attr_ipaddr_name"
+                  store={store}
+                />
+                <SettingField
+                  label="配置属性名"
+                  value={ldap.ldap_user_attr_config_name}
+                  settingKey="system.ldap.ldap_user_attr_config_name"
+                  store={store}
+                />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <SettingSwitch
+                label="用户组过滤"
+                description="只允许指定 memberOf 登录"
+                checked={ldap.ldap_user_group_filter}
+                settingKey="system.ldap.ldap_user_group_filter"
+                store={store}
+              />
+                <SettingField
+                  label="用户组 DN"
+                  value={ldap.ldap_user_group_dn}
+                  settingKey="system.ldap.ldap_user_group_dn"
+                  store={store}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ====== Tab 3: OpenVPN参数 ====== */}
+        <TabsContent value="openvpn">
+          <Card>
+            <CardHeader>
+              <CardTitle>OpenVPN 参数</CardTitle>
+              <CardDescription>端口、协议、网段、DNS 等核心 OpenVPN 服务配置</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-6 sm:grid-cols-2">
+                <SettingField
+                  label="端口"
+                  value={ovpn.ovpn_port}
+                  settingKey="openvpn.ovpn_port"
+                  store={store}
+                />
+                <SettingSelectField
+                  label="协议"
+                  value={ovpn.ovpn_proto}
+                  settingKey="openvpn.ovpn_proto"
+                  options={[
+                    { value: 'udp', label: 'UDP（低延迟，常用推荐）' },
+                    { value: 'tcp', label: 'TCP（穿透性更好，稳定优先）' },
+                  ]}
+                  store={store}
+                />
+                <SettingField
+                  label="IPv4 网段"
+                  value={ovpn.ovpn_subnet}
+                  settingKey="openvpn.ovpn_subnet"
+                  placeholder="10.8.0.0/24"
+                  store={store}
+                />
+                <SettingField
+                  label="最大客户端"
+                  value={ovpn.ovpn_max_clients}
+                  settingKey="openvpn.ovpn_max_clients"
+                  store={store}
+                />
+                <SettingField
+                  label="Management"
+                  value={ovpn.ovpn_management}
+                  settingKey="openvpn.ovpn_management"
+                  placeholder="127.0.0.1:7505"
+                  store={store}
+                />
+                <SettingField
+                  label="DNS1"
+                  value={ovpn.ovpn_push_dns1}
+                  settingKey="openvpn.ovpn_push_dns1"
+                  placeholder="8.8.8.8"
+                  store={store}
+                />
+                <SettingField
+                  label="DNS2"
+                  value={ovpn.ovpn_push_dns2}
+                  settingKey="openvpn.ovpn_push_dns2"
+                  placeholder="8.8.4.4"
+                  store={store}
+                />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <SettingSwitch
+                  label="全局网关"
+                  description="推送默认路由"
+                  checked={ovpn.ovpn_gateway}
+                  settingKey="openvpn.ovpn_gateway"
+                  store={store}
+                />
+                <SettingSwitch
+                  label="IPv6"
+                  description="启用 IPv6 地址池"
+                  checked={ovpn.ovpn_ipv6}
+                  settingKey="openvpn.ovpn_ipv6"
+                  store={store}
+                />
+                <SettingField
+                  label="IPv6 网段"
+                  value={ovpn.ovpn_subnet6}
+                  settingKey="openvpn.ovpn_subnet6"
+                  placeholder="fd00::/64"
+                  store={store}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ====== Tab 4: 服务管理 ====== */}
+        <TabsContent value="service">
+          <ServiceTab store={store} />
+        </TabsContent>
+      </Tabs>
+
+      {/* 整页统一的保存条：固定在底部，所有 Tab 共享 */}
+      <SaveBar
+        dirtyCount={dirtyKeys.length}
+        saving={saving}
+        disabled={!isDirty}
+        onSave={handleSave}
+        onReset={handleReset}
+      />
+    </div>
+  );
+}
+
+/* ---------- 整页统一保存条 ---------- */
+
+function SaveBar({
+  dirtyCount,
+  saving,
+  disabled,
+  onSave,
+  onReset,
+}: {
+  dirtyCount: number;
+  saving: boolean;
+  disabled: boolean;
+  onSave: () => void | Promise<void>;
+  onReset: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        'sticky bottom-4 z-30 mt-2 flex items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md',
+        'border-[color-mix(in_srgb,var(--accent)_30%,transparent)]',
+        'bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)]',
+      )}
+    >
+      <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+        {disabled ? (
+          <span>所有设置已是最新</span>
+        ) : (
+          <span>
+            <strong className="text-[var(--accent)]">{dirtyCount}</strong> 项设置待保存
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onReset}
+          disabled={disabled || saving}
+          className="secondary-action"
+        >
+          <RotateCcw className="h-4 w-4" />
+          撤销改动
+        </button>
+        <GlowButton
+          type="button"
+          onClick={onSave}
+          loading={saving}
+          loadingText="保存中…"
+          disabled={disabled}
+          icon={<Save className="h-4 w-4" />}
+        >
+          保存全部
+        </GlowButton>
+      </div>
+    </div>
+  );
+}
+
+/* ========== 服务管理：账号密码认证 / 重启 / 编辑 server.conf ========== */
+
+function ServiceTab({ store }: { store: DraftStore }) {
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configContent, setConfigContent] = useState('');
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | undefined>();
+
+  async function handleRestart() {
+    setRestarting(true);
+    try {
+      const result = await api.postForm<{ message: string }>('/ovpn/server', { action: 'restartSrv' });
+      toast.success(result.message || 'OpenVPN 服务已重启');
+    } catch (error) {
+      toast.error(`重启失败：${messageOf(error)}`);
+    } finally {
+      setRestarting(false);
+      setRestartConfirm(false);
+    }
+  }
+
+  async function openServerConfig() {
+    setConfigOpen(true);
+    setConfigLoading(true);
+    setConfigError(undefined);
+    try {
+      const result = await api.postForm<{ content: string }>('/ovpn/server', { action: 'getConfig' });
+      setConfigContent(result.content || '');
+    } catch (error) {
+      toast.error(`加载配置失败：${messageOf(error)}`);
+      setConfigOpen(false);
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  function validateConfig(): string | undefined {
+    if (!configContent.trim()) return '服务端配置内容不能为空';
+    return undefined;
+  }
+
+  async function handleSaveConfig(e: React.FormEvent) {
+    e.preventDefault();
+    const err = validateConfig();
+    if (err) {
+      setConfigError(err);
+      return;
+    }
+    setConfigError(undefined);
+    setConfigSaving(true);
+    try {
+      const result = await api.postForm<{ message: string }>('/ovpn/server', {
+        action: 'updateConfig',
+        content: configContent,
+      });
+      toast.success(result.message || '服务端配置已保存');
+      setConfigOpen(false);
+    } catch (error) {
+      toast.error(`保存失败：${messageOf(error)}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>服务管理</CardTitle>
+          <CardDescription>账号密码认证开关、服务重启与 server.conf 维护</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-between rounded-md border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] px-4 py-3">
+            <div>
+              <p className="font-medium">账号密码认证</p>
+              <p className="text-sm text-muted-foreground">控制 auth-user-pass-verify 认证开关</p>
+            </div>
+            <Switch
+              checked={store.drafts['service.auth_user'] === 'true'}
+              onCheckedChange={(next) => store.setDraft('service.auth_user', String(next))}
+            />
+          </div>
+
+          <Separator />
+
+          <div className="space-y-3">
+            <p className="text-sm font-medium">服务控制</p>
+            <p className="text-xs text-muted-foreground">重启会向 OpenVPN 进程发送 SIGHUP 信号，重新加载 server.conf。</p>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => setRestartConfirm(true)} disabled={restarting}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                {restarting ? '重启中...' : '重启 OpenVPN'}
+              </Button>
+              <Button variant="outline" onClick={openServerConfig} disabled={configLoading}>
+                <FileCode2 className="h-4 w-4 mr-2" />
+                编辑 server.conf
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 重启确认 */}
+      {restartConfirm && (
+        <ConfirmDialog
+          state={{
+            title: '重启 OpenVPN',
+            message: '确认重启 OpenVPN 服务吗？所有在线连接会暂时中断并自动重连。',
+            danger: false,
+            onConfirm: handleRestart,
+          }}
+          onClose={() => !restarting && setRestartConfirm(false)}
+        />
+      )}
+
+      {/* 编辑 server.conf */}
+      {configOpen && (
+        <Dialog open onOpenChange={(open) => !open && !configSaving && setConfigOpen(false)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>编辑 server.conf</DialogTitle>
+              <DialogDescription>修改 OpenVPN 服务端配置文件</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleSaveConfig} className="space-y-2">
+              {configLoading ? (
+                <div className="min-h-[300px] flex items-center justify-center text-muted-foreground text-sm">
+                  正在加载配置...
+                </div>
+              ) : (
+                <>
+                  <Textarea
+                    className={cn(
+                      'min-h-[300px] font-mono text-sm',
+                      configError && 'border-destructive focus-visible:ring-destructive/40',
+                    )}
+                    value={configContent}
+                    aria-invalid={configError ? 'true' : undefined}
+                    onChange={(e) => {
+                      setConfigContent(e.target.value);
+                      if (configError) setConfigError(undefined);
+                    }}
+                  />
+                  {configError && <p className="text-xs font-medium text-destructive">{configError}</p>}
+                </>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setConfigOpen(false)}
+                  disabled={configSaving}
+                >
+                  取消
+                </Button>
+                <Button type="submit" disabled={configSaving || configLoading}>
+                  {configSaving ? '保存中...' : '保存配置'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}

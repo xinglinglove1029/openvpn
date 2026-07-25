@@ -1,0 +1,452 @@
+import { useEffect, useState } from 'react';
+import { Lock, User as UserIcon, ShieldCheck, Save } from 'lucide-react';
+import { toast } from 'sonner';
+import { Input } from '@/ui/input';
+import { Label } from '@/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
+import { Separator } from '@/ui/separator';
+import { api } from '@/api';
+import { messageOf } from '@/lib/format';
+import { isStrongPassword, isValidEmail, trimText } from '@/lib/validators';
+import { useAuth } from '@/store/auth';
+import { PasswordStrength } from '@/components/PasswordStrength';
+import { GlowButton } from '@/components/GlowButton';
+import { AvatarPicker } from '@/components/AvatarPicker';
+import { cn } from '@/lib/utils';
+import type { UserRecord } from '@/types';
+
+type FieldErrors = Record<string, string>;
+
+// 表单行：Label 在左、右对齐；输入控件在右
+function FormField({
+  id,
+  label,
+  required,
+  error,
+  children,
+}: {
+  id?: string;
+  label: React.ReactNode;
+  required?: boolean;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
+      <Label htmlFor={id} className="pt-2 text-right text-sm font-medium text-foreground/80">
+        {label}
+        {required && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
+      <div className="space-y-1.5 min-w-0">
+        {children}
+        {error && <p className="text-xs font-medium text-destructive">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+export default function ProfilePage() {
+  const { user, logout, updateUser } = useAuth();
+  const [profile, setProfile] = useState<UserRecord | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
+  // 基本资料表单字段
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [profileErrors, setProfileErrors] = useState<FieldErrors>({});
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // 修改密码表单字段
+  const [currentPass, setCurrentPass] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordAgain, setNewPasswordAgain] = useState('');
+
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [passwordErrors, setPasswordErrors] = useState<FieldErrors>({});
+
+  // 加载当前用户信息
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!user?.username) {
+        setLoadingProfile(false);
+        return;
+      }
+      try {
+        if (!user.id || user.id <= 0) {
+          const settings = await api.get<{ system?: { base?: { admin_name?: string; admin_email?: string } } }>('/settings');
+          if (!cancelled) {
+            setProfile({
+              username: user.username,
+              name: settings?.system?.base?.admin_name ?? user?.name ?? '',
+              email: settings?.system?.base?.admin_email ?? user?.email ?? '',
+            });
+            setEditName(settings?.system?.base?.admin_name ?? user?.name ?? '');
+            setEditEmail(settings?.system?.base?.admin_email ?? user?.email ?? '');
+            setProfileErrors({});
+          }
+          return;
+        }
+
+        const path = `/ovpn/user/${user.id}`;
+        const data = await api.get<UserRecord | UserRecord[]>(path);
+        if (!cancelled) {
+          const list = Array.isArray(data) ? data : [data];
+          const record = list.find((item) => item && item.username === user.username) ?? list[0] ?? null;
+          setProfile(record);
+          setEditName(record?.name ?? user?.name ?? '');
+          setEditEmail(record?.email ?? user?.email ?? '');
+          setProfileErrors({});
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(`加载用户信息失败：${messageOf(error)}`);
+        }
+      } finally {
+        if (!cancelled) setLoadingProfile(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.username]);
+
+  function validateProfile(): FieldErrors {
+    const next: FieldErrors = {};
+    const name = trimText(editName);
+    if (!name) {
+      next.name = '请输入姓名';
+    } else if (name.length > 64) {
+      next.name = '姓名长度不能超过 64 个字符';
+    }
+    const email = trimText(editEmail);
+    if (!email) {
+      next.email = '请输入邮箱';
+    } else if (!isValidEmail(email)) {
+      next.email = '邮箱格式不正确';
+    } else if (email.length > 128) {
+      next.email = '邮箱长度不能超过 128 个字符';
+    }
+    return next;
+  }
+
+  function clearProfileError(key: string) {
+    setProfileErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+
+  async function handleSaveProfile(e: React.FormEvent) {
+    e.preventDefault();
+    const nextErrors = validateProfile();
+    setProfileErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
+    const trimmedName = trimText(editName);
+    const trimmedEmail = trimText(editEmail);
+
+    setSavingProfile(true);
+    try {
+      // 系统内置账号（如 admin）无 user.id，保存到配置文件
+      if (!user?.id || user.id <= 0) {
+        const result = await api.postForm<{ message: string }>('/settings', {
+          'system.base.admin_name': trimmedName,
+          'system.base.admin_email': trimmedEmail,
+        });
+        updateUser({ name: trimmedName, email: trimmedEmail });
+        setProfile((prev) =>
+          prev
+            ? { ...prev, name: trimmedName, email: trimmedEmail }
+            : { username: user?.username ?? '', name: trimmedName, email: trimmedEmail },
+        );
+        toast.success(result.message || '基本资料已更新');
+        return;
+      }
+      const result = await api.patchForm<{ message: string }>('/ovpn/user', {
+        id: user.id,
+        name: trimmedName,
+        email: trimmedEmail,
+      });
+      setProfile((prev) =>
+        prev
+          ? { ...prev, name: trimmedName, email: trimmedEmail }
+          : prev,
+      );
+      // 同步更新顶部导航展示的用户信息
+      updateUser({ name: trimmedName, email: trimmedEmail });
+      toast.success(result.message || '基本资料已更新');
+    } catch (error) {
+      toast.error(`保存失败：${messageOf(error)}`);
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  function validatePassword(): FieldErrors {
+    const next: FieldErrors = {};
+    if (!currentPass.trim()) next.currentPass = '请输入当前密码';
+    if (!newPassword) {
+      next.newPassword = '请输入新密码';
+    } else if (!isStrongPassword(newPassword)) {
+      next.newPassword = '密码至少 12 位，且需包含大小写字母、数字、特殊字符';
+    }
+    if (!newPasswordAgain) {
+      next.newPasswordAgain = '请再次输入新密码';
+    } else if (newPassword && newPassword !== newPasswordAgain) {
+      next.newPasswordAgain = '两次密码不一致';
+    }
+    return next;
+  }
+
+  function clearError(key: string) {
+    setPasswordErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user?.username) return;
+    const nextErrors = validatePassword();
+    setPasswordErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
+    setSavingPassword(true);
+    try {
+      await api.postForm<{ message: string }>('/client/modifyPass', {
+        id: user.id ?? 0,
+        username: user.username,
+        currentPass,
+        password: newPassword,
+        isFirstLogin: false,
+      });
+      toast.success('密码已修改，请使用新密码重新登录');
+      setCurrentPass('');
+      setNewPassword('');
+      setNewPasswordAgain('');
+      setPasswordErrors({});
+      // 密码修改后清除本地登录态并跳转到登录页
+      setTimeout(() => {
+        void logout();
+      }, 600);
+    } catch (error) {
+      toast.error(`修改失败：${messageOf(error)}`);
+    } finally {
+      setSavingPassword(false);
+    }
+  }
+
+  const avatarSeed = profile?.email || user?.email || user?.username || 'U';
+  const displayName = profile?.name || user?.name || user?.username || '用户';
+  const displayUsername = profile?.username || user?.username || '-';
+  const displayEmail = profile?.email || user?.email || '-';
+  const displayUserId = user?.id && user.id > 0 ? String(user.id) : '系统内置';
+  // admin 用户的 id 在 user 表中为 0，且 username 为 'admin'
+  const isAdmin = !user?.id || user.id <= 0;
+
+  function handleAvatarChange(next: string | undefined) {
+    updateUser({ avatar: next });
+  }
+
+  return (
+    <div className="space-y-6 max-w-4xl">
+      <div>
+        <h1 className="text-3xl font-bold">个人设置</h1>
+        <p className="text-muted-foreground mt-1">维护基本资料并修改登录密码</p>
+      </div>
+
+      {/* 基本资料：可编辑，提交前进行校验 */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-4">
+            <AvatarPicker
+              value={user?.avatar}
+              fallbackSeed={avatarSeed}
+              displayName={displayUsername}
+              onChange={handleAvatarChange}
+              size={64}
+            />
+            <div className="min-w-0">
+              <CardTitle className="flex items-center gap-2">
+                <UserIcon className="w-4 h-4" />
+                基本资料
+              </CardTitle>
+              <CardDescription>可在此更新您的姓名、邮箱等信息；点击头像可自定义</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loadingProfile ? (
+            <div className="py-8 text-center text-muted-foreground text-sm">正在加载...</div>
+          ) : (
+            <form onSubmit={handleSaveProfile} className="space-y-4">
+              <FormField id="profile-displayUsername" label="账号">
+                <Input
+                  id="profile-displayUsername"
+                  value={displayUsername}
+                  readOnly
+                  disabled
+                  className="bg-muted/40 cursor-not-allowed"
+                />
+              </FormField>
+
+              <FormField id="profile-editName" label="姓名" required error={profileErrors.name}>
+                <Input
+                  id="profile-editName"
+                  value={editName}
+                  onChange={(e) => {
+                    setEditName(e.target.value);
+                    clearProfileError('name');
+                  }}
+                  placeholder="请输入姓名"
+                  maxLength={64}
+                  aria-invalid={profileErrors.name ? 'true' : undefined}
+                  className={cn(
+                    profileErrors.name && 'border-destructive focus-visible:ring-destructive/40',
+                  )}
+                />
+              </FormField>
+
+              <FormField id="profile-editEmail" label="邮箱" required error={profileErrors.email}>
+                <Input
+                  id="profile-editEmail"
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => {
+                    setEditEmail(e.target.value);
+                    clearProfileError('email');
+                  }}
+                  placeholder="请输入邮箱"
+                  maxLength={128}
+                  aria-invalid={profileErrors.email ? 'true' : undefined}
+                  className={cn(
+                    profileErrors.email && 'border-destructive focus-visible:ring-destructive/40',
+                  )}
+                />
+              </FormField>
+
+              <FormField id="profile-displayUserId" label="用户 ID">
+                <Input
+                  id="profile-displayUserId"
+                  value={displayUserId}
+                  readOnly
+                  disabled
+                  className="bg-muted/40 cursor-not-allowed"
+                />
+              </FormField>
+
+              <div className="flex justify-end pt-2">
+                <GlowButton
+                  type="submit"
+                  loading={savingProfile}
+                  loadingText="保存中…"
+                  icon={<Save className="w-4 h-4" />}
+                >
+                  保存资料
+                </GlowButton>
+              </div>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 修改密码 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lock className="w-4 h-4" />
+            修改密码
+          </CardTitle>
+          <CardDescription>为了账号安全，建议每 90 天更换一次密码</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleChangePassword} className="space-y-4">
+            <FormField id="profile-currentPass" label="当前密码" required error={passwordErrors.currentPass}>
+              <Input
+                id="profile-currentPass"
+                type="password"
+                value={currentPass}
+                onChange={(e) => {
+                  setCurrentPass(e.target.value);
+                  clearError('currentPass');
+                }}
+                placeholder="请输入当前密码"
+                autoComplete="current-password"
+                aria-invalid={passwordErrors.currentPass ? 'true' : undefined}
+                className={cn(passwordErrors.currentPass && 'border-destructive focus-visible:ring-destructive/40')}
+              />
+            </FormField>
+
+            <Separator />
+
+            <FormField id="profile-newPassword" label="新密码" required error={passwordErrors.newPassword}>
+              <Input
+                id="profile-newPassword"
+                type="password"
+                value={newPassword}
+                onChange={(e) => {
+                  setNewPassword(e.target.value);
+                  clearError('newPassword');
+                  if (newPasswordAgain && newPasswordAgain === e.target.value) {
+                    clearError('newPasswordAgain');
+                  }
+                }}
+                placeholder="至少 12 位，包含大小写字母、数字、特殊字符"
+                autoComplete="new-password"
+                aria-invalid={passwordErrors.newPassword ? 'true' : undefined}
+                className={cn(passwordErrors.newPassword && 'border-destructive focus-visible:ring-destructive/40')}
+              />
+              <PasswordStrength value={newPassword} />
+            </FormField>
+
+            <FormField
+              id="profile-newPasswordAgain"
+              label="确认新密码"
+              required
+              error={passwordErrors.newPasswordAgain}
+            >
+              <Input
+                id="profile-newPasswordAgain"
+                type="password"
+                value={newPasswordAgain}
+                onChange={(e) => {
+                  setNewPasswordAgain(e.target.value);
+                  clearError('newPasswordAgain');
+                }}
+                placeholder="请再次输入新密码"
+                autoComplete="new-password"
+                aria-invalid={passwordErrors.newPasswordAgain ? 'true' : undefined}
+                className={cn(
+                  passwordErrors.newPasswordAgain && 'border-destructive focus-visible:ring-destructive/40',
+                )}
+              />
+            </FormField>
+
+            <div className="flex items-center gap-2 pl-[156px] text-xs text-muted-foreground">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              密码要求：12 位以上 · 大小写字母 · 数字 · 特殊字符
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <GlowButton
+                type="submit"
+                loading={savingPassword}
+                loadingText="提交中…"
+                icon={<Lock className="w-4 h-4" />}
+              >
+                更新密码
+              </GlowButton>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

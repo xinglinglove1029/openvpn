@@ -1,22 +1,14 @@
 package openvpnweb
 
 import (
-	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gavintan/gopkg/tools"
-	"github.com/spf13/viper"
 )
 
+// NotifyEvent 用户上下线事件
 type NotifyEvent struct {
 	Event         string
 	Vip           string
@@ -31,6 +23,7 @@ type NotifyEvent struct {
 	TimeDuration  int64
 }
 
+// NotifyLog 通知发送记录
 type NotifyLog struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
 	Event     string    `json:"event"`
@@ -39,49 +32,6 @@ type NotifyLog struct {
 	Success   bool      `json:"success"`
 	Message   string    `json:"message"`
 	CreatedAt time.Time `json:"createdAt"`
-}
-
-func NotifyClientEvent(event NotifyEvent) error {
-	if !viper.GetBool("system.notify.enabled") {
-		return nil
-	}
-
-	webhook := strings.TrimSpace(viper.GetString("system.notify.webhook"))
-	provider := notifyProvider()
-	if webhook == "" {
-		err := fmt.Errorf("notify webhook is empty")
-		recordNotifyLog(event, provider, false, err.Error())
-		return err
-	}
-
-	title := notifyTitle(event.Event)
-	content := buildNotifyMarkdown(title, event)
-	var err error
-
-	switch provider {
-	case "wecom", "workwechat", "wechat", "qywechat", "企业微信":
-		err = sendWecomNotify(webhook, content)
-	case "dingtalk", "dingding", "閽夐拤":
-		err = sendDingTalkNotify(webhook, title, content)
-	default:
-		err = fmt.Errorf("unsupported notify provider: %s", provider)
-	}
-
-	if err != nil {
-		recordNotifyLog(event, provider, false, err.Error())
-		return err
-	}
-
-	recordNotifyLog(event, provider, true, "notify sent")
-	return nil
-}
-
-func notifyProvider() string {
-	provider := strings.ToLower(strings.TrimSpace(viper.GetString("system.notify.provider")))
-	if provider == "" {
-		return "dingtalk"
-	}
-	return provider
 }
 
 func notifyTitle(event string) string {
@@ -141,83 +91,6 @@ func joinNonEmpty(values ...string) string {
 	return strings.Join(items, " / ")
 }
 
-func sendDingTalkNotify(webhook, title, content string) error {
-	payload := map[string]any{
-		"msgtype": "markdown",
-		"markdown": map[string]string{
-			"title": title,
-			"text":  content,
-		},
-		"at": map[string]any{
-			"isAtAll": viper.GetBool("system.notify.mention_all"),
-		},
-	}
-
-	return postRobotMessage(dingTalkSignedWebhook(webhook), payload)
-}
-
-func dingTalkSignedWebhook(webhook string) string {
-	secret := strings.TrimSpace(viper.GetString("system.notify.secret"))
-	if secret == "" {
-		return webhook
-	}
-
-	timestamp := time.Now().UnixMilli()
-	message := fmt.Sprintf("%d\n%s", timestamp, secret)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(message))
-	sign := url.QueryEscape(base64.StdEncoding.EncodeToString(mac.Sum(nil)))
-	separator := "?"
-	if strings.Contains(webhook, "?") {
-		separator = "&"
-	}
-
-	return fmt.Sprintf("%s%stimestamp=%d&sign=%s", webhook, separator, timestamp, sign)
-}
-
-func sendWecomNotify(webhook, content string) error {
-	if viper.GetBool("system.notify.mention_all") {
-		content += "\n<@all>"
-	}
-
-	payload := map[string]any{
-		"msgtype": "markdown",
-		"markdown": map[string]string{
-			"content": content,
-		},
-	}
-
-	return postRobotMessage(webhook, payload)
-}
-
-func postRobotMessage(webhook string, payload map[string]any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(webhook, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("robot webhook returned status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.ErrCode != 0 {
-		return fmt.Errorf("robot webhook error %d: %s", result.ErrCode, result.ErrMsg)
-	}
-
-	return nil
-}
-
 func LogNotifyError(event NotifyEvent, err error) {
 	if err != nil {
 		logger.Error(context.Background(), "send %s notify failed: %s", event.Event, err)
@@ -228,14 +101,7 @@ func recordNotifyLog(event NotifyEvent, provider string, success bool, message s
 	if db == nil {
 		return
 	}
-
-	username := strings.TrimSpace(event.Username)
-	if username == "" || username == "UNDEF" {
-		username = strings.TrimSpace(event.CommonName)
-	}
-	if username == "" {
-		username = "unknown"
-	}
+	username := displayUsername(event)
 
 	logItem := NotifyLog{
 		Event:    event.Event,
@@ -246,7 +112,20 @@ func recordNotifyLog(event NotifyEvent, provider string, success bool, message s
 	}
 	if err := db.WithContext(context.Background()).Create(&logItem).Error; err != nil {
 		logger.Error(context.Background(), "record notify log failed: %s", err)
+		return
 	}
+
+	// 站内信实时广播：通过全局事件总线解耦推送
+	// 任意监听 notify:new 主题的模块都会收到；当前由 WsHub 转发到 WebSocket 客户端
+	Bus().Publish("notify:new", map[string]any{
+		"id":        logItem.ID,
+		"event":     logItem.Event,
+		"provider":  logItem.Provider,
+		"username":  logItem.Username,
+		"success":   logItem.Success,
+		"message":   logItem.Message,
+		"createdAt": logItem.CreatedAt,
+	})
 }
 
 func queryNotifyLogs(limit int) []NotifyLog {

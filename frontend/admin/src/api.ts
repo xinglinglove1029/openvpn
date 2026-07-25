@@ -1,4 +1,4 @@
-type RequestOptions = RequestInit & { form?: Record<string, unknown> };
+type RequestOptions = RequestInit & { form?: Record<string, unknown>; json?: unknown };
 
 function toFormBody(data: Record<string, unknown>) {
   const body = new URLSearchParams();
@@ -22,7 +22,14 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
     ...options,
   };
 
-  if (options.form) {
+  if (options.json !== undefined) {
+    init.method = init.method || 'POST';
+    init.body = JSON.stringify(options.json);
+    init.headers = {
+      ...init.headers,
+      'Content-Type': 'application/json; charset=UTF-8',
+    };
+  } else if (options.form) {
     init.method = init.method || 'POST';
     init.body = toFormBody(options.form);
     init.headers = {
@@ -54,6 +61,8 @@ export const api = {
   postForm: <T>(url: string, form: Record<string, unknown>) => request<T>(url, { method: 'POST', form }),
   patchForm: <T>(url: string, form: Record<string, unknown>) => request<T>(url, { method: 'PATCH', form }),
   putForm: <T>(url: string, form: Record<string, unknown>) => request<T>(url, { method: 'PUT', form }),
+  postJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'POST', json: body }),
+  putJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'PUT', json: body }),
   delete: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
   multipart: <T>(url: string, body: FormData) => request<T>(url, { method: 'POST', body }),
 };

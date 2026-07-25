@@ -5,9 +5,17 @@ data/
 *.tsbuildinfo
 /build/openvpn-web
 /build/openvpn-web.exe
+/openvpn-web.exe
 
 /dist/
 /bin/
 ovpn.db
 config.json
+
+# 临时脚本与工具链文件
+/go.cmd
+/goenv.ps1
+/gover.txt
+/run.cmd
+/check_app.cjs
 
