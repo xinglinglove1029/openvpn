@@ -48,7 +48,7 @@ func dispatchNotification(event NotifyEvent, title, content string) {
 	}
 	enabled := (&NotificationChannel{}).EnabledChannels()
 	if len(enabled) == 0 {
-		recordNotifyLog(event, "system", "系统", true, "系统通知（当前未配置任何启用的通知渠道，仅记录在站内信）")
+		recordNotifyLog(event, "system", "系统", true, content)
 		return
 	}
 
@@ -61,7 +61,13 @@ func dispatchNotification(event NotifyEvent, title, content string) {
 
 	results := notify.Global().Dispatch(context.Background(), toNotifyChannels(enabled), msg)
 	for _, r := range results {
-		recordNotifyLog(event, r.ChannelType, r.ChannelName, r.Success, r.Error)
+		logMsg := ""
+		if r.Success {
+			logMsg = content
+		} else {
+			logMsg = r.Error
+		}
+		recordNotifyLog(event, r.ChannelType, r.ChannelName, r.Success, logMsg)
 	}
 }
 
