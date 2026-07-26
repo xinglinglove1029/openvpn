@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bell, CheckCircle2, XCircle, RefreshCw, Filter } from 'lucide-react';
+import { Bell, CheckCircle2, XCircle, RefreshCw, Filter, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Badge } from '@/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -21,7 +28,7 @@ import { useNotificationHub } from '@/hooks/useNotificationHub';
 import { realtimeHub } from '@/lib/notificationHub';
 import type { NotifyLogRecord } from '@/types';
 
-type EventFilter = 'all' | 'connect' | 'disconnect';
+type EventFilter = 'all' | 'connect' | 'disconnect' | 'test' | 'user_register' | 'password_reset' | 'mfa_reset' | 'expire_reminder';
 type StatusFilter = 'all' | 'success' | 'failed';
 
 function formatTime(value?: string) {
@@ -35,13 +42,37 @@ function formatTime(value?: string) {
 function eventLabel(event: string) {
   if (event === 'connect') return '上线';
   if (event === 'disconnect') return '下线';
+  if (event === 'test') return '测试';
+  if (event === 'user_register') return '用户注册';
+  if (event === 'user_email') return '用户邮件';
+  if (event === 'password_reset') return '密码重置';
+  if (event === 'mfa_reset') return 'MFA重置';
+  if (event === 'expire_reminder') return '到期提醒';
   return event || '-';
+}
+
+// 渠道类型中文标签
+function providerLabel(provider: string) {
+  const map: Record<string, string> = {
+    email: '邮件',
+    dingtalk: '钉钉',
+    feishu: '飞书',
+    wecom: '企业微信',
+    webhook: 'Webhook',
+    discord: 'Discord',
+    slack: 'Slack',
+    telegram: 'Telegram',
+    mattermost: 'Mattermost',
+    system: '系统',
+  };
+  return map[provider] || provider || '-';
 }
 
 export default function NotificationsPage() {
   const [eventFilter, setEventFilter] = useState<EventFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [reloadKey, setReloadKey] = useState(0);
+  const [detailItem, setDetailItem] = useState<NotifyLogRecord | null>(null);
   const { markRead, refresh: refreshUnread } = useNotificationHub();
 
   const state = useAsync(async () => {
@@ -108,12 +139,24 @@ export default function NotificationsPage() {
     },
     {
       key: 'provider',
-      header: '通道',
+      header: '渠道类型',
       sortable: true,
       sortAccessor: (item) => item.provider ?? '',
       render: (item) =>
         item.provider ? (
-          <StatusBadge status="info">{item.provider}</StatusBadge>
+          <StatusBadge status="info">{providerLabel(item.provider)}</StatusBadge>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        ),
+    },
+    {
+      key: 'channelName',
+      header: '渠道名称',
+      sortable: true,
+      sortAccessor: (item) => item.channelName ?? '',
+      render: (item) =>
+        item.channelName ? (
+          <span className="text-foreground">{item.channelName}</span>
         ) : (
           <span className="text-muted-foreground">-</span>
         ),
@@ -142,9 +185,20 @@ export default function NotificationsPage() {
       sortable: true,
       sortAccessor: (item) => item.message ?? '',
       render: (item) => (
-        <span className={item.success ? 'text-muted-foreground' : 'text-red-500/90'}>
-          {item.message || '-'}
-        </span>
+        <div
+          className="flex items-center gap-2 cursor-pointer group"
+          onClick={() => item.message && setDetailItem(item)}
+          title={item.message || ''}
+        >
+          <span
+            className={`truncate ${item.success ? 'text-muted-foreground' : 'text-red-500/90'}`}
+          >
+            {item.message || '-'}
+          </span>
+          {item.message && (
+            <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+          )}
+        </div>
       ),
       className: 'max-w-[420px]',
     },
@@ -182,9 +236,9 @@ export default function NotificationsPage() {
           <CardDescription>按事件类型和发送结果过滤最近 200 条通知</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="notify-event-filter">事件类型</label>
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-right shrink-0" htmlFor="notify-event-filter" style={{ width: 70 }}>事件类型</label>
               <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
                 <SelectTrigger id="notify-event-filter" className="w-[140px]">
                   <SelectValue />
@@ -193,11 +247,16 @@ export default function NotificationsPage() {
                   <SelectItem value="all">全部事件</SelectItem>
                   <SelectItem value="connect">上线</SelectItem>
                   <SelectItem value="disconnect">下线</SelectItem>
+                  <SelectItem value="test">测试</SelectItem>
+                  <SelectItem value="user_register">用户注册</SelectItem>
+                  <SelectItem value="password_reset">密码重置</SelectItem>
+                  <SelectItem value="mfa_reset">MFA重置</SelectItem>
+                  <SelectItem value="expire_reminder">到期提醒</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="notify-status-filter">发送结果</label>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-right shrink-0" htmlFor="notify-status-filter" style={{ width: 70 }}>发送结果</label>
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
                 <SelectTrigger id="notify-status-filter" className="w-[140px]">
                   <SelectValue />
@@ -209,7 +268,7 @@ export default function NotificationsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="text-sm text-muted-foreground pb-2">
+            <div className="text-sm text-muted-foreground ml-auto">
               共 {filtered.length} 条
             </div>
           </div>
@@ -236,6 +295,69 @@ export default function NotificationsPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={!!detailItem} onOpenChange={(open) => !open && setDetailItem(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>通知详情</DialogTitle>
+            <DialogDescription>
+              {detailItem && formatTime(detailItem.createdAt)}
+            </DialogDescription>
+          </DialogHeader>
+          {detailItem && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="text-muted-foreground mb-1">事件类型</div>
+                  <Badge variant="outline" className="bg-blue-500/15 text-blue-600 border-blue-500/25">
+                    {eventLabel(detailItem.event)}
+                  </Badge>
+                </div>
+                <div>
+                  <div className="text-muted-foreground mb-1">用户</div>
+                  <div className="font-medium">{detailItem.username || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground mb-1">渠道类型</div>
+                  <div>
+                    {detailItem.provider ? (
+                      <StatusBadge status="info">{providerLabel(detailItem.provider)}</StatusBadge>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground mb-1">渠道名称</div>
+                  <div className="font-medium">{detailItem.channelName || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground mb-1">发送结果</div>
+                  <div>
+                    {detailItem.success ? (
+                      <span className="inline-flex items-center gap-1 text-emerald-500">
+                        <CheckCircle2 className="w-4 h-4" />
+                        成功
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-red-500">
+                        <XCircle className="w-4 h-4" />
+                        失败
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-2 text-sm">消息内容</div>
+                <div className="bg-muted/50 rounded-md p-4 whitespace-pre-wrap break-words text-sm">
+                  {detailItem.message || '-'}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

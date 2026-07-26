@@ -412,6 +412,207 @@ body {
   --danger: #fb7185;
 }
 
+/* ========================================
+   琥珀玻璃主题（amber-glass）
+   深空黑底 + 琥珀色高亮 + 玻璃态
+   ======================================== */
+:root[data-theme="amber-glass"] {
+  --page-bg: #050407;
+  --background: 28 14% 4%;
+  --foreground: 38 36% 92%;
+  --card: 28 14% 4%;
+  --card-foreground: 38 36% 92%;
+  --popover: 28 16% 6%;
+  --popover-foreground: 38 36% 92%;
+  --primary: 38 92% 50%;
+  --primary-foreground: 28 14% 4%;
+  --secondary: 28 18% 12%;
+  --secondary-foreground: 38 36% 92%;
+  --muted: 28 16% 14%;
+  --muted-foreground: 38 14% 70%;
+  --accent: 45 96% 56%;
+  --accent-foreground: 28 14% 4%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 38 36% 92%;
+  --border: 28 24% 14%;
+  --input: 28 22% 16%;
+  --ring: 38 92% 50%;
+  --radius: 0.5rem;
+  --page-bg-layer:
+    radial-gradient(circle at 8% 10%, rgba(245, 158, 11, 0.18), transparent 32rem),
+    radial-gradient(circle at 90% 0%, rgba(217, 119, 6, 0.14), transparent 28rem),
+    radial-gradient(circle at 60% 90%, rgba(251, 191, 36, 0.12), transparent 26rem);
+  --text: #f5e9d4;
+  --text-strong: #fef3c7;
+  --text-muted: rgba(245, 233, 212, 0.62);
+  --text-soft: rgba(245, 233, 212, 0.7);
+  --panel-border: rgba(245, 158, 11, 0.18);
+  --panel-bg:
+    linear-gradient(145deg, rgba(245, 158, 11, 0.05), rgba(15, 12, 8, 0.6)),
+    rgba(15, 12, 8, 0.7);
+  --panel-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(245, 158, 11, 0.12),
+    inset 0 -1px 0 rgba(245, 158, 11, 0.06);
+  --surface: rgba(245, 158, 11, 0.06);
+  --surface-strong: rgba(245, 158, 11, 0.1);
+  --surface-soft: rgba(245, 158, 11, 0.04);
+  --dropdown-bg: rgba(15, 12, 8, 0.92);
+  --accent-2: #d97706;
+  --accent-3: #fbbf24;
+  --accent-text: #f59e0b;
+  --accent-contrast: #08070a;
+  --hero-glow:
+    linear-gradient(115deg, rgba(245, 158, 11, 0.18), transparent 48%),
+    radial-gradient(circle at 88% 18%, rgba(251, 191, 36, 0.18), transparent 16rem);
+  --active-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(217, 119, 6, 0.12));
+  --primary-bg: linear-gradient(135deg, #f59e0b, #d97706);
+  --highlight-bg:
+    radial-gradient(circle at 80% 0%, rgba(251, 191, 36, 0.14), transparent 18rem),
+    linear-gradient(145deg, rgba(245, 158, 11, 0.06), rgba(15, 12, 8, 0.5));
+  --aurora-a: #f59e0b;
+  --aurora-b: #fbbf24;
+  --scroll-track: rgba(245, 158, 11, 0.08);
+  --scroll-thumb: linear-gradient(135deg, rgba(245, 158, 11, 0.8), rgba(217, 119, 6, 0.7));
+  --scroll-thumb-solid: #f59e0b;
+  --scroll-thumb-hover: linear-gradient(135deg, #fbbf24, #d97706);
+  --scroll-glow: rgba(245, 158, 11, 0.3);
+  --login-shell-bg: #050407;
+  --login-form-bg:
+    radial-gradient(circle at 18% 12%, rgba(245, 158, 11, 0.16), transparent 22rem),
+    radial-gradient(circle at 84% 90%, rgba(217, 119, 6, 0.14), transparent 24rem),
+    #050407;
+  --login-brand-bg: linear-gradient(135deg, #f59e0b 0%, #fbbf24 48%, #d97706 100%);
+  --login-brand-overlay: linear-gradient(115deg, rgba(255, 255, 255, 0.22), rgba(245, 158, 11, 0.2) 50%, rgba(217, 119, 6, 0.18));
+  --login-card-bg:
+    radial-gradient(circle at 14% 10%, rgba(245, 158, 11, 0.1), transparent 15rem),
+    linear-gradient(180deg, rgba(15, 12, 8, 0.85), rgba(8, 7, 10, 0.85));
+  --login-card-border: rgba(245, 158, 11, 0.22);
+  --login-card-shadow:
+    0 26px 70px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(245, 158, 11, 0.16);
+  --login-input-bg: rgba(28, 20, 10, 0.6);
+  --login-input-focus-bg: rgba(28, 20, 10, 0.85);
+  --login-input-border: rgba(245, 158, 11, 0.22);
+  --login-heading-text: #fef3c7;
+  --login-label-text: rgba(245, 233, 212, 0.88);
+  --login-muted-text: rgba(245, 233, 212, 0.62);
+  --login-placeholder-text: rgba(245, 233, 212, 0.34);
+  --login-icon-bg: linear-gradient(135deg, #f59e0b 0%, #fbbf24 58%, #d97706 100%);
+  --login-button-bg: linear-gradient(90deg, #f59e0b 0%, #fbbf24 55%, #d97706 100%);
+  --login-focus-ring: rgba(245, 158, 11, 0.22);
+  --login-danger: #f87171;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+
+  /* 玻璃态特效 */
+  --glass-bg: rgba(15, 12, 8, 0.55);
+  --glass-border: rgba(245, 158, 11, 0.18);
+  --glass-blur: 18px;
+}
+
+/* ========================================
+   深蓝玻璃主题（deep-blue）
+   深蓝渐变 + 全玻璃态
+   ======================================== */
+:root[data-theme="deep-blue"] {
+  --page-bg: #061128;
+  --background: 220 50% 8%;
+  --foreground: 218 60% 92%;
+  --card: 220 50% 8%;
+  --card-foreground: 218 60% 92%;
+  --popover: 220 52% 10%;
+  --popover-foreground: 218 60% 92%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 220 50% 8%;
+  --secondary: 220 40% 14%;
+  --secondary-foreground: 218 60% 92%;
+  --muted: 220 38% 16%;
+  --muted-foreground: 218 30% 72%;
+  --accent: 213 94% 68%;
+  --accent-foreground: 220 50% 8%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 218 60% 92%;
+  --border: 220 40% 18%;
+  --input: 220 38% 20%;
+  --ring: 217 91% 60%;
+  --radius: 0.5rem;
+  --page-bg-layer:
+    radial-gradient(circle at 10% 8%, rgba(59, 130, 246, 0.22), transparent 32rem),
+    radial-gradient(circle at 88% 0%, rgba(37, 99, 235, 0.18), transparent 30rem),
+    radial-gradient(circle at 60% 92%, rgba(96, 165, 250, 0.14), transparent 26rem),
+    linear-gradient(180deg, #061128 0%, #0a1830 100%);
+  --text: #dbe7ff;
+  --text-strong: #eff6ff;
+  --text-muted: rgba(219, 231, 255, 0.62);
+  --text-soft: rgba(219, 231, 255, 0.7);
+  --panel-border: rgba(96, 165, 250, 0.2);
+  --panel-bg:
+    linear-gradient(145deg, rgba(59, 130, 246, 0.08), rgba(10, 24, 47, 0.6)),
+    rgba(15, 33, 71, 0.55);
+  --panel-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(96, 165, 250, 0.16),
+    inset 0 -1px 0 rgba(96, 165, 250, 0.08);
+  --surface: rgba(59, 130, 246, 0.08);
+  --surface-strong: rgba(59, 130, 246, 0.14);
+  --surface-soft: rgba(96, 165, 250, 0.05);
+  --dropdown-bg: rgba(10, 24, 47, 0.92);
+  --accent-2: #2563eb;
+  --accent-3: #60a5fa;
+  --accent-text: #60a5fa;
+  --accent-contrast: #061128;
+  --hero-glow:
+    linear-gradient(115deg, rgba(59, 130, 246, 0.22), transparent 48%),
+    radial-gradient(circle at 88% 18%, rgba(96, 165, 250, 0.22), transparent 16rem);
+  --active-bg: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(37, 99, 235, 0.14));
+  --primary-bg: linear-gradient(135deg, #3b82f6, #2563eb);
+  --highlight-bg:
+    radial-gradient(circle at 80% 0%, rgba(96, 165, 250, 0.18), transparent 18rem),
+    linear-gradient(145deg, rgba(59, 130, 246, 0.08), rgba(10, 24, 47, 0.5));
+  --aurora-a: #3b82f6;
+  --aurora-b: #60a5fa;
+  --scroll-track: rgba(96, 165, 250, 0.1);
+  --scroll-thumb: linear-gradient(135deg, rgba(59, 130, 246, 0.85), rgba(37, 99, 235, 0.75));
+  --scroll-thumb-solid: #3b82f6;
+  --scroll-thumb-hover: linear-gradient(135deg, #60a5fa, #2563eb);
+  --scroll-glow: rgba(59, 130, 246, 0.32);
+  --login-shell-bg: #061128;
+  --login-form-bg:
+    radial-gradient(circle at 18% 12%, rgba(59, 130, 246, 0.22), transparent 22rem),
+    radial-gradient(circle at 84% 90%, rgba(96, 165, 250, 0.18), transparent 24rem),
+    linear-gradient(180deg, #061128, #0a1830);
+  --login-brand-bg: linear-gradient(135deg, #3b82f6 0%, #60a5fa 48%, #2563eb 100%);
+  --login-brand-overlay: linear-gradient(115deg, rgba(255, 255, 255, 0.22), rgba(59, 130, 246, 0.22) 50%, rgba(96, 165, 250, 0.2));
+  --login-card-bg:
+    radial-gradient(circle at 14% 10%, rgba(59, 130, 246, 0.12), transparent 15rem),
+    linear-gradient(180deg, rgba(15, 33, 71, 0.7), rgba(10, 24, 47, 0.7));
+  --login-card-border: rgba(96, 165, 250, 0.24);
+  --login-card-shadow:
+    0 26px 70px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(96, 165, 250, 0.2);
+  --login-input-bg: rgba(15, 33, 71, 0.55);
+  --login-input-focus-bg: rgba(15, 33, 71, 0.8);
+  --login-input-border: rgba(96, 165, 250, 0.24);
+  --login-heading-text: #eff6ff;
+  --login-label-text: rgba(219, 231, 255, 0.88);
+  --login-muted-text: rgba(219, 231, 255, 0.62);
+  --login-placeholder-text: rgba(219, 231, 255, 0.34);
+  --login-icon-bg: linear-gradient(135deg, #3b82f6 0%, #60a5fa 58%, #2563eb 100%);
+  --login-button-bg: linear-gradient(90deg, #3b82f6 0%, #60a5fa 55%, #2563eb 100%);
+  --login-focus-ring: rgba(59, 130, 246, 0.24);
+  --login-danger: #f87171;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+
+  /* 玻璃态特效 */
+  --glass-bg: rgba(15, 33, 71, 0.5);
+  --glass-border: rgba(96, 165, 250, 0.2);
+  --glass-blur: 18px;
+}
+
 /* ---- Global resets & form elements ---- */
 
 * {

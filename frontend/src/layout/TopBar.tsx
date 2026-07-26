@@ -1,4 +1,4 @@
-import { Moon, Sun, User } from 'lucide-react';
+import { Palette, User } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -10,14 +10,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
-import { useTheme } from '../store/theme';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../ui/select';
+import { useTheme, themeLabels, type ThemeKey } from '../store/theme';
 import { useAuth } from '../store/auth';
 import { defaultAvatarUrl, parseAvatarValue } from '../components/AvatarPicker';
 import { NotificationBell } from '../components/NotificationBell';
 import { ManagementStatus } from '../components/ManagementStatus';
 
 export function TopBar() {
-  const { theme, toggleTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { user, logout } = useAuth();
 
   // 自定义头像优先；其次 dicebear 兜底
@@ -38,19 +45,22 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-4 min-w-[120px] justify-end">
-        {/* 主题切换 */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          title={theme === 'daylight' ? '切换到深色模式' : '切换到浅色模式'}
-        >
-          {theme === 'daylight' ? (
-            <Moon className="w-5 h-5" />
-          ) : (
-            <Sun className="w-5 h-5" />
-          )}
-        </Button>
+        {/* 主题切换：下拉选择，支持 6 个主题 */}
+        <div className="flex items-center gap-2">
+          <Palette className="w-4 h-4 text-muted-foreground" />
+          <Select value={theme} onValueChange={(v) => setTheme(v as ThemeKey)}>
+            <SelectTrigger className="w-[130px] h-9" aria-label="切换主题">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(themeLabels) as ThemeKey[]).map((key) => (
+                <SelectItem key={key} value={key}>
+                  {themeLabels[key]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {/* 通知按钮（真实未读数 + WebSocket 实时推送） */}
         <NotificationBell />

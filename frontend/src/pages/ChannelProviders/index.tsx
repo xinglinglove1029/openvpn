@@ -525,7 +525,7 @@ export default function ChannelProvidersPage() {
       key: 'actions',
       header: '操作',
       render: (item) => (
-        <div className="flex items-center justify-center gap-1">
+        <div className="flex items-center justify-start gap-1">
           <Button
             size="icon"
             variant="ghost"

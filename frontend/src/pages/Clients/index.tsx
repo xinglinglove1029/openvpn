@@ -45,7 +45,7 @@ export default function ClientsPage() {
     () => api.get<unknown>('/ovpn/client').then((v) => normalizeList<ClientRecord>(v, ['clients', 'data'])),
     [reloadKey],
   );
-  const settingsState = useAsync(() => api.get<SettingsResponse>('/settings'), [reloadKey]);
+  const settingsState = useAsync(() => api.get<SettingsResponse>('/ovpn/settings'), [reloadKey]);
 
   const clients = clientsState.data || [];
   const settings = settingsState.data;

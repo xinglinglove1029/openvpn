@@ -74,7 +74,7 @@ export default function ProfilePage() {
       }
       try {
         if (!user.id || user.id <= 0) {
-          const settings = await api.get<{ system?: { base?: { admin_name?: string; admin_email?: string } } }>('/settings');
+          const settings = await api.get<{ system?: { base?: { admin_name?: string; admin_email?: string } } }>('/ovpn/settings');
           if (!cancelled) {
             setProfile({
               username: user.username,
@@ -153,7 +153,7 @@ export default function ProfilePage() {
     try {
       // 系统内置账号（如 admin）无 user.id，保存到配置文件
       if (!user?.id || user.id <= 0) {
-        const result = await api.postForm<{ message: string }>('/settings', {
+        const result = await api.postForm<{ message: string }>('/ovpn/settings', {
           'system.base.admin_name': trimmedName,
           'system.base.admin_email': trimmedEmail,
         });

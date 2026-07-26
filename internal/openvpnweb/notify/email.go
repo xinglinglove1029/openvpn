@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/wneessen/go-mail"
@@ -87,10 +88,29 @@ func (EmailNotifier) Send(ctx context.Context, msg Message, raw json.RawMessage)
 		subject = c.SubjectPrefix + "OpenVPN 通知"
 	}
 	m.Subject(subject)
-	// 标题当 H1，正文当 HTML 段落
-	htmlBody := "<h3>" + escapeHTML(msg.Title) + "</h3>" +
-		"<pre style=\"font-family:inherit;white-space:pre-wrap;\">" + escapeHTML(msg.Content) + "</pre>"
+
+	// 支持 raw_html：当 Extra["raw_html"]=="true" 时，Content 已是完整 HTML，直接使用
+	// 否则按默认规则：标题当 H3，正文当 HTML 段落（转义后放入 <pre>）
+	var htmlBody string
+	if msg.Extra != nil && msg.Extra["raw_html"] == "true" {
+		htmlBody = msg.Content
+	} else {
+		htmlBody = "<h3>" + escapeHTML(msg.Title) + "</h3>" +
+			"<pre style=\"font-family:inherit;white-space:pre-wrap;\">" + escapeHTML(msg.Content) + "</pre>"
+	}
 	m.SetBodyString(mail.TypeTextHTML, htmlBody)
+
+	// 处理附件（本地文件路径列表）
+	for _, filePath := range msg.Attachments {
+		if strings.TrimSpace(filePath) == "" {
+			continue
+		}
+		// 先校验文件是否存在，避免 AttachFile 静默忽略后 DialAndSend 时报错难以定位
+		if _, statErr := os.Stat(filePath); statErr != nil {
+			return fmt.Errorf("附件不存在 [%s]：%w", filePath, statErr)
+		}
+		m.AttachFile(filePath)
+	}
 
 	opts := []mail.Option{mail.WithPort(c.Port), mail.WithSMTPAuth(mail.SMTPAuthAutoDiscover)}
 	if c.Username != "" {

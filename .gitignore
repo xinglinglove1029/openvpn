@@ -6,6 +6,8 @@ data/
 /build/openvpn-web
 /build/openvpn-web.exe
 /openvpn-web.exe
+/openvpn-web-admin.exe
+*.exe.bak
 
 /dist/
 /bin/

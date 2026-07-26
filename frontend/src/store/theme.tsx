@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 
-export type ThemeKey = 'midnight' | 'aurora' | 'emerald' | 'daylight';
+export type ThemeKey = 'midnight' | 'aurora' | 'emerald' | 'daylight' | 'amber-glass' | 'deep-blue';
 
 interface ThemeContextType {
   theme: ThemeKey;
@@ -8,7 +8,17 @@ interface ThemeContextType {
   toggleTheme: () => void;
 }
 
-const themes: ThemeKey[] = ['midnight', 'aurora', 'emerald', 'daylight'];
+const themes: ThemeKey[] = ['midnight', 'aurora', 'emerald', 'daylight', 'amber-glass', 'deep-blue'];
+
+// 主题中文显示名（供下拉选择使用）
+export const themeLabels: Record<ThemeKey, string> = {
+  midnight: '午夜蓝',
+  aurora: '极光紫',
+  emerald: '翡翠绿',
+  daylight: '日光白',
+  'amber-glass': '琥珀玻璃',
+  'deep-blue': '深蓝玻璃',
+};
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
@@ -22,7 +32,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const root = document.documentElement;
     root.setAttribute('data-theme', theme);
 
-    // 浅色主题使用 .light，深色主题（midnight / aurora / emerald）使用 .dark，
+    // 浅色主题使用 .light，深色主题（midnight / aurora / emerald / amber-glass / deep-blue）使用 .dark，
     // 让 shadcn/ui 主题变量（--popover、--card、--background 等）正确切换。
     // 否则未在下方覆盖的 CSS 变量会停留在 :root 默认值（白色），下拉菜单会全白。
     if (theme === 'daylight') {
@@ -74,6 +84,28 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         muted: '#64748b',
         border: '#e2e8f0',
         card: '#ffffff',
+      },
+      'amber-glass': {
+        // 深空黑底 + 琥珀色高亮 + 玻璃态
+        background: '#08070a',
+        foreground: '#f5e9d4',
+        primary: '#f59e0b',
+        secondary: '#d97706',
+        accent: '#fbbf24',
+        muted: '#5b4a2c',
+        border: '#2a1f10',
+        card: '#0f0c08',
+      },
+      'deep-blue': {
+        // 深蓝渐变 + 全玻璃态
+        background: '#0a1830',
+        foreground: '#dbe7ff',
+        primary: '#3b82f6',
+        secondary: '#2563eb',
+        accent: '#60a5fa',
+        muted: '#3b527a',
+        border: '#1e3a5f',
+        card: '#0f2147',
       },
     };
 

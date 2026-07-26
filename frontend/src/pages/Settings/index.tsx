@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw } from 'lucide-react';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, Download, CheckCircle2 } from 'lucide-react';
 
 import { api } from '@/api';
 import type { SettingsResponse } from '@/types';
@@ -239,7 +239,7 @@ export default function SettingsPage() {
   function loadSettings() {
     setLoading(true);
     Promise.all([
-      api.get<SettingsResponse>('/settings'),
+      api.get<SettingsResponse>('/ovpn/settings'),
       api.get<{ authUser?: boolean }>('/ovpn/group/1/users').catch(() => ({ authUser: false })),
     ])
       .then(([data, authData]) => {
@@ -321,7 +321,7 @@ export default function SettingsPage() {
 
       // 提交普通设置
       if (Object.keys(payload).length > 0) {
-        await api.postForm<{ message: string }>('/settings', payload);
+        await api.postForm<{ message: string }>('/ovpn/settings', payload);
       }
 
       toast.success('设置已保存');
@@ -407,6 +407,10 @@ export default function SettingsPage() {
           <TabsTrigger value="service" className="gap-1.5">
             <Wrench className="h-4 w-4" />
             服务管理
+          </TabsTrigger>
+          <TabsTrigger value="packages" className="gap-1.5">
+            <Package className="h-4 w-4" />
+            客户端安装包
           </TabsTrigger>
         </TabsList>
 
@@ -666,6 +670,11 @@ export default function SettingsPage() {
         <TabsContent value="service">
           <ServiceTab store={store} />
         </TabsContent>
+
+        {/* ====== Tab 5: 客户端安装包管理 ====== */}
+        <TabsContent value="packages">
+          <ClientPackagesTab />
+        </TabsContent>
       </Tabs>
 
       {/* 整页统一的保存条：固定在底部，所有 Tab 共享 */}
@@ -901,6 +910,311 @@ function ServiceTab({ store }: { store: DraftStore }) {
             </form>
           </DialogContent>
         </Dialog>
+      )}
+    </>
+  );
+}
+
+/* ========== 客户端安装包管理 ========== */
+
+interface ClientPackageItem {
+  id: number;
+  platform: string;
+  version: string;
+  filename: string;
+  storedName: string;
+  fileSize: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  downloadUrl: string;
+}
+
+const PLATFORM_LABELS: Record<string, { label: string; color: string }> = {
+  windows: { label: 'Windows', color: 'bg-blue-100 text-blue-700' },
+  macos: { label: 'macOS', color: 'bg-gray-100 text-gray-700' },
+  linux: { label: 'Linux', color: 'bg-green-100 text-green-700' },
+  android: { label: 'Android', color: 'bg-orange-100 text-orange-700' },
+  ios: { label: 'iOS', color: 'bg-purple-100 text-purple-700' },
+};
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ClientPackagesTab() {
+  const [packages, setPackages] = useState<ClientPackageItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadForm, setUploadForm] = useState({ platform: '', version: '' });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ClientPackageItem | null>(null);
+
+  async function loadPackages() {
+    setLoading(true);
+    try {
+      const data = await api.clientPackages.list();
+      setPackages(data);
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadPackages();
+  }, []);
+
+  function openUpload() {
+    setUploadForm({ platform: '', version: '' });
+    setSelectedFile(null);
+    setUploadOpen(true);
+  }
+
+  async function handleUpload() {
+    if (!selectedFile) {
+      toast.error('请选择安装包文件');
+      return;
+    }
+    if (!uploadForm.platform) {
+      toast.error('请选择平台');
+      return;
+    }
+    if (!uploadForm.version) {
+      toast.error('请输入版本号');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('platform', uploadForm.platform);
+      formData.append('version', uploadForm.version);
+
+      await api.clientPackages.upload(formData);
+      toast.success('安装包上传成功');
+      setUploadOpen(false);
+      await loadPackages();
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleActivate(pkg: ClientPackageItem) {
+    try {
+      await api.clientPackages.enable(pkg.id);
+      toast.success(`已启用 ${pkg.platform} v${pkg.version}`);
+      await loadPackages();
+    } catch (err) {
+      toast.error(messageOf(err));
+    }
+  }
+
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    try {
+      await api.clientPackages.remove(confirmDelete.id);
+      toast.success('删除成功');
+      setConfirmDelete(null);
+      await loadPackages();
+    } catch (err) {
+      toast.error(messageOf(err));
+    }
+  }
+
+  const groupedByPlatform = useMemo(() => {
+    const grouped: Record<string, ClientPackageItem[]> = {};
+    for (const pkg of packages) {
+      if (!grouped[pkg.platform]) grouped[pkg.platform] = [];
+      grouped[pkg.platform].push(pkg);
+    }
+    return grouped;
+  }, [packages]);
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>客户端安装包管理</CardTitle>
+            <CardDescription>上传各平台的 OpenVPN 客户端安装包，用户开通邮件会自动附带下载链接</CardDescription>
+          </div>
+          <Button onClick={openUpload} disabled={loading}>
+            <Upload className="h-4 w-4 mr-2" />
+            上传安装包
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="py-12 text-center text-muted-foreground text-sm">加载中...</div>
+          ) : packages.length === 0 ? (
+            <div className="py-12 text-center">
+              <Package className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+              <p className="text-muted-foreground text-sm">暂无安装包，点击"上传安装包"开始添加</p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {Object.entries(PLATFORM_LABELS).map(([platform, info]) => {
+                const pkgs = groupedByPlatform[platform] || [];
+                if (pkgs.length === 0) return null;
+                return (
+                  <div key={platform}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${info.color}`}>{info.label}</span>
+                      <span className="text-xs text-muted-foreground">{pkgs.length} 个版本</span>
+                    </div>
+                    <div className="space-y-2">
+                      {pkgs.map((pkg) => (
+                        <div
+                          key={pkg.id}
+                          className={cn(
+                            'flex items-center justify-between rounded-lg border p-3 transition-colors',
+                            pkg.isActive ? 'border-emerald-200 bg-emerald-50/50' : 'border-border'
+                          )}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="flex-shrink-0">
+                              {pkg.isActive ? (
+                                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                              ) : (
+                                <Package className="h-5 w-5 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-sm">{pkg.filename}</span>
+                                {pkg.isActive && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                                    已启用
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                                <span>v{pkg.version}</span>
+                                <span>{formatFileSize(pkg.fileSize)}</span>
+                                <span>{new Date(pkg.createdAt).toLocaleString('zh-CN')}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {!pkg.isActive && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleActivate(pkg)}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                启用
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setConfirmDelete(pkg)}
+                              className="text-destructive hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 上传对话框 */}
+      {uploadOpen && (
+        <Dialog open onOpenChange={(open) => !uploading && setUploadOpen(open)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>上传客户端安装包</DialogTitle>
+              <DialogDescription>选择要上传的安装包文件并填写相关信息</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div>
+                <Label className="mb-1.5 block">平台</Label>
+                <Select
+                  value={uploadForm.platform}
+                  onValueChange={(v) => setUploadForm((prev) => ({ ...prev, platform: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择平台" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(PLATFORM_LABELS).map(([key, val]) => (
+                      <SelectItem key={key} value={key}>{val.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1.5 block">版本号</Label>
+                <Input
+                  placeholder="如 v10.0.0"
+                  value={uploadForm.version}
+                  onChange={(e) => setUploadForm((prev) => ({ ...prev, version: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label className="mb-1.5 block">安装包文件</Label>
+                <div className="border-2 border-dashed border-border rounded-lg p-4 text-center hover:border-accent transition-colors">
+                  <input
+                    type="file"
+                    id="pkg-file"
+                    className="hidden"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+                  />
+                  <label htmlFor="pkg-file" className="cursor-pointer">
+                    <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                    {selectedFile ? (
+                      <span className="text-sm font-medium">{selectedFile.name}</span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">点击选择文件或拖拽到此处</span>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-1">最大支持 500MB</p>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setUploadOpen(false)}
+                disabled={uploading}
+              >
+                取消
+              </Button>
+              <Button onClick={handleUpload} disabled={uploading}>
+                {uploading ? '上传中...' : '上传'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* 删除确认 */}
+      {confirmDelete && (
+        <ConfirmDialog
+          state={{
+            title: '删除安装包',
+            message: `确定要删除 ${confirmDelete.filename} 吗？此操作不可恢复。`,
+            danger: true,
+            onConfirm: handleDelete,
+          }}
+          onClose={() => !loading && setConfirmDelete(null)}
+        />
       )}
     </>
   );

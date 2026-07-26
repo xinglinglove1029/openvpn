@@ -24,14 +24,17 @@ type NotifyEvent struct {
 }
 
 // NotifyLog 通知发送记录
+// Provider 存放渠道类型（如 email / dingtalk / webhook）便于按类型筛选
+// ChannelName 存放渠道名称（用户在 UI 中给渠道起的名称）便于人眼识别
 type NotifyLog struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	Event     string    `json:"event"`
-	Provider  string    `json:"provider"`
-	Username  string    `json:"username"`
-	Success   bool      `json:"success"`
-	Message   string    `json:"message"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          uint      `gorm:"primarykey" json:"id"`
+	Event       string    `json:"event"`
+	Provider    string    `json:"provider"`    // 渠道类型：email / dingtalk / webhook ...
+	ChannelName string    `json:"channelName"` // 渠道名称：用户自定义的名称
+	Username    string    `json:"username"`
+	Success     bool      `json:"success"`
+	Message     string    `json:"message"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 func notifyTitle(event string) string {
@@ -97,18 +100,19 @@ func LogNotifyError(event NotifyEvent, err error) {
 	}
 }
 
-func recordNotifyLog(event NotifyEvent, provider string, success bool, message string) {
+func recordNotifyLog(event NotifyEvent, provider, channelName string, success bool, message string) {
 	if db == nil {
 		return
 	}
 	username := displayUsername(event)
 
 	logItem := NotifyLog{
-		Event:    event.Event,
-		Provider: provider,
-		Username: username,
-		Success:  success,
-		Message:  message,
+		Event:       event.Event,
+		Provider:    provider,
+		ChannelName: channelName,
+		Username:    username,
+		Success:     success,
+		Message:     message,
 	}
 	if err := db.WithContext(context.Background()).Create(&logItem).Error; err != nil {
 		logger.Error(context.Background(), "record notify log failed: %s", err)
@@ -118,14 +122,31 @@ func recordNotifyLog(event NotifyEvent, provider string, success bool, message s
 	// 站内信实时广播：通过全局事件总线解耦推送
 	// 任意监听 notify:new 主题的模块都会收到；当前由 WsHub 转发到 WebSocket 客户端
 	Bus().Publish("notify:new", map[string]any{
-		"id":        logItem.ID,
-		"event":     logItem.Event,
-		"provider":  logItem.Provider,
-		"username":  logItem.Username,
-		"success":   logItem.Success,
-		"message":   logItem.Message,
-		"createdAt": logItem.CreatedAt,
+		"id":          logItem.ID,
+		"event":       logItem.Event,
+		"provider":    logItem.Provider,
+		"channelName": logItem.ChannelName,
+		"username":    logItem.Username,
+		"success":     logItem.Success,
+		"message":     logItem.Message,
+		"createdAt":   logItem.CreatedAt,
 	})
+}
+
+// migrateNotifyLogChannelName 在启动时把旧 channel_type 列数据复制到新 channel_name 列
+// 仅在 channel_name 为空但旧 channel_type 有值时执行，避免覆盖新数据
+func migrateNotifyLogChannelName() {
+	if db == nil {
+		return
+	}
+	// AutoMigrate 已经把新列加上了，这里做一次性数据迁移
+	// GORM 用 Column 名是 snake_case，所以 SQL 里用 channel_name / channel_type
+	if err := db.WithContext(context.Background()).Exec(
+		"UPDATE notify_logs SET channel_name = channel_type WHERE channel_name IS NULL OR channel_name = ''",
+	).Error; err != nil {
+		// 旧表可能没有 channel_type 列，忽略错误
+		logger.Error(context.Background(), "migrate notify_logs channel_name: %s", err)
+	}
 }
 
 func queryNotifyLogs(limit int) []NotifyLog {

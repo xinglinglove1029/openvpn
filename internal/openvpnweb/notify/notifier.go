@@ -100,6 +100,8 @@ type Message struct {
 	To []string
 	// 扩展元数据：渠道可读取 Extra 中的字段
 	Extra map[string]string
+	// Attachments 附件本地文件路径列表（仅邮件渠道使用）
+	Attachments []string
 }
 
 // Notifier 渠道实现统一接口

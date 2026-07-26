@@ -48,7 +48,7 @@ func dispatchNotification(event NotifyEvent, title, content string) {
 	}
 	enabled := (&NotificationChannel{}).EnabledChannels()
 	if len(enabled) == 0 {
-		recordNotifyLog(event, "system", true, "系统通知（当前未配置任何启用的通知渠道，仅记录在站内信）")
+		recordNotifyLog(event, "system", "系统", true, "系统通知（当前未配置任何启用的通知渠道，仅记录在站内信）")
 		return
 	}
 
@@ -61,7 +61,7 @@ func dispatchNotification(event NotifyEvent, title, content string) {
 
 	results := notify.Global().Dispatch(context.Background(), toNotifyChannels(enabled), msg)
 	for _, r := range results {
-		recordNotifyLog(event, r.ChannelName, r.Success, r.Error)
+		recordNotifyLog(event, r.ChannelType, r.ChannelName, r.Success, r.Error)
 	}
 }
 
@@ -113,11 +113,74 @@ func sendChannelTestMessage(channelID uint) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	event := NotifyEvent{
+		Event:    "test",
+		Username: "admin",
+	}
 	if err := n.Send(ctx, notify.Message{
 		Title: title, Content: content, Event: "test", Username: "admin",
 	}, ch.Config); err != nil {
+		recordNotifyLog(event, ch.Type, ch.Name, false, fmt.Sprintf("测试发送失败：%s", err.Error()))
 		return err
 	}
+	recordNotifyLog(event, ch.Type, ch.Name, true, fmt.Sprintf("测试发送成功（渠道：%s）", ch.Name))
+	return nil
+}
+
+// sendUserEmail 通过通知渠道系统发送用户邮件
+// 找到第一个启用的邮件渠道，用它发送到指定邮箱，支持附件和 HTML 内容
+// 同时会把发送结果记录到站内信
+func sendUserEmail(toEmail, subject, htmlContent string, attachments []string, username string, eventType string) error {
+	if strings.TrimSpace(toEmail) == "" {
+		return fmt.Errorf("收件人邮箱为空")
+	}
+
+	enabled := (&NotificationChannel{}).EnabledChannels()
+	var emailCh *NotificationChannel
+	for i := range enabled {
+		if enabled[i].Type == notify.ChannelEmail {
+			emailCh = &enabled[i]
+			break
+		}
+	}
+
+	event := NotifyEvent{
+		Event:    eventType,
+		Username: username,
+	}
+
+	if emailCh == nil {
+		recordNotifyLog(event, "email", "", false, "未配置启用的邮件通知渠道，无法发送用户注册邮件")
+		return fmt.Errorf("未配置启用的邮件通知渠道")
+	}
+
+	n, ok := notify.Global().Get(emailCh.Type)
+	if !ok {
+		recordNotifyLog(event, emailCh.Type, emailCh.Name, false, "未注册的邮件渠道类型")
+		return fmt.Errorf("未注册的邮件渠道类型: %s", emailCh.Type)
+	}
+
+	msg := notify.Message{
+		Title:       subject,
+		Content:     htmlContent,
+		Event:       eventType,
+		Username:    username,
+		To:          []string{toEmail},
+		Attachments: attachments,
+		Extra: map[string]string{
+			"raw_html": "true",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := n.Send(ctx, msg, emailCh.Config); err != nil {
+		recordNotifyLog(event, emailCh.Type, emailCh.Name, false, fmt.Sprintf("用户注册邮件发送失败：%s", err.Error()))
+		return err
+	}
+
+	recordNotifyLog(event, emailCh.Type, emailCh.Name, true, fmt.Sprintf("用户注册邮件发送成功（收件人：%s）", toEmail))
 	return nil
 }
 

@@ -1192,6 +1192,7 @@ function UserFormDialog({
   const [password, setPassword] = useState('');
   const [expireDate, setExpireDate] = useState('');
   const [sendNotifyEmail, setSendNotifyEmail] = useState(false);
+  const [autoCreateClient, setAutoCreateClient] = useState(true);
   const [isFirstLogin, setIsFirstLogin] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -1206,6 +1207,7 @@ function UserFormDialog({
       setPassword('');
       setExpireDate(mode === 'edit' && user ? user.expireDate || '' : '');
       setSendNotifyEmail(false);
+      setAutoCreateClient(true);
       setIsFirstLogin(false);
       setErrors({});
     }
@@ -1240,6 +1242,7 @@ function UserFormDialog({
           ovpnConfig,
           expireDate,
           sendNotifyEmail,
+          autoCreateClient,
           isFirstLogin,
         });
         notify('success', result.message || '用户已创建');
@@ -1397,6 +1400,16 @@ function UserFormDialog({
 
           {mode === 'add' && (
             <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">自动创建客户端</Label>
+              <div className="flex items-center gap-3">
+                <Switch checked={autoCreateClient} onCheckedChange={setAutoCreateClient} />
+                <span className="text-xs text-muted-foreground">开启后将基于用户名生成 .ovpn 配置文件</span>
+              </div>
+            </div>
+          )}
+
+          {mode === 'add' && (
+            <div className="grid grid-cols-[140px_1fr] items-center gap-4">
               <Label className="pt-2 text-right text-sm font-medium text-foreground/80">发送通知邮件</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
@@ -1427,7 +1440,7 @@ function UserFormDialog({
   );
 }
 
-/* ───────── 重置密码对话框 ───────── */
+/* ───────── 重置密码对话框（默认开启邮件推送） ───────── */
 
 function ResetPasswordDialog({
   open,
@@ -1443,14 +1456,14 @@ function ResetPasswordDialog({
   reload: () => void;
 }) {
   const [password, setPassword] = useState('');
-  const [sendNotifyEmail, setSendNotifyEmail] = useState(false);
+  const [sendNotifyEmail, setSendNotifyEmail] = useState(true);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
     if (open) {
       setPassword('');
-      setSendNotifyEmail(false);
+      setSendNotifyEmail(true);
       setErrors({});
     }
   }, [open]);
@@ -1514,7 +1527,6 @@ function ResetPasswordDialog({
           <div className="flex items-center justify-between rounded-md border px-4 py-3">
             <div>
               <p className="font-medium">发送通知邮件</p>
-              <p className="text-sm text-muted-foreground">将新密码发送到用户邮箱</p>
             </div>
             <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
           </div>

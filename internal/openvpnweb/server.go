@@ -536,13 +536,22 @@ func Run(info BuildInfo) {
 			logger.Error(context.Background(), err.Error())
 		}
 	})
+	c.AddFunc("@daily", func() {
+		checkAndSendExpireReminders()
+	})
 	c.Start()
 
 	store := gormsessions.NewStore(db, true, []byte(secretKey))
 
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
-	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{})
+	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
+
+	// 旧表 channel_type 列数据迁移到新 channel_name 列
+	migrateNotifyLogChannelName()
+
+	// 初始化客户端安装包存储目录
+	InitClientPackagesDir()
 
 	// 注册所有通知渠道实现（webhook/email/dingtalk/feishu/wecom/discord/slack/telegram/mattermost）
 	registerNotifiers()
@@ -763,76 +772,6 @@ func Run(info BuildInfo) {
 		c.HTML(http.StatusOK, "index.html", reactRuntime("admin", conf.Client.ClientUrl))
 	})
 
-	r.GET("/settings", func(c *gin.Context) {
-		var conf config
-		viper.Unmarshal(&conf)
-
-		c.JSON(http.StatusOK, conf)
-	})
-
-	r.POST("/settings", func(c *gin.Context) {
-		c.Request.ParseForm()
-		for k, vs := range c.Request.PostForm {
-			val := vs[0]
-
-			switch k {
-			case "system.base.admin_password":
-				ep, _ := bcrypt.GenerateFromPassword([]byte(val), 12)
-				val = string(ep)
-			case "system.email.password":
-				val, _ = aes.AesEncrypt(val, secretKey)
-			case "system.base.max_duplicate_login":
-				n, err := strconv.Atoi(val)
-				if err != nil {
-					n = 0
-				}
-
-				if n > 0 {
-					cfg, err := initOvpnConfig()
-					if err != nil {
-						logger.Error(context.Background(), err.Error())
-						return
-					}
-
-					statusLogPath := filepath.Join(ovData, "openvpn-status.log")
-					if cfg.Get("status-version") != "3" || cfg.Get("status") != statusLogPath+" 1" {
-						cfg.Set("status", statusLogPath+" 1")
-						cfg.Set("status-version", "3")
-						cfg.Save()
-
-						ov.sendCommand("signal SIGHUP")
-					}
-				}
-			case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
-				_, _, err := net.ParseCIDR(val)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-					return
-				}
-			case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
-				if net.ParseIP(val) == nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
-					return
-				}
-			}
-
-			switch val {
-			case "true":
-				viper.Set(k, true)
-			case "false":
-				viper.Set(k, false)
-			default:
-				viper.Set(k, val)
-			}
-		}
-		if err := viper.WriteConfig(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
-	})
-
 	r.POST("/email/send", func(c *gin.Context) {
 		email := c.PostForm("email")
 		subject := c.PostForm("subject")
@@ -852,6 +791,207 @@ func Run(info BuildInfo) {
 		ovpn.GET("/dashboard/summary", ov.dashboardSummary)
 		ovpn.GET("/audit/logs", auditLogsHandler)
 		ovpn.GET("/audit/export", auditExportHandler)
+
+		ovpn.GET("/settings", func(c *gin.Context) {
+			var conf config
+			viper.Unmarshal(&conf)
+
+			c.JSON(http.StatusOK, conf)
+		})
+
+		ovpn.POST("/settings", func(c *gin.Context) {
+			c.Request.ParseForm()
+			for k, vs := range c.Request.PostForm {
+				val := vs[0]
+
+				switch k {
+				case "system.base.admin_password":
+					ep, _ := bcrypt.GenerateFromPassword([]byte(val), 12)
+					val = string(ep)
+				case "system.email.password":
+					val, _ = aes.AesEncrypt(val, secretKey)
+				case "system.base.max_duplicate_login":
+					n, err := strconv.Atoi(val)
+					if err != nil {
+						n = 0
+					}
+
+					if n > 0 {
+						cfg, err := initOvpnConfig()
+						if err != nil {
+							logger.Error(context.Background(), err.Error())
+							return
+						}
+
+						statusLogPath := filepath.Join(ovData, "openvpn-status.log")
+						if cfg.Get("status-version") != "3" || cfg.Get("status") != statusLogPath+" 1" {
+							cfg.Set("status", statusLogPath+" 1")
+							cfg.Set("status-version", "3")
+							cfg.Save()
+
+							ov.sendCommand("signal SIGHUP")
+						}
+					}
+				case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
+					_, _, err := net.ParseCIDR(val)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+						return
+					}
+				case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+					if net.ParseIP(val) == nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
+						return
+					}
+				}
+
+				switch val {
+				case "true":
+					viper.Set(k, true)
+				case "false":
+					viper.Set(k, false)
+				default:
+					viper.Set(k, val)
+				}
+			}
+			if err := viper.WriteConfig(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+		})
+
+		// 客户端安装包管理
+		ovpn.GET("/client-packages", func(c *gin.Context) {
+			pkg := &ClientPackage{}
+			packages := pkg.All()
+			type PackageWithURL struct {
+				ClientPackage
+				DownloadURL string `json:"downloadUrl"`
+			}
+			result := make([]PackageWithURL, 0, len(packages))
+			for _, p := range packages {
+				pw := PackageWithURL{ClientPackage: p}
+				pw.DownloadURL = p.PublicDownloadURL()
+				result = append(result, pw)
+			}
+			c.JSON(http.StatusOK, result)
+		})
+
+		ovpn.POST("/client-packages", func(c *gin.Context) {
+			file, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "请上传安装包文件"})
+				return
+			}
+
+			if file.Size > 500*1024*1024 {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "文件大小不能超过 500MB"})
+				return
+			}
+
+			platform := c.PostForm("platform")
+			version := c.PostForm("version")
+
+			validPlatforms := map[string]bool{"windows": true, "macos": true, "linux": true, "android": true, "ios": true}
+			if !validPlatforms[platform] {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的平台类型，支持: windows, macos, linux, android, ios"})
+				return
+			}
+			if version == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "版本号不能为空"})
+				return
+			}
+
+			tmpPath := filepath.Join(os.TempDir(), "pkg-"+fmt.Sprintf("%d", time.Now().UnixNano())+filepath.Ext(file.Filename))
+			if err := c.SaveUploadedFile(file, tmpPath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "保存上传文件失败"})
+				return
+			}
+			defer os.Remove(tmpPath)
+
+			pkg := &ClientPackage{
+				Platform: platform,
+				Version:  version,
+				Filename: file.Filename,
+			}
+
+			if err := pkg.Create(tmpPath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{
+				"message":  "上传成功",
+				"id":       pkg.ID,
+				"platform": pkg.Platform,
+				"version":  pkg.Version,
+			})
+		})
+
+		ovpn.DELETE("/client-packages/:id", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
+				return
+			}
+
+			pkg := &ClientPackage{}
+			pkg.ID = uint(id)
+			if err := pkg.Delete(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+		})
+
+		ovpn.POST("/client-packages/:id/enable", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
+				return
+			}
+
+			pkg := &ClientPackage{}
+			if err := pkg.Activate(uint(id)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"message": "已启用"})
+		})
+
+		ovpn.GET("/client-packages/:id/download", func(c *gin.Context) {
+			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
+				return
+			}
+
+			pkg := &ClientPackage{}
+			result, err := pkg.Get(uint(id))
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"message": "安装包不存在"})
+				return
+			}
+
+			if !result.IsActive {
+				c.JSON(http.StatusNotFound, gin.H{"message": "该安装包未启用"})
+				return
+			}
+
+			filePath := result.FullPath()
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				c.JSON(http.StatusNotFound, gin.H{"message": "文件不存在"})
+				return
+			}
+
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", result.Filename))
+			c.Header("Content-Type", "application/octet-stream")
+			c.File(filePath)
+		})
 
 		ovpn.POST("/server", func(c *gin.Context) {
 			a := c.PostForm("action")
@@ -880,14 +1020,52 @@ func Run(info BuildInfo) {
 				}
 			case "renewCert":
 				day := c.PostForm("day")
+				serverName := viper.GetString("system.base.server_name")
 
-				cmd := exec.Command("docker-entrypoint.sh", "renewcert", day)
-				if out, err := cmd.CombinedOutput(); err != nil {
+				var out []byte
+				var err error
+
+				if _, statErr := os.Stat("docker-entrypoint.sh"); statErr == nil {
+					cmd := exec.Command("docker-entrypoint.sh", "renewcert", day)
+					out, err = cmd.CombinedOutput()
+				} else {
+					easyrsaPath := "easyrsa"
+					if _, statErr2 := os.Stat("/usr/share/easy-rsa/easyrsa"); statErr2 == nil {
+						easyrsaPath = "/usr/share/easy-rsa/easyrsa"
+					}
+					if _, statErr3 := os.Stat("easyrsa"); statErr3 != nil {
+						if _, lookErr := exec.LookPath("easyrsa"); lookErr == nil {
+							easyrsaPath = "easyrsa"
+						}
+					}
+
+					if serverName != "" {
+						cmds := [][]string{
+							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "renew-ca"},
+							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "renew", serverName},
+							{easyrsaPath, "--batch", "revoke-renewed", serverName},
+							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "gen-crl"},
+						}
+						for _, args := range cmds {
+							cmd := exec.Command(args[0], args[1:]...)
+							var stepOut []byte
+							stepOut, err = cmd.CombinedOutput()
+							out = append(out, stepOut...)
+							if err != nil {
+								break
+							}
+						}
+					} else {
+						err = fmt.Errorf("server_name 未配置")
+					}
+				}
+
+				if err != nil {
 					if len(out) == 0 {
 						out = []byte(err.Error())
 					}
-					logger.Error(context.Background(), string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新证书失败"})
+					logger.Error(context.Background(), "更新证书失败: %s", string(out))
+					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", string(out))})
 					return
 				}
 
@@ -1209,46 +1387,106 @@ func Run(info BuildInfo) {
 			}
 
 			err = u.Create()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-			} else {
-				sendNotifyEmail := c.PostForm("sendNotifyEmail")
-				if sendNotifyEmail == "true" {
-					go func() {
-						var tpl *template.Template
-						var buf bytes.Buffer
-
-						tpl, err = template.New("account-email").Parse(accountEmailTemplate)
-						if err == nil {
-							err = tpl.Execute(&buf, struct {
-								Type     string
-								Name     string
-								Username string
-								Password string
-								SiteUrl  string
-							}{
-								Type:     "addUser",
-								Name:     u.Name,
-								Username: u.Username,
-								Password: c.PostForm("password"),
-								SiteUrl:  viper.GetString("system.base.site_url"),
-							})
-						}
-
-						if err != nil {
-							logger.Error(context.Background(), err.Error())
-							return
-						}
-
-						sendEmail(u.Email, "用户开通通知", buf.String())
-					}()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		} else {
+			// 自动创建客户端配置：当 autoCreateClient=true 时，
+			// 基于用户名自动生成 <username>.ovpn 客户端配置文件
+			autoCreateClient := c.PostForm("autoCreateClient") == "true"
+			createdClientName := ""
+			if autoCreateClient {
+				clientName := u.Username
+				if u.OvpnConfig == "" {
+					u.OvpnConfig = clientName
+					_ = db.Model(&User{}).Where("id = ?", u.ID).Update("ovpn_config", clientName).Error
+				} else {
+					clientName = u.OvpnConfig
 				}
-
-				c.JSON(http.StatusOK, gin.H{"message": "添加用户成功"})
+				if err := generateClientConfig(clientName); err != nil {
+					logger.Error(context.Background(), "auto create client for %s failed: %s", u.Username, err)
+				} else {
+					createdClientName = clientName
+				}
 			}
-		})
+
+			sendNotifyEmail := c.PostForm("sendNotifyEmail")
+			if sendNotifyEmail == "true" && strings.TrimSpace(u.Email) != "" {
+				go func() {
+					var tpl *template.Template
+					var buf bytes.Buffer
+
+					activePackages := GetActivePackagesByPlatform()
+					var localPackages []LocalPackageInfo
+					for platform, pkg := range activePackages {
+						labels := map[string]string{
+							"windows": "Windows",
+							"macos":   "macOS",
+							"linux":   "Linux",
+							"android": "Android",
+							"ios":     "iOS",
+						}
+						localPackages = append(localPackages, LocalPackageInfo{
+							Platform:      platform,
+							PlatformLabel: labels[platform],
+							Version:       pkg.Version,
+							DownloadURL:   pkg.PublicDownloadURL(),
+						})
+					}
+
+					tpl, err = template.New("account-email").Parse(accountEmailTemplate)
+					if err == nil {
+						err = tpl.Execute(&buf, struct {
+							Type          string
+							Name          string
+							Username      string
+							Password      string
+							SiteUrl       string
+							LocalPackages []LocalPackageInfo
+						}{
+							Type:          "addUser",
+							Name:          u.Name,
+							Username:      u.Username,
+							Password:      c.PostForm("password"),
+							SiteUrl:       viper.GetString("system.base.site_url"),
+							LocalPackages: localPackages,
+						})
+					}
+
+					if err != nil {
+						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
+						return
+					}
+
+					var attachments []string
+					if createdClientName != "" {
+						clientFilePath := filepath.Join(ovData, "clients", createdClientName+".ovpn")
+						attachments = append(attachments, clientFilePath)
+					}
+
+					if err := sendUserEmail(u.Email, "用户开通通知", buf.String(), attachments, u.Username, "user_register"); err != nil {
+						logger.Error(context.Background(), "发送用户邮件失败: %s", err.Error())
+					}
+				}()
+			}
+
+			message := "添加用户成功"
+			if createdClientName != "" {
+				message = fmt.Sprintf("添加用户成功，已自动创建客户端配置 %s.ovpn", createdClientName)
+			}
+			c.JSON(http.StatusOK, gin.H{"message": message})
+		}
+	})
 
 		ovpn.PATCH("/user", func(c *gin.Context) {
+			c.Request.ParseForm()
+			formData := make(map[string]string)
+			for k, v := range c.Request.PostForm {
+				if len(v) > 0 {
+					formData[k] = v[0]
+				}
+			}
+			os.WriteFile("data/debug_patch_user.log", []byte(fmt.Sprintf("form data: %v\nu.Password: %q\nsendNotifyEmail: %q", formData, c.PostForm("password"), c.PostForm("sendNotifyEmail"))), 0644)
+
 			var u User
 			c.ShouldBind(&u)
 
@@ -1264,47 +1502,64 @@ func Run(info BuildInfo) {
 				}
 			}
 
+			sendNotifyEmail := c.PostForm("sendNotifyEmail")
+			rawPassword := u.Password
+			logger.Error(context.Background(), "PATCH user debug before update - sendNotifyEmail=%s, rawPwdLen=%d", sendNotifyEmail, len(rawPassword))
+
 			err := u.Update()
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
-				sendNotifyEmail := c.PostForm("sendNotifyEmail")
-				if sendNotifyEmail == "true" {
-					go func() {
+				if sendNotifyEmail == "true" && rawPassword != "" {
+					os.WriteFile("data/debug_patch_user.log", []byte(fmt.Sprintf("form data: %v\nu.Password: %q\nsendNotifyEmail: %q\n进入goroutine前，u.ID=%d, rawPwdLen=%d", formData, c.PostForm("password"), c.PostForm("sendNotifyEmail"), u.ID, len(rawPassword))), 0644)
+					go func(userID uint, password string) {
+						os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n", userID, len(password))), 0644)
 						var cu User
-						db.First(&cu, u.ID)
+						result := db.First(&cu, userID)
+						os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
 
 						if cu.Email != "" {
 							var tpl *template.Template
 							var buf bytes.Buffer
+							var tplErr error
 
-							tpl, err = template.New("account-email").Parse(accountEmailTemplate)
-							if err == nil {
-								err = tpl.Execute(&buf, struct {
-									Type     string
-									Name     string
-									Username string
-									Password string
-									SiteUrl  string
+							tpl, tplErr = template.New("account-email").Parse(accountEmailTemplate)
+							if tplErr == nil {
+								tplErr = tpl.Execute(&buf, struct {
+									Type          string
+									Name          string
+									Username      string
+									Password      string
+									SiteUrl       string
+									LocalPackages []LocalPackageInfo
 								}{
-									Type:     "resetPass",
-									Name:     cu.Name,
-									Username: cu.Username,
-									Password: c.PostForm("password"),
-									SiteUrl:  viper.GetString("system.base.site_url"),
+									Type:          "resetPass",
+									Name:          cu.Name,
+									Username:      cu.Username,
+									Password:      password,
+									SiteUrl:       viper.GetString("system.base.site_url"),
+									LocalPackages: nil,
 								})
 							}
 
-							if err != nil {
-								logger.Error(context.Background(), err.Error())
+							if tplErr != nil {
+								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染失败: %v\n", userID, len(password), result.Error, cu.Username, cu.Email, tplErr)), 0644)
+								logger.Error(context.Background(), "渲染邮件模板失败: %s", tplErr.Error())
 								return
 							}
 
-							sendEmail(cu.Email, "用户密码配置通知", buf.String())
+							os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
+							if sendErr := sendUserEmail(cu.Email, "用户密码配置通知", buf.String(), nil, cu.Username, "password_reset"); sendErr != nil {
+								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\nsendUserEmail失败: %v\n", userID, len(password), result.Error, cu.Username, cu.Email, sendErr)), 0644)
+								logger.Error(context.Background(), "发送用户邮件失败: %s", sendErr.Error())
+							} else {
+								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\nsendUserEmail成功\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
+							}
 						} else {
+							os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n用户没有邮箱，跳过发送\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
 							logger.Error(context.Background(), "发送邮件通知失败，用户没有配置邮箱地址")
 						}
-					}()
+					}(u.ID, rawPassword)
 				}
 
 				c.JSON(http.StatusOK, gin.H{"message": "用户更新成功"})
@@ -2041,11 +2296,62 @@ func Run(info BuildInfo) {
 				}
 			}
 
+			targetUser := User{ID: u.ID}.Info()
 			db.Model(&User{}).Where("id = ?", u.ID).Update("mfa_secret", nil)
+
+			go func() {
+				if targetUser.Email != "" {
+					var tpl *template.Template
+					var buf bytes.Buffer
+
+					tpl, err := template.New("account-email").Parse(accountEmailTemplate)
+					if err == nil {
+						err = tpl.Execute(&buf, struct {
+							Type          string
+							Name          string
+							Username      string
+							Password      string
+							SiteUrl       string
+							LocalPackages []LocalPackageInfo
+						}{
+							Type:          "resetMfa",
+							Name:          targetUser.Name,
+							Username:      targetUser.Username,
+							Password:      "",
+							SiteUrl:       viper.GetString("system.base.site_url"),
+							LocalPackages: nil,
+						})
+					}
+
+					if err != nil {
+						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
+						return
+					}
+
+					if err := sendUserEmail(targetUser.Email, "用户 MFA 重置通知", buf.String(), nil, targetUser.Username, "mfa_reset"); err != nil {
+						logger.Error(context.Background(), "发送用户邮件失败: %s", err.Error())
+					}
+				}
+			}()
 
 			c.JSON(http.StatusOK, gin.H{"message": "MFA 已停用"})
 		})
 	}
+
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/ovpn") ||
+			strings.HasPrefix(path, "/client/") ||
+			path == "/client" ||
+			strings.HasPrefix(path, "/static") ||
+			strings.HasPrefix(path, "/download") ||
+			strings.HasPrefix(path, "/ws") ||
+			strings.HasPrefix(path, "/email") {
+			c.JSON(http.StatusNotFound, gin.H{"message": "not found"})
+			return
+		}
+		c.HTML(http.StatusOK, "index.html", reactRuntime("admin", conf.Client.ClientUrl))
+	})
 
 	r.Run(fmt.Sprintf(":%s", webPort))
 }

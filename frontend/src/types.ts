@@ -210,7 +210,8 @@ export interface DashboardStatsPayload {
 export interface NotifyLogRecord {
   id: number;
   event: string;
-  provider: string;
+  provider: string;     // 渠道类型：email / dingtalk / webhook ...
+  channelName: string;  // 渠道名称：用户自定义的名称
   username: string;
   success: boolean;
   message: string;
@@ -364,6 +365,19 @@ export interface SystemNetInfo {
   rxDrops: number;
   txDrops: number;
   isPhysical: boolean;
+}
+
+export interface ClientPackage {
+  id: number;
+  platform: string;
+  version: string;
+  filename: string;
+  storedName: string;
+  fileSize: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  downloadUrl: string;
 }
 
 export interface ClientUserInfo {

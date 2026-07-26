@@ -65,4 +65,11 @@ export const api = {
   putJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'PUT', json: body }),
   delete: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
   multipart: <T>(url: string, body: FormData) => request<T>(url, { method: 'POST', body }),
+
+  clientPackages: {
+    list: () => request<any[]>('/ovpn/client-packages'),
+    upload: (formData: FormData) => request<any>('/ovpn/client-packages', { method: 'POST', body: formData }),
+    remove: (id: number) => request<any>(`/ovpn/client-packages/${id}`, { method: 'DELETE' }),
+    enable: (id: number) => request<any>(`/ovpn/client-packages/${id}/enable`, { method: 'POST' }),
+  },
 };
