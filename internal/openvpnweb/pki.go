@@ -299,9 +299,18 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, *ecdsa.PrivateK
 	if keyBlock == nil {
 		return nil, nil, fmt.Errorf("无法解析私钥 PEM")
 	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
-	if err != nil {
-		return nil, nil, err
+
+	var key *ecdsa.PrivateKey
+	if parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes); err == nil {
+		if ecKey, ok := parsedKey.(*ecdsa.PrivateKey); ok {
+			key = ecKey
+		} else {
+			return nil, nil, fmt.Errorf("PKCS#8 私钥不是 ECDSA 类型")
+		}
+	} else if ecKey, err2 := x509.ParseECPrivateKey(keyBlock.Bytes); err2 == nil {
+		key = ecKey
+	} else {
+		return nil, nil, fmt.Errorf("解析私钥失败: PKCS#8: %v, EC: %v", err, err2)
 	}
 
 	return cert, key, nil

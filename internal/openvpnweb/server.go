@@ -1027,6 +1027,7 @@ func Run(info BuildInfo) {
 
 				if _, statErr := os.Stat("docker-entrypoint.sh"); statErr == nil {
 					cmd := exec.Command("docker-entrypoint.sh", "renewcert", day)
+					cmd.Dir = ovData
 					out, err = cmd.CombinedOutput()
 				} else {
 					easyrsaPath := "easyrsa"
@@ -1048,6 +1049,8 @@ func Run(info BuildInfo) {
 						}
 						for _, args := range cmds {
 							cmd := exec.Command(args[0], args[1:]...)
+							cmd.Dir = ovData
+							cmd.Env = append(os.Environ(), "EASYRSA="+ovData)
 							var stepOut []byte
 							stepOut, err = cmd.CombinedOutput()
 							out = append(out, stepOut...)
@@ -1061,11 +1064,14 @@ func Run(info BuildInfo) {
 				}
 
 				if err != nil {
-					if len(out) == 0 {
-						out = []byte(err.Error())
+					msg := strings.TrimSpace(string(out))
+					if msg == "" {
+						msg = err.Error()
+					} else {
+						msg = msg + ": " + err.Error()
 					}
-					logger.Error(context.Background(), "更新证书失败: %s", string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", string(out))})
+					logger.Error(context.Background(), "更新证书失败: %s", msg)
+					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", msg)})
 					return
 				}
 
