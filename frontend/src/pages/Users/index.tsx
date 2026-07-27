@@ -664,6 +664,7 @@ function UserTablePanel({
     .filter((id): id is number => Boolean(id));
   const selectedUsers = users.filter((u) => u.id && selectedUserIds.includes(u.id));
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedUserIds.includes(id));
+  const hasSelectedMfaUser = selectedUsers.some((u) => u.mfaSecret || u.mfaEnabled);
 
   useEffect(() => {
     setSelectedUserIds((ids) => ids.filter((id) => users.some((u) => u.id === id)));
@@ -925,9 +926,11 @@ function UserTablePanel({
           <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openResetPassword(user)}>
             重置密码
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resetMfa(user)}>
-            重置 MFA
-          </Button>
+          {(user.mfaSecret || user.mfaEnabled) && (
+            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resetMfa(user)}>
+              重置 MFA
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
@@ -1065,21 +1068,23 @@ function UserTablePanel({
               >
                 禁用
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  batchAction(
-                    '批量重置 MFA',
-                    '确认重置这些账号的 MFA 吗？',
-                    (u) => api.delete(`/client/mfa/${u.id}`),
-                    '批量 MFA 重置完成',
-                    true,
-                  )
-                }
-              >
-                重置 MFA
-              </Button>
+              {hasSelectedMfaUser && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    batchAction(
+                      '批量重置 MFA',
+                      '确认重置这些账号的 MFA 吗？',
+                      (u) => api.delete(`/client/mfa/${u.id}`),
+                      '批量 MFA 重置完成',
+                      true,
+                    )
+                  }
+                >
+                  重置 MFA
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={exportSelectedUsers}>
                 <Download className="mr-1 h-3.5 w-3.5" />
                 导出选中
