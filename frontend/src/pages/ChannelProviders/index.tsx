@@ -14,6 +14,8 @@ import {
   MessageCircle,
   Hash,
   Radio,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
@@ -77,6 +79,7 @@ function ChannelIcon({ name, className }: { name?: string; className?: string })
 
 type FieldDef =
   | { kind: 'text'; key: string; label: string; placeholder?: string; required?: boolean }
+  | { kind: 'password'; key: string; label: string; placeholder?: string; required?: boolean }
   | { kind: 'textarea'; key: string; label: string; placeholder?: string; rows?: number; required?: boolean }
   | { kind: 'number'; key: string; label: string; min?: number; max?: number; required?: boolean }
   | { kind: 'select'; key: string; label: string; options: { value: string; label: string }[]; required?: boolean }
@@ -101,7 +104,7 @@ const configSchemas: Record<ChannelType, FieldDef[]> = {
       { value: 'ssl', label: 'SSL' },
     ] },
     { kind: 'text', key: 'username', label: 'SMTP 用户名' },
-    { kind: 'text', key: 'password', label: 'SMTP 密码' },
+    { kind: 'password', key: 'password', label: 'SMTP 密码' },
     { kind: 'text', key: 'from', label: '发件人邮箱', placeholder: 'no-reply@example.com', required: true },
     { kind: 'textarea', key: 'to', label: '收件人（多个换行 / 逗号分隔）', placeholder: 'ops@example.com\nalerts@example.com', rows: 3, required: true },
     { kind: 'text', key: 'subject_prefix', label: '主题前缀（可选）', placeholder: '[OpenVPN]' },
@@ -159,6 +162,9 @@ function ConfigFields({
   errors: Record<string, string>;
 }) {
   const schema = configSchemas[type] || [];
+  const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
+  const toggleVisible = (key: string) =>
+    setVisibleKeys((prev) => ({ ...prev, [key]: !prev[key] }));
   return (
     <div className="space-y-3">
       {schema.map((field) => {
@@ -179,6 +185,38 @@ function ConfigFields({
                   onChange={(e) => setVal(e.target.value)}
                   className={cn(err && 'border-red-500 focus-visible:ring-red-500')}
                 />
+                {err && <p className="text-xs text-red-500">{err}</p>}
+              </div>
+            </div>
+          );
+        }
+        if (field.kind === 'password') {
+          const visible = !!visibleKeys[field.key];
+          return (
+            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+                {field.label}
+                {field.required && <span className="text-red-500 ml-0.5">*</span>}
+              </Label>
+              <div className="space-y-1.5 min-w-0">
+                <div className="relative">
+                  <Input
+                    type={visible ? 'text' : 'password'}
+                    value={typeof v === 'string' ? v : ''}
+                    placeholder={field.placeholder}
+                    onChange={(e) => setVal(e.target.value)}
+                    className={cn('pr-9', err && 'border-red-500 focus-visible:ring-red-500')}
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={visible ? '隐藏密码' : '显示密码'}
+                    onClick={() => toggleVisible(field.key)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
                 {err && <p className="text-xs text-red-500">{err}</p>}
               </div>
             </div>

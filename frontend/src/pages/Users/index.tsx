@@ -10,6 +10,8 @@ import {
   Upload,
   Download,
   FolderTree,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { api } from '@/api';
 import { useAsync } from '@/hooks/useAsync';
@@ -1248,6 +1250,7 @@ function UserFormDialog({
   const [ipAddr, setIpAddr] = useState('');
   const [ovpnConfig, setOvpnConfig] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [expireDate, setExpireDate] = useState('');
   const [sendNotifyEmail, setSendNotifyEmail] = useState(false);
   const [autoCreateClient, setAutoCreateClient] = useState(true);
@@ -1263,6 +1266,7 @@ function UserFormDialog({
       setIpAddr(mode === 'edit' && user ? user.ipAddr || '' : '');
       setOvpnConfig(mode === 'edit' && user ? user.ovpnConfig || '' : clients[0]?.name || '');
       setPassword('');
+      setShowPassword(false);
       setExpireDate(mode === 'edit' && user ? user.expireDate || '' : '');
       setSendNotifyEmail(false);
       setAutoCreateClient(true);
@@ -1434,16 +1438,28 @@ function UserFormDialog({
                 初始密码 <span className="text-destructive ml-0.5">*</span>
               </Label>
               <div className="space-y-1.5 min-w-0">
-                <Input
-                  id="user-password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
-                  }}
-                  placeholder="至少 12 位强密码"
-                />
+                <div className="relative">
+                  <Input
+                    id="user-password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
+                    }}
+                    placeholder="至少 12 位强密码"
+                    className="pr-9"
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
                 {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
               </div>
             </div>
@@ -1514,6 +1530,7 @@ function ResetPasswordDialog({
   reload: () => void;
 }) {
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [sendNotifyEmail, setSendNotifyEmail] = useState(true);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -1521,6 +1538,7 @@ function ResetPasswordDialog({
   useEffect(() => {
     if (open) {
       setPassword('');
+      setShowPassword(false);
       setSendNotifyEmail(true);
       setErrors({});
     }
@@ -1568,17 +1586,29 @@ function ResetPasswordDialog({
             <Label htmlFor="reset-password">
               新密码 <span className="text-destructive">*</span>
             </Label>
-            <Input
-              id="reset-password"
-              type="password"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
-              }}
-              autoFocus
-              placeholder="至少 12 位强密码"
-            />
+            <div className="relative">
+              <Input
+                id="reset-password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
+                }}
+                autoFocus
+                placeholder="至少 12 位强密码"
+                className="pr-9"
+              />
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
           </div>
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Lock, User as UserIcon, ShieldCheck, Save } from 'lucide-react';
+import { Lock, User as UserIcon, ShieldCheck, Save, Eye, EyeOff } from 'lucide-react';
 import QRCode from 'qrcode';
 import { toast } from 'sonner';
 import { Input } from '@/ui/input';
@@ -63,6 +63,9 @@ export default function ProfilePage() {
   const [currentPass, setCurrentPass] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordAgain, setNewPasswordAgain] = useState('');
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showNewPasswordAgain, setShowNewPasswordAgain] = useState(false);
 
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordErrors, setPasswordErrors] = useState<FieldErrors>({});
@@ -453,40 +456,68 @@ export default function ProfilePage() {
         <CardContent>
           <form onSubmit={handleChangePassword} className="space-y-4">
             <FormField id="profile-currentPass" label="当前密码" required error={passwordErrors.currentPass}>
-              <Input
-                id="profile-currentPass"
-                type="password"
-                value={currentPass}
-                onChange={(e) => {
-                  setCurrentPass(e.target.value);
-                  clearError('currentPass');
-                }}
-                placeholder="请输入当前密码"
-                autoComplete="current-password"
-                aria-invalid={passwordErrors.currentPass ? 'true' : undefined}
-                className={cn(passwordErrors.currentPass && 'border-destructive focus-visible:ring-destructive/40')}
-              />
+              <div className="relative">
+                <Input
+                  id="profile-currentPass"
+                  type={showCurrentPass ? 'text' : 'password'}
+                  value={currentPass}
+                  onChange={(e) => {
+                    setCurrentPass(e.target.value);
+                    clearError('currentPass');
+                  }}
+                  placeholder="请输入当前密码"
+                  autoComplete="current-password"
+                  aria-invalid={passwordErrors.currentPass ? 'true' : undefined}
+                  className={cn(
+                    passwordErrors.currentPass && 'border-destructive focus-visible:ring-destructive/40',
+                    'pr-9',
+                  )}
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={showCurrentPass ? '隐藏密码' : '显示密码'}
+                  onClick={() => setShowCurrentPass(!showCurrentPass)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                >
+                  {showCurrentPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </FormField>
 
             <Separator />
 
             <FormField id="profile-newPassword" label="新密码" required error={passwordErrors.newPassword}>
-              <Input
-                id="profile-newPassword"
-                type="password"
-                value={newPassword}
-                onChange={(e) => {
-                  setNewPassword(e.target.value);
-                  clearError('newPassword');
-                  if (newPasswordAgain && newPasswordAgain === e.target.value) {
-                    clearError('newPasswordAgain');
-                  }
-                }}
-                placeholder="至少 12 位，包含大小写字母、数字、特殊字符"
-                autoComplete="new-password"
-                aria-invalid={passwordErrors.newPassword ? 'true' : undefined}
-                className={cn(passwordErrors.newPassword && 'border-destructive focus-visible:ring-destructive/40')}
-              />
+              <div className="relative">
+                <Input
+                  id="profile-newPassword"
+                  type={showNewPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    clearError('newPassword');
+                    if (newPasswordAgain && newPasswordAgain === e.target.value) {
+                      clearError('newPasswordAgain');
+                    }
+                  }}
+                  placeholder="至少 12 位，包含大小写字母、数字、特殊字符"
+                  autoComplete="new-password"
+                  aria-invalid={passwordErrors.newPassword ? 'true' : undefined}
+                  className={cn(
+                    passwordErrors.newPassword && 'border-destructive focus-visible:ring-destructive/40',
+                    'pr-9',
+                  )}
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={showNewPassword ? '隐藏密码' : '显示密码'}
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                >
+                  {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
               <PasswordStrength value={newPassword} />
             </FormField>
 
@@ -496,21 +527,33 @@ export default function ProfilePage() {
               required
               error={passwordErrors.newPasswordAgain}
             >
-              <Input
-                id="profile-newPasswordAgain"
-                type="password"
-                value={newPasswordAgain}
-                onChange={(e) => {
-                  setNewPasswordAgain(e.target.value);
-                  clearError('newPasswordAgain');
-                }}
-                placeholder="请再次输入新密码"
-                autoComplete="new-password"
-                aria-invalid={passwordErrors.newPasswordAgain ? 'true' : undefined}
-                className={cn(
-                  passwordErrors.newPasswordAgain && 'border-destructive focus-visible:ring-destructive/40',
-                )}
-              />
+              <div className="relative">
+                <Input
+                  id="profile-newPasswordAgain"
+                  type={showNewPasswordAgain ? 'text' : 'password'}
+                  value={newPasswordAgain}
+                  onChange={(e) => {
+                    setNewPasswordAgain(e.target.value);
+                    clearError('newPasswordAgain');
+                  }}
+                  placeholder="请再次输入新密码"
+                  autoComplete="new-password"
+                  aria-invalid={passwordErrors.newPasswordAgain ? 'true' : undefined}
+                  className={cn(
+                    passwordErrors.newPasswordAgain && 'border-destructive focus-visible:ring-destructive/40',
+                    'pr-9',
+                  )}
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-label={showNewPasswordAgain ? '隐藏密码' : '显示密码'}
+                  onClick={() => setShowNewPasswordAgain(!showNewPasswordAgain)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                >
+                  {showNewPasswordAgain ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </FormField>
 
             <div className="flex items-center gap-2 pl-[156px] text-xs text-muted-foreground">

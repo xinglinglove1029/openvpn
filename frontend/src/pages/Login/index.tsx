@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, User, KeyRound, ShieldCheck } from 'lucide-react';
+import { Lock, User, KeyRound, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/ui/button';
@@ -43,6 +43,10 @@ export default function LoginPage() {
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pendingUser, setPendingUser] = useState<{ id: number; username: string; isFirstLogin?: boolean } | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showNewPasswordAgain, setShowNewPasswordAgain] = useState(false);
 
   function validateFields(): FieldErrors {
     const next: FieldErrors = {};
@@ -276,9 +280,9 @@ export default function LoginPage() {
 
               <div className={cn('field-line reference-field-line', errors.password && 'has-error')}>
                 <Label className="text-[var(--login-label-text)] text-sm">密码</Label>
-                <div className="field-input-wrap has-icon">
+                <div className="field-input-wrap has-icon relative">
                   <Input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => {
                       setPassword(e.target.value);
@@ -286,11 +290,20 @@ export default function LoginPage() {
                     }}
                     placeholder="请输入登录密码"
                     aria-invalid={errors.password ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))]"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))] pr-10"
                   />
                   <div className="field-icon-wrap">
                     <Lock className="field-icon-svg w-4 h-4" />
                   </div>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
                 {errors.password && (
                   <p className="text-sm font-medium text-destructive">{errors.password}</p>
@@ -370,9 +383,9 @@ export default function LoginPage() {
             <form className="reference-login-fields" noValidate onSubmit={submitFirstPassword}>
               <div className={cn('field-line reference-field-line', errors.currentPass && 'has-error')}>
                 <Label className="text-[var(--login-label-text)] text-sm">当前密码</Label>
-                <div className="field-input-wrap has-icon">
+                <div className="field-input-wrap has-icon relative">
                   <Input
-                    type="password"
+                    type={showCurrentPass ? 'text' : 'password'}
                     value={currentPass}
                     onChange={(e) => {
                       setCurrentPass(e.target.value);
@@ -381,11 +394,20 @@ export default function LoginPage() {
                     placeholder="请输入当前密码"
                     autoFocus
                     aria-invalid={errors.currentPass ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)]"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
                   />
                   <div className="field-icon-wrap">
                     <Lock className="field-icon-svg w-4 h-4" />
                   </div>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={showCurrentPass ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowCurrentPass(!showCurrentPass)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                  >
+                    {showCurrentPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
                 {errors.currentPass && (
                   <p className="text-sm font-medium text-destructive">{errors.currentPass}</p>
@@ -394,9 +416,9 @@ export default function LoginPage() {
 
               <div className={cn('field-line reference-field-line', errors.newPassword && 'has-error')}>
                 <Label className="text-[var(--login-label-text)] text-sm">新密码</Label>
-                <div className="field-input-wrap has-icon">
+                <div className="field-input-wrap has-icon relative">
                   <Input
-                    type="password"
+                    type={showNewPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => {
                       setNewPassword(e.target.value);
@@ -404,11 +426,20 @@ export default function LoginPage() {
                     }}
                     placeholder="至少 12 位强密码"
                     aria-invalid={errors.newPassword ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)]"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
                   />
                   <div className="field-icon-wrap">
                     <ShieldCheck className="field-icon-svg w-4 h-4" />
                   </div>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={showNewPassword ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                  >
+                    {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
                 <PasswordStrength value={newPassword} />
                 {errors.newPassword && (
@@ -418,9 +449,9 @@ export default function LoginPage() {
 
               <div className={cn('field-line reference-field-line', errors.newPasswordAgain && 'has-error')}>
                 <Label className="text-[var(--login-label-text)] text-sm">确认新密码</Label>
-                <div className="field-input-wrap has-icon">
+                <div className="field-input-wrap has-icon relative">
                   <Input
-                    type="password"
+                    type={showNewPasswordAgain ? 'text' : 'password'}
                     value={newPasswordAgain}
                     onChange={(e) => {
                       setNewPasswordAgain(e.target.value);
@@ -428,11 +459,20 @@ export default function LoginPage() {
                     }}
                     placeholder="请再次输入新密码"
                     aria-invalid={errors.newPasswordAgain ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)]"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
                   />
                   <div className="field-icon-wrap">
                     <Lock className="field-icon-svg w-4 h-4" />
                   </div>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={showNewPasswordAgain ? '隐藏密码' : '显示密码'}
+                    onClick={() => setShowNewPasswordAgain(!showNewPasswordAgain)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                  >
+                    {showNewPasswordAgain ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
                 {errors.newPasswordAgain && (
                   <p className="text-sm font-medium text-destructive">{errors.newPasswordAgain}</p>

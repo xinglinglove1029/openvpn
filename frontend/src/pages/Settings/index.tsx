@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, Download, CheckCircle2 } from 'lucide-react';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, Download, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 
 import { api } from '@/api';
 import type { SettingsResponse } from '@/types';
@@ -92,6 +92,8 @@ interface SettingFieldProps {
   placeholder?: string;
   /** 为 true 时仅在值非空时才参与保存（密码字段） */
   saveOnlyIfValue?: boolean;
+  /** 为 true 时在右侧显示"显示/隐藏密码"按钮，type 会在 text/password 间切换 */
+  visibilityToggle?: boolean;
   store: DraftStore;
 }
 
@@ -99,26 +101,44 @@ interface SettingFieldProps {
  * 设置项：把改动写入统一的草稿仓库，由父组件的"保存"按钮统一提交。
  * 字段下方的红色错误提示仅用于本地校验。
  */
-function SettingField({ label, description, value, settingKey, type = 'text', placeholder, saveOnlyIfValue, store }: SettingFieldProps) {
+function SettingField({ label, description, value, settingKey, type = 'text', placeholder, saveOnlyIfValue, visibilityToggle, store }: SettingFieldProps) {
   const initial = saveOnlyIfValue ? '' : String(value ?? '');
   const draft = store.drafts[settingKey] ?? initial;
   const error = store.errors[settingKey];
+  const [visible, setVisible] = useState(false);
+  const actualType = visibilityToggle ? (visible ? 'text' : 'password') : type;
 
   return (
     <div className="grid grid-cols-[140px_1fr] items-start gap-4">
       <Label className="pt-2 text-right text-sm font-medium text-foreground/80">{label}</Label>
       <div className="space-y-1.5 min-w-0">
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
-        <Input
-          type={type}
-          value={draft}
-          placeholder={placeholder}
-          aria-invalid={error ? 'true' : undefined}
-          className={cn(error && 'border-destructive focus-visible:ring-destructive/40')}
-          onChange={(e) => {
-            store.setDraft(settingKey, e.target.value);
-          }}
-        />
+        <div className="relative">
+          <Input
+            type={actualType}
+            value={draft}
+            placeholder={placeholder}
+            aria-invalid={error ? 'true' : undefined}
+            className={cn(
+              error && 'border-destructive focus-visible:ring-destructive/40',
+              visibilityToggle && 'pr-9',
+            )}
+            onChange={(e) => {
+              store.setDraft(settingKey, e.target.value);
+            }}
+          />
+          {visibilityToggle && (
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label={visible ? '隐藏密码' : '显示密码'}
+              onClick={() => setVisible((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+            >
+              {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          )}
+        </div>
         {error && <p className="text-xs text-destructive">{error}</p>}
       </div>
     </div>
@@ -458,6 +478,7 @@ export default function SettingsPage() {
                   type="password"
                   placeholder="留空不改；建议 12 位强密码"
                   saveOnlyIfValue
+                  visibilityToggle
                   store={store}
                 />
                 <SettingField
@@ -547,6 +568,7 @@ export default function SettingsPage() {
                   value={ldap.ldap_bind_password}
                   settingKey="system.ldap.ldap_bind_password"
                   type="password"
+                  visibilityToggle
                   store={store}
                 />
                 <SettingField
