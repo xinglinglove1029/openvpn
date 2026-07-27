@@ -964,10 +964,42 @@ func Run(info BuildInfo) {
 		c.JSON(http.StatusOK, filtered)
 	})
 
-		ovpn.POST("/settings", RequirePermission("settings:update"), func(c *gin.Context) {
-			c.Request.ParseForm()
-			for k, vs := range c.Request.PostForm {
-				val := vs[0]
+		ovpn.POST("/settings", func(c *gin.Context) {
+		c.Request.ParseForm()
+
+		// 按Tab计算保存权限：admin 和 settings:update 自动拥有所有Tab保存权限（向后兼容）
+		canSaveBase := hasPermissionCode(c, "settings:base:update") || hasPermissionCode(c, "settings:update")
+		canSaveLdap := hasPermissionCode(c, "settings:ldap:update") || hasPermissionCode(c, "settings:update")
+		canSaveOvpn := hasPermissionCode(c, "settings:openvpn:update") || hasPermissionCode(c, "settings:update")
+
+		// 非 admin 用户：如果没有任何Tab保存权限，返回 403
+		if !canSaveBase && !canSaveLdap && !canSaveOvpn {
+			recordAudit(c, "rbac", "deny", "settings:update", false, "无权限")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限"})
+			return
+		}
+
+		savedCount := 0 // 记录实际保存的字段数
+		for k, vs := range c.Request.PostForm {
+			// 权限过滤：跳过用户无保存权限的Tab字段
+			if strings.HasPrefix(k, "system.base.") && !canSaveBase {
+				continue
+			}
+			if strings.HasPrefix(k, "system.ldap.") && !canSaveLdap {
+				continue
+			}
+			if strings.HasPrefix(k, "openvpn.") && !canSaveOvpn {
+				continue
+			}
+			// 其他字段（如 system.email.*）仅在有 settings:update 时允许
+			if !strings.HasPrefix(k, "system.base.") && !strings.HasPrefix(k, "system.ldap.") && !strings.HasPrefix(k, "openvpn.") {
+				if !hasPermissionCode(c, "settings:update") {
+					continue
+				}
+			}
+
+			savedCount++
+			val := vs[0]
 
 				switch k {
 				case "system.base.admin_password":
@@ -998,16 +1030,16 @@ func Run(info BuildInfo) {
 						}
 					}
 				case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
-					_, _, err := net.ParseCIDR(val)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-						return
-					}
-				case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
-					if net.ParseIP(val) == nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": "invalid IP address: " + val})
-						return
-					}
+				_, _, err := net.ParseCIDR(val)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "无效的CIDR格式: " + val})
+					return
+				}
+			case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+				if net.ParseIP(val) == nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "无效的IP地址: " + val})
+					return
+				}
 				}
 
 				switch val {
@@ -1019,7 +1051,15 @@ func Run(info BuildInfo) {
 					viper.Set(k, val)
 				}
 			}
-			if err := viper.WriteConfig(); err != nil {
+
+		// 所有字段都被权限过滤掉，返回403
+		if savedCount == 0 {
+			recordAudit(c, "rbac", "deny", "settings:update", false, "无权限保存任何字段")
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限保存任何字段"})
+			return
+		}
+
+		if err := viper.WriteConfig(); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
@@ -1028,7 +1068,7 @@ func Run(info BuildInfo) {
 		})
 
 		// 客户端安装包管理
-		ovpn.GET("/client-packages", RequirePermission("client:manage_all"), func(c *gin.Context) {
+		ovpn.GET("/client-packages", RequirePermission("settings:packages"), func(c *gin.Context) {
 			pkg := &ClientPackage{}
 			packages := pkg.All()
 			type PackageWithURL struct {
@@ -1044,7 +1084,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, result)
 		})
 
-		ovpn.POST("/client-packages", RequirePermission("client:manage_all"), func(c *gin.Context) {
+		ovpn.POST("/client-packages", RequirePermission("settings:packages:upload"), func(c *gin.Context) {
 			file, err := c.FormFile("file")
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "请上传安装包文件"})
@@ -1095,7 +1135,7 @@ func Run(info BuildInfo) {
 			})
 		})
 
-		ovpn.DELETE("/client-packages/:id", RequirePermission("client:manage_all"), func(c *gin.Context) {
+		ovpn.DELETE("/client-packages/:id", RequirePermission("settings:packages:delete"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -1112,7 +1152,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 		})
 
-		ovpn.POST("/client-packages/:id/enable", RequirePermission("client:manage_all"), func(c *gin.Context) {
+		ovpn.POST("/client-packages/:id/enable", RequirePermission("settings:packages:enable"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -1128,7 +1168,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "已启用"})
 		})
 
-		ovpn.GET("/client-packages/:id/download", RequirePermission("client:manage_all"), func(c *gin.Context) {
+		ovpn.GET("/client-packages/:id/download", RequirePermission("settings:packages"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -1158,11 +1198,15 @@ func Run(info BuildInfo) {
 			c.File(filePath)
 		})
 
-		ovpn.POST("/server", RequirePermission("server:manage"), func(c *gin.Context) {
+		ovpn.POST("/server", func(c *gin.Context) {
 			a := c.PostForm("action")
 
 			switch a {
 			case "settings":
+				// auth-user 开关等常规服务管理操作，沿用 server:manage 权限
+				if !requirePermissionCode(c, "server:manage") {
+					return
+				}
 				k := c.PostForm("key")
 				v := c.PostForm("value")
 
@@ -1184,6 +1228,10 @@ func Run(info BuildInfo) {
 					}
 				}
 			case "renewCert":
+				// 证书续签沿用 server:manage 权限
+				if !requirePermissionCode(c, "server:manage") {
+					return
+				}
 				day := c.PostForm("day")
 				serverName := viper.GetString("system.base.server_name")
 
@@ -1243,6 +1291,10 @@ func Run(info BuildInfo) {
 				ov.sendCommand("signal SIGHUP")
 				c.JSON(http.StatusOK, gin.H{"message": "更新证书成功"})
 			case "restartSrv":
+				// 重启 OpenVPN 服务：需要 settings:service:restart 权限
+				if !requirePermissionCode(c, "settings:service:restart") {
+					return
+				}
 				_, err := ov.sendCommand("signal SIGHUP")
 				if err != nil {
 					logger.Error(context.Background(), err.Error())
@@ -1252,6 +1304,10 @@ func Run(info BuildInfo) {
 
 				c.JSON(http.StatusOK, gin.H{"message": "重启服务成功"})
 			case "getConfig":
+				// 读取 server.conf：需要 settings:service:config 权限
+				if !requirePermissionCode(c, "settings:service:config") {
+					return
+				}
 				data, err := os.ReadFile(filepath.Join(ovData, "server.conf"))
 				if err != nil {
 					logger.Error(context.Background(), err.Error())
@@ -1261,6 +1317,10 @@ func Run(info BuildInfo) {
 
 				c.JSON(http.StatusOK, gin.H{"content": string(data)})
 			case "updateConfig":
+				// 编辑 server.conf：需要 settings:service:config 权限
+				if !requirePermissionCode(c, "settings:service:config") {
+					return
+				}
 				content := c.PostForm("content")
 
 				file, err := os.OpenFile(filepath.Join(ovData, "server.conf"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)

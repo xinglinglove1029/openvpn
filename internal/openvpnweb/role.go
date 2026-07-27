@@ -154,6 +154,15 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:settings", "settings:openvpn", "OpenVPN参数Tab", "button", "", "", 5},
 	{"menu:settings", "settings:service", "服务管理Tab", "button", "", "", 6},
 	{"menu:settings", "settings:packages", "客户端安装包Tab", "button", "", "", 7},
+	// 系统设置按钮级权限（8）：各Tab操作按钮的独立权限码
+	{"settings:base", "settings:base:update", "保存基础控制", "button", "", "", 1},
+	{"settings:ldap", "settings:ldap:update", "保存LDAP认证", "button", "", "", 2},
+	{"settings:openvpn", "settings:openvpn:update", "保存OpenVPN参数", "button", "", "", 3},
+	{"settings:service", "settings:service:restart", "重启OpenVPN服务", "button", "", "", 1},
+	{"settings:service", "settings:service:config", "编辑server.conf", "button", "", "", 2},
+	{"settings:packages", "settings:packages:upload", "上传安装包", "button", "", "", 1},
+	{"settings:packages", "settings:packages:delete", "删除安装包", "button", "", "", 2},
+	{"settings:packages", "settings:packages:enable", "启用安装包", "button", "", "", 3},
 	// 通知渠道（5）
 	{"menu:channels", "channel:view", "查看渠道", "button", "", "", 1},
 	{"menu:channels", "channel:create", "创建渠道", "button", "", "", 2},
@@ -188,8 +197,10 @@ var defaultUserRoleCodes = []string{
 	"client:regenerate",
 	"client:view_online",
 	"history:view",
+	"menu:settings",      // 系统设置菜单
+	"settings:view",      // 查看设置
 	"settings:base",      // 基础控制Tab
-	"settings:packages",  // 客户端安装包Tab
+	"settings:packages",   // 客户端安装包Tab
 }
 
 // SeedPermissionsAndRoles 初始化权限与内置角色
@@ -384,6 +395,42 @@ func RequirePermission(code string) gin.HandlerFunc {
 
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限"})
 	}
+}
+
+// hasPermissionCode 检查当前请求用户是否拥有指定权限 code
+// - admin 用户（c.Get("isAdmin") == true）直接放行
+// - 否则从 c.Get("permissions") 取权限 code 列表，匹配 code 或 "*" 通过
+// 用于 handler 内部的细粒度权限判断（如按 action 区分权限的场景）
+func hasPermissionCode(c *gin.Context, code string) bool {
+	if isAdmin, ok := c.Get("isAdmin"); ok {
+		if b, _ := isAdmin.(bool); b {
+			return true
+		}
+	} else {
+		// 兜底：AuthMiddleWare 未设置（理论上不会发生），按 session 判 admin
+		if username, ok := sessions.Default(c).Get("user").(string); ok && adminUsername != "" && username == adminUsername {
+			return true
+		}
+	}
+	perms, _ := c.Get("permissions")
+	codes, _ := perms.([]string)
+	for _, p := range codes {
+		if p == "*" || p == code {
+			return true
+		}
+	}
+	return false
+}
+
+// requirePermissionCode 在 handler 内部检查权限，无权限时写审计日志并返回 403
+// 返回 true 表示有权限可继续执行，false 表示已被拒绝（handler 应直接 return）
+func requirePermissionCode(c *gin.Context, code string) bool {
+	if hasPermissionCode(c, code) {
+		return true
+	}
+	recordAudit(c, "rbac", "deny", code, false, "无权限")
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限"})
+	return false
 }
 
 // permissionTreeHandler GET /ovpn/permission/tree 返回权限树

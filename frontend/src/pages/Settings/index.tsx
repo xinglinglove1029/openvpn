@@ -31,6 +31,7 @@ import { Separator } from '@/ui/separator';
 import { Button } from '@/ui/button';
 import { Textarea } from '@/ui/textarea';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { HasPermission } from '@/components/HasPermission';
 import {
   Dialog,
   DialogContent,
@@ -269,6 +270,15 @@ export default function SettingsPage() {
   const canViewPackages = hasPermission('settings:packages');
   const canUpdate = hasPermission('settings:update');
 
+  // 检查各 Tab 的保存权限（settings:update 作为兼容通配，拥有即等价于所有 Tab 保存权限）
+  const canSaveBase = canUpdate || hasPermission('settings:base:update');
+  const canSaveLdap = canUpdate || hasPermission('settings:ldap:update');
+  const canSaveOvpn = canUpdate || hasPermission('settings:openvpn:update');
+  // service.auth_user 的保存需要 server:manage 或 settings:update
+  const canSaveServiceAuth = canUpdate || hasPermission('server:manage');
+  // SaveBar 仅在用户拥有至少一个 Tab 的保存权限时显示
+  const canShowSaveBar = canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth;
+
   // 检查是否至少有一个 Tab 权限，否则重定向到概览页
   const hasAnyTabPermission = canViewBase || canViewLdap || canViewOpenvpn || canViewService || canViewPackages;
 
@@ -318,6 +328,18 @@ export default function SettingsPage() {
 
   const isDirty = dirtyKeys.length > 0;
 
+  // 过滤出用户有保存权限的 dirty keys（仅这些会被提交保存）
+  const saveableDirtyKeys = useMemo(() => {
+    return dirtyKeys.filter((key) => {
+      if (key.startsWith('system.base.') && !canSaveBase) return false;
+      if (key.startsWith('system.ldap.') && !canSaveLdap) return false;
+      if (key.startsWith('openvpn.') && !canSaveOvpn) return false;
+      // service.auth_user 的保存需要 server:manage 或 settings:update
+      if (key === 'service.auth_user' && !canSaveServiceAuth) return false;
+      return true;
+    });
+  }, [dirtyKeys, canSaveBase, canSaveLdap, canSaveOvpn, canSaveServiceAuth]);
+
   const validateAll = useCallback((): boolean => {
     const next: Record<string, string | undefined> = {};
     let ok = true;
@@ -337,7 +359,7 @@ export default function SettingsPage() {
   }, [drafts]);
 
   async function handleSave() {
-    if (!isDirty || saving) return;
+    if (saveableDirtyKeys.length === 0 || saving) return;
     if (!validateAll()) {
       toast.error('请先修正页面上红色高亮的字段');
       return;
@@ -345,9 +367,9 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       // 分离 auth-user（走 /ovpn/server）和普通设置（走 /settings）
-      const authUserDirty = dirtyKeys.includes('service.auth_user');
+      const authUserDirty = saveableDirtyKeys.includes('service.auth_user');
       const payload: Record<string, string> = {};
-      for (const k of dirtyKeys) {
+      for (const k of saveableDirtyKeys) {
         if (k === 'service.auth_user') continue;
         payload[k] = trimText(drafts[k]);
       }
@@ -370,7 +392,7 @@ export default function SettingsPage() {
       // 保存成功后用 drafts 覆盖 originals（实现"保存即生效"的语义）
       setOriginals((prev) => {
         const next = { ...prev };
-        for (const k of dirtyKeys) next[k] = trimText(drafts[k]);
+        for (const k of saveableDirtyKeys) next[k] = trimText(drafts[k]);
         return next;
       });
       // 重新拉一次数据，确保与服务端同步
@@ -429,7 +451,7 @@ export default function SettingsPage() {
   };
 
   // 确定默认 Tab 值：取第一个有权限的 Tab
-  const defaultTab = canViewBase ? 'base' : canViewLdap ? 'ldap' : canViewOpenvpn ? 'openvpn' : canViewService ? 'service' : 'packages';
+  const defaultTab = canViewBase ? 'base' : canViewLdap ? 'ldap' : canViewOpenvpn ? 'openvpn' : canViewService ? 'service' : canViewPackages ? 'packages' : 'base';
 
   return (
     <div className="space-y-6">
@@ -751,12 +773,12 @@ export default function SettingsPage() {
         )}
       </Tabs>
 
-      {/* 整页统一的保存条：固定在底部，所有 Tab 共享；仅对有 settings:update 权限的用户显示 */}
-      {canUpdate && (
+      {/* 整页统一的保存条：固定在底部，所有 Tab 共享；拥有 settings:update 或至少一个 Tab:update 权限时显示 */}
+      {canShowSaveBar && (
         <SaveBar
-          dirtyCount={dirtyKeys.length}
+          dirtyCount={saveableDirtyKeys.length}
           saving={saving}
-          disabled={!isDirty}
+          disabled={saveableDirtyKeys.length === 0}
           onSave={handleSave}
           onReset={handleReset}
         />
@@ -914,14 +936,18 @@ function ServiceTab({ store }: { store: DraftStore }) {
             <p className="text-sm font-medium">服务控制</p>
             <p className="text-xs text-muted-foreground">重启会向 OpenVPN 进程发送 SIGHUP 信号，重新加载 server.conf。</p>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => setRestartConfirm(true)} disabled={restarting}>
-                <RefreshCw className="h-4 w-4 mr-2" />
-                {restarting ? '重启中...' : '重启 OpenVPN'}
-              </Button>
-              <Button variant="outline" onClick={openServerConfig} disabled={configLoading}>
-                <FileCode2 className="h-4 w-4 mr-2" />
-                编辑 server.conf
-              </Button>
+              <HasPermission code="settings:service:restart">
+                <Button onClick={() => setRestartConfirm(true)} disabled={restarting}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  {restarting ? '重启中...' : '重启 OpenVPN'}
+                </Button>
+              </HasPermission>
+              <HasPermission code="settings:service:config">
+                <Button variant="outline" onClick={openServerConfig} disabled={configLoading}>
+                  <FileCode2 className="h-4 w-4 mr-2" />
+                  编辑 server.conf
+                </Button>
+              </HasPermission>
             </div>
           </div>
         </CardContent>
@@ -1122,10 +1148,12 @@ function ClientPackagesTab() {
             <CardTitle>客户端安装包管理</CardTitle>
             <CardDescription>上传各平台的 OpenVPN 客户端安装包，用户开通邮件会自动附带下载链接</CardDescription>
           </div>
-          <Button onClick={openUpload} disabled={loading}>
-            <Upload className="h-4 w-4 mr-2" />
-            上传安装包
-          </Button>
+          <HasPermission code="settings:packages:upload">
+            <Button onClick={openUpload} disabled={loading}>
+              <Upload className="h-4 w-4 mr-2" />
+              上传安装包
+            </Button>
+          </HasPermission>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -1181,23 +1209,27 @@ function ClientPackagesTab() {
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {!pkg.isActive && (
+                              <HasPermission code="settings:packages:enable">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleActivate(pkg)}
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                  启用
+                                </Button>
+                              </HasPermission>
+                            )}
+                            <HasPermission code="settings:packages:delete">
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => handleActivate(pkg)}
+                                onClick={() => setConfirmDelete(pkg)}
+                                className="text-destructive hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
                               >
-                                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                                启用
+                                <Trash2 className="h-3.5 w-3.5" />
                               </Button>
-                            )}
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setConfirmDelete(pkg)}
-                              className="text-destructive hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                            </HasPermission>
                           </div>
                         </div>
                       ))}
