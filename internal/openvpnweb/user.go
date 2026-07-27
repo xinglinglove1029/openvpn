@@ -31,10 +31,15 @@ type User struct {
 	IpAddr       string     `gorm:"uniqueIndex;default:NULL" json:"ipAddr" form:"ipAddr"`
 	OvpnConfig   string     `json:"ovpnConfig" form:"ovpnConfig"`
 	MfaSecret    string     `json:"mfaSecret" form:"mfaSecret"`
+	MfaEnabled   bool       `gorm:"default:false" json:"mfaEnabled" form:"mfaEnabled"`
 	IsFirstLogin *bool      `gorm:"default:true" form:"isFirstLogin" json:"isFirstLogin"`
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty" form:"lastLoginAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 	UpdatedAt    time.Time  `json:"updatedAt,omitempty" form:"updatedAt,omitempty"`
+}
+
+func (u *User) IsMFAEnabled() bool {
+	return u.MfaEnabled || u.MfaSecret != ""
 }
 
 func (u *User) BeforeSave(tx *gorm.DB) (err error) {

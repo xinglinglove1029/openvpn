@@ -12,6 +12,7 @@ import (
 
 type SysBeseConfig struct {
 	SiteUrl              string `json:"site_url" mapstructure:"site_url"`
+	ServerAddr           string `json:"server_addr" mapstructure:"server_addr"`
 	WebPort              string `json:"web_port" mapstructure:"web_port"`
 	AdminUsername        string `json:"admin_username" mapstructure:"admin_username"`
 	AdminPassword        string `json:"admin_password" mapstructure:"admin_password"`

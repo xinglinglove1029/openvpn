@@ -643,7 +643,7 @@ function UserTablePanel({
       (statusFilter === 'enabled' ? user.isEnable !== false : user.isEnable === false);
     const matchesMfa =
       mfaFilter === 'all' ||
-      (mfaFilter === 'enabled' ? Boolean(user.mfaSecret) : !user.mfaSecret);
+      (mfaFilter === 'enabled' ? Boolean(user.mfaSecret || user.mfaEnabled) : !(user.mfaSecret || user.mfaEnabled));
     const matchesExpire =
       expireFilter === 'all' ||
       (expireFilter === 'expired'
@@ -868,9 +868,9 @@ function UserTablePanel({
       key: 'mfa',
       header: 'MFA',
       sortable: true,
-      sortAccessor: (user) => (user.mfaSecret ? 1 : 0),
+      sortAccessor: (user) => (user.mfaSecret || user.mfaEnabled ? 1 : 0),
       render: (user) =>
-        user.mfaSecret ? (
+        user.mfaSecret || user.mfaEnabled ? (
           <Badge variant="secondary">开启</Badge>
         ) : (
           <span className="text-muted-foreground">-</span>

@@ -4,6 +4,7 @@ export interface SettingsResponse {
   system: {
     base: {
       site_url: string;
+      server_addr: string;
       web_port: string;
       admin_username: string;
       auto_update_ovpn_config: boolean;
@@ -111,6 +112,7 @@ export interface UserRecord {
   password?: string;
   ovpnConfig?: string;
   mfaSecret?: string;
+  mfaEnabled?: boolean;
   lastLoginAt?: string;
   createdAt?: string;
   updatedAt?: string;

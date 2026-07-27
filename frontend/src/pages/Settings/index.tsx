@@ -199,6 +199,7 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   const out: Record<string, string> = {};
   const base = settings?.system?.base ?? ({} as SettingsResponse['system']['base']);
   out['system.base.site_url'] = String(base.site_url ?? '');
+  out['system.base.server_addr'] = String(base.server_addr ?? '');
   out['system.base.web_port'] = String(base.web_port ?? '');
   out['system.base.admin_username'] = String(base.admin_username ?? '');
   // 密码字段永远不存草稿，留空表示不修改
@@ -428,6 +429,13 @@ export default function SettingsPage() {
                   value={base.site_url}
                   settingKey="system.base.site_url"
                   placeholder="https://example.com"
+                  store={store}
+                />
+                <SettingField
+                  label="VPN 服务器地址"
+                  value={base.server_addr}
+                  settingKey="system.base.server_addr"
+                  placeholder="公网 IP 或域名，留空则从站点地址解析"
                   store={store}
                 />
                 <SettingField

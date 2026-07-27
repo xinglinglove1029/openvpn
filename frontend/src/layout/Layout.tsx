@@ -5,6 +5,8 @@ import { TopBar } from './TopBar';
 import { BackgroundScene } from '@/components/BackgroundScene';
 import { useAuth } from '@/store/auth';
 
+const adminOnlyPaths = ['/users', '/firewall', '/certs', '/audit', '/settings', '/channels'];
+
 export function Layout() {
   const { user, isLoading } = useAuth();
   const navigate = useNavigate();
@@ -16,6 +18,14 @@ export function Layout() {
       navigate(`/login?next=${next}`, { replace: true });
     }
   }, [isLoading, user, navigate, location.pathname, location.search]);
+
+  useEffect(() => {
+    if (!user || isLoading) return;
+    const isAdmin = !user.id || user.id <= 0;
+    if (!isAdmin && adminOnlyPaths.some((p) => location.pathname.startsWith(p))) {
+      navigate('/overview', { replace: true });
+    }
+  }, [user, isLoading, location.pathname, navigate]);
 
   // 加载中或未登录时显示骨架占位，避免页面闪烁
   if (isLoading || !user) {

@@ -526,10 +526,11 @@ func parseIPv6(s string) bool {
 }
 
 // generateClientConfig 自动生成客户端配置（仅传客户端名称）
-// 这是 generateClientConfigGo 的包装函数：从 viper 配置和 server.conf 中
-// 读取服务器地址、端口、协议、IPv6、MFA 等参数，再调用底层生成逻辑。
+// 这是 generateClientConfigGo 的包装函数：从 viper 配置中
+// 读取服务器地址、端口、协议、IPv6 等参数，再调用底层生成逻辑。
 // 用于"添加用户时自动创建客户端"场景。
-func generateClientConfig(name string) error {
+// mfaEnabled: 是否在客户端配置中包含 static-challenge（MFA 验证）
+func generateClientConfig(name string, mfaEnabled bool) error {
 	if name == "" {
 		return fmt.Errorf("客户端名称不能为空")
 	}
@@ -565,16 +566,10 @@ func generateClientConfig(name string) error {
 	}
 	ipv6 := viper.GetBool("openvpn.ovpn_ipv6")
 
-	// 3) MFA：server.conf 中存在 auth-user-pass-verify 即视为启用
-	mfa := false
-	if v, err := readServerConfKey("auth-user-pass-verify"); err == nil && strings.TrimSpace(v) != "" {
-		mfa = true
-	}
-
-	// 4) 自定义配置：暂留空（如需透传额外 client 配置可扩展）
+	// 3) 自定义配置：暂留空（如需透传额外 client 配置可扩展）
 	customConfig := ""
 
-	return generateClientConfigGo(name, serverAddr, port, proto, ipv6, customConfig, mfa)
+	return generateClientConfigGo(name, serverAddr, port, proto, ipv6, customConfig, mfaEnabled)
 }
 
 // readServerConfKey 从 server.conf 中读取指定指令的第一个参数

@@ -16,8 +16,7 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Textarea } from '@/ui/textarea';
-import { Switch } from '@/ui/switch';
-import { Separator } from '@/ui/separator';
+
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -190,7 +189,7 @@ export default function ClientsPage() {
       </div>
 
       {/* Client download links */}
-      {settings && Object.keys(settings.client.client_url).length > 0 && (
+      {settings?.client?.client_url && Object.keys(settings.client.client_url).length > 0 && (
         <Card>
           <CardContent className="pt-4">
             <div className="flex flex-wrap items-center gap-4">
@@ -296,7 +295,6 @@ function AddClientDialog({
   const [name, setName] = useState('');
   const [serverAddr, setServerAddr] = useState('');
   const [serverPort, setServerPort] = useState('');
-  const [mfa, setMfa] = useState(false);
   const [ccdConfig, setCcdConfig] = useState('');
   const [clientConfig, setClientConfig] = useState('');
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -305,7 +303,6 @@ function AddClientDialog({
     setName('');
     setServerAddr('');
     setServerPort('');
-    setMfa(false);
     setCcdConfig('');
     setClientConfig('');
     setErrors({});
@@ -342,7 +339,6 @@ function AddClientDialog({
         serverPort: trimText(serverPort),
         ccdConfig,
         config: clientConfig,
-        mfa,
       });
       notify('success', result.message || '客户端已创建');
       onOpenChange(false);
@@ -360,7 +356,7 @@ function AddClientDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>添加客户端配置</DialogTitle>
-          <DialogDescription>名称会用于生成证书与 .ovpn 文件；地址、端口、CCD、自定义配置与 MFA 会写入当前客户端配置。</DialogDescription>
+          <DialogDescription>名称会用于生成证书与 .ovpn 文件；地址、端口、CCD、自定义配置会写入当前客户端配置。MFA 验证将根据用户绑定状态自动启用。</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Name */}
@@ -411,14 +407,6 @@ function AddClientDialog({
               {errors.serverPort && <p className="text-xs text-destructive">{errors.serverPort}</p>}
             </div>
           </div>
-
-          {/* MFA switch */}
-          <div className="flex items-center justify-between rounded-md border px-4 py-3">
-            <Label htmlFor="client-mfa">启用 MFA</Label>
-            <Switch id="client-mfa" checked={mfa} onCheckedChange={setMfa} />
-          </div>
-
-          <Separator />
 
           {/* CCD config */}
           <div className="grid grid-cols-[140px_1fr] items-start gap-4">

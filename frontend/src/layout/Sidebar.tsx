@@ -12,22 +12,28 @@ import {
   BellRing,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useAuth } from '../store/auth';
 
-const navItems = [
-  { path: '/overview', label: '概览', icon: LayoutDashboard },
-  { path: '/users', label: '账号管理', icon: Users },
-  { path: '/clients', label: '客户端', icon: Smartphone },
-  { path: '/firewall', label: '防火墙', icon: Shield },
-  { path: '/history', label: '连接历史', icon: History },
-  { path: '/certs', label: '证书', icon: FileKey },
-  { path: '/audit', label: '操作审计', icon: FileText },
-  { path: '/settings', label: '系统设置', icon: Settings },
-  { path: '/channels', label: '通知渠道', icon: BellRing },
-  { path: '/notifications', label: '站内信', icon: Bell },
+const allNavItems = [
+  { path: '/overview', label: '概览', icon: LayoutDashboard, adminOnly: false },
+  { path: '/users', label: '账号管理', icon: Users, adminOnly: true },
+  { path: '/clients', label: '客户端', icon: Smartphone, adminOnly: false },
+  { path: '/firewall', label: '防火墙', icon: Shield, adminOnly: true },
+  { path: '/history', label: '连接历史', icon: History, adminOnly: false },
+  { path: '/certs', label: '证书', icon: FileKey, adminOnly: true },
+  { path: '/audit', label: '操作审计', icon: FileText, adminOnly: true },
+  { path: '/settings', label: '系统设置', icon: Settings, adminOnly: true },
+  { path: '/channels', label: '通知渠道', icon: BellRing, adminOnly: true },
+  { path: '/notifications', label: '站内信', icon: Bell, adminOnly: false },
 ];
 
 export function Sidebar() {
   const location = useLocation();
+  const { user } = useAuth();
+
+  const isAdmin = !user?.id || user.id <= 0;
+
+  const navItems = allNavItems.filter((item) => isAdmin || !item.adminOnly);
 
   return (
     <nav className="w-64 min-h-screen border-r bg-card/80 backdrop-blur flex flex-col">

@@ -80,6 +80,11 @@ export default function LoginPage() {
     setSaving(true);
     try {
       const result = await loginWithCredentials(username, password, remember7d);
+      // 后端返回 mfaRequired 表示需要 MFA 验证
+      if (result?.mfaRequired) {
+        setMode('mfa');
+        return;
+      }
       if (result?.user?.isFirstLogin) {
         setPendingUser(result.user);
         setMode('first-password');
@@ -101,12 +106,16 @@ export default function LoginPage() {
     if (Object.keys(nextErrors).length) return;
     setSaving(true);
     try {
-      // MFA 模式下，仅提交验证码，携带当前用户名作为 form 字段
-      const response = await fetch('/mfa/verify', {
+      // MFA 验证：向 /login 提交用户名 + passcode（后端从缓存中取出 valid_user 进行验证）
+      const response = await fetch('/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
         credentials: 'same-origin',
-        body: new URLSearchParams({ username, passcode }).toString(),
+        body: new URLSearchParams({
+          username,
+          passcode,
+          remember7d: remember7d ? 'on' : '',
+        }).toString(),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({ message: response.statusText }));

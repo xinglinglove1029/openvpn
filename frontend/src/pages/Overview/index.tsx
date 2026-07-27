@@ -380,8 +380,8 @@ export default function OverviewPage() {
                     连接数趋势
                   </p>
                   <div className="flex items-end gap-1 h-32">
-                    {dashboard.trends.map((point) => {
-                      const max = Math.max(1, ...dashboard.trends.map((t) => t.connections));
+                    {(dashboard.trends ?? []).map((point) => {
+                      const max = Math.max(1, ...(dashboard.trends ?? []).map((t) => t.connections));
                       return (
                         <div
                           key={point.hour}
@@ -393,10 +393,10 @@ export default function OverviewPage() {
                     })}
                   </div>
                   <div className="flex justify-between mt-1 text-[10px] text-muted-foreground">
-                    {dashboard.trends.length > 0 && (
+                    {(dashboard.trends ?? []).length > 0 && (
                       <>
-                        <span>{dashboard.trends[0].hour}</span>
-                        <span>{dashboard.trends[dashboard.trends.length - 1].hour}</span>
+                        <span>{dashboard.trends?.[0]?.hour}</span>
+                        <span>{dashboard.trends?.[dashboard.trends.length - 1]?.hour}</span>
                       </>
                     )}
                   </div>
@@ -408,9 +408,9 @@ export default function OverviewPage() {
                     <Users className="h-3.5 w-3.5" />
                     Top 流量用户
                   </p>
-                  {dashboard.topUsers.length ? (
+                  {(dashboard.topUsers ?? []).length ? (
                     <div className="space-y-2">
-                      {dashboard.topUsers.map((user) => (
+                      {(dashboard.topUsers ?? []).map((user) => (
                         <div key={user.username} className="flex items-center justify-between text-sm">
                           <span className="truncate">{user.username}</span>
                           <Badge variant="secondary" className="ml-2 shrink-0">{user.text}</Badge>

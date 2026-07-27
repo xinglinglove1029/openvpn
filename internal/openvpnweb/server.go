@@ -17,6 +17,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,7 +128,7 @@ var (
 		},
 	)
 	ovData = os.Getenv("OVPN_DATA")
-	conf   config
+	conf config
 )
 
 func (ov *ovpn) sendCommand(command string) (string, error) {
@@ -482,10 +483,29 @@ func AuthMiddleWare() gin.HandlerFunc {
 		}
 
 		if user, ok := user.(string); ok {
-			// 暴露到 gin.Context，供下游 handler（未读数、标记已读、ws 等）使用
 			c.Set("user", user)
 
-			if c.Request.URL.Path != "/" && !strings.HasPrefix(c.Request.URL.Path, "/client") && user != adminUsername {
+			isPublicPath := func(path string) bool {
+				if path == "/" ||
+					strings.HasPrefix(path, "/client") ||
+					strings.HasPrefix(path, "/ovpn/ws") ||
+					strings.HasPrefix(path, "/ovpn/notify") ||
+					strings.HasPrefix(path, "/ovpn/dashboard") ||
+					strings.HasPrefix(path, "/ovpn/audit") ||
+					strings.HasPrefix(path, "/ovpn/client") ||
+					strings.HasPrefix(path, "/ovpn/user") ||
+					strings.HasPrefix(path, "/ovpn/history") ||
+					strings.HasPrefix(path, "/ovpn/online-client") ||
+					strings.HasPrefix(path, "/ovpn/certs") {
+					return true
+				}
+				if path == "/ovpn/settings" && c.Request.Method == "GET" {
+					return true
+				}
+				return false
+			}
+
+			if !isPublicPath(c.Request.URL.Path) && user != adminUsername {
 				c.Redirect(302, "/")
 				c.Abort()
 				return
@@ -497,6 +517,9 @@ func AuthMiddleWare() gin.HandlerFunc {
 }
 
 func init() {
+	if ovData == "" {
+		ovData = "data"
+	}
 	initConfig()
 	loadConfig()
 }
@@ -703,7 +726,7 @@ func Run(info BuildInfo) {
 				user := u.Info()
 				if user.MfaSecret != "" {
 					cc.Set("valid_user", u.Username, 1*time.Minute)
-					c.JSON(200, gin.H{"message": "需要 MFA 验证"})
+					c.JSON(200, gin.H{"message": "需要 MFA 验证", "mfaRequired": true})
 					return
 				}
 
@@ -1392,6 +1415,10 @@ func Run(info BuildInfo) {
 				u.IsFirstLogin = &val
 			}
 
+			if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
+				u.MfaEnabled = mfaEnabled[0] == "true"
+			}
+
 			err = u.Create()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -1408,7 +1435,7 @@ func Run(info BuildInfo) {
 				} else {
 					clientName = u.OvpnConfig
 				}
-				if err := generateClientConfig(clientName); err != nil {
+				if err := generateClientConfig(clientName, u.IsMFAEnabled()); err != nil {
 					logger.Error(context.Background(), "auto create client for %s failed: %s", u.Username, err)
 				} else {
 					createdClientName = clientName
@@ -1720,14 +1747,19 @@ func Run(info BuildInfo) {
 
 		ovpn.POST("/client", func(c *gin.Context) {
 			name := c.PostForm("name")
-			serverAddr := c.PostForm("serverAddr")
-			serverPort := c.PostForm("serverPort")
+			serverAddr := strings.TrimSpace(c.PostForm("serverAddr"))
+			serverPort := strings.TrimSpace(c.PostForm("serverPort"))
 			config := c.PostForm("config")
 			ccdConfig := c.PostForm("ccdConfig")
-			mfa := c.PostForm("mfa")
+
+			// 动态查询该客户端名称对应的用户是否已启用 MFA
+			mfaEnabled := false
+			var queryUser User
+			if err := db.Where("username = ? OR ovpn_config = ?", name, name+".ovpn").First(&queryUser).Error; err == nil {
+				mfaEnabled = queryUser.IsMFAEnabled()
+			}
 
 			clientsDir := filepath.Join(ovData, "clients")
-
 			os.MkdirAll(clientsDir, 0755)
 
 			clientsRoot, err := os.OpenRoot(clientsDir)
@@ -1741,13 +1773,55 @@ func Run(info BuildInfo) {
 			_, err = clientsRoot.Stat(name + ".ovpn")
 			if err != nil {
 				if os.IsNotExist(err) {
-					cmd := exec.Command("docker-entrypoint.sh", "genclient", name, serverAddr, serverPort, config, ccdConfig, mfa)
-					if out, err := cmd.CombinedOutput(); err != nil {
-						if len(out) == 0 {
-							out = []byte(err.Error())
+					// 服务器地址：优先用用户填写的；否则从系统配置获取
+					if serverAddr == "" {
+						serverAddr = strings.TrimSpace(viper.GetString("system.base.server_addr"))
+						if serverAddr == "" {
+							siteURL := viper.GetString("system.base.site_url")
+							if siteURL != "" {
+								if u, err := neturl.Parse(siteURL); err == nil && u.Hostname() != "" {
+									serverAddr = u.Hostname()
+								}
+							}
 						}
-						logger.Error(context.Background(), string(out))
-						c.JSON(http.StatusInternalServerError, gin.H{"message": "客户端添加失败"})
+						if serverAddr == "" {
+							if v, err := readServerConfKey("local"); err == nil && strings.TrimSpace(v) != "" {
+								serverAddr = strings.TrimSpace(v)
+							}
+						}
+						if serverAddr == "" {
+							serverAddr = "127.0.0.1"
+						}
+					}
+
+					// 端口：优先用用户填写的；否则从系统配置获取
+					if serverPort == "" {
+						serverPort = strings.TrimSpace(viper.GetString("openvpn.ovpn_port"))
+						if serverPort == "" {
+							serverPort = "1194"
+						}
+					}
+
+					// 协议和 IPv6
+					proto := strings.TrimSpace(viper.GetString("openvpn.ovpn_proto"))
+					if proto == "" {
+						proto = "udp"
+					}
+					ipv6 := viper.GetBool("openvpn.ovpn_ipv6")
+
+					// 写入 CCD 配置
+					if ccdConfig != "" {
+						ccdDir := filepath.Join(ovData, "ccd")
+						os.MkdirAll(ccdDir, 0755)
+						if err := os.WriteFile(filepath.Join(ccdDir, name), []byte(ccdConfig), 0644); err != nil {
+							logger.Error(context.Background(), "写入 CCD 配置失败: %s", err.Error())
+						}
+					}
+
+					// 使用 Go 版本生成客户端配置
+					if err := generateClientConfigGo(name, serverAddr, serverPort, proto, ipv6, config, mfaEnabled); err != nil {
+						logger.Error(context.Background(), "客户端添加失败: %s", err.Error())
+						c.JSON(http.StatusInternalServerError, gin.H{"message": "客户端添加失败: " + err.Error()})
 						return
 					}
 
@@ -2207,7 +2281,7 @@ func Run(info BuildInfo) {
 			challengeLine := `static-challenge "Enter MFA code" 1`
 			content := string(data)
 
-			if u.MfaSecret != "" {
+			if u.IsMFAEnabled() {
 				if !strings.Contains(content, challengeLine) {
 					if !strings.HasSuffix(content, "\n") {
 						content += "\n"
@@ -2253,12 +2327,12 @@ func Run(info BuildInfo) {
 
 			u = u.Info()
 			if u.MfaSecret == "" {
-				secret, err := GenMfa(u.Username)
+				secret, otpauthUrl, err := GenMfa(u.Username)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Errorf("MFA: %w", err).Error()})
 				} else {
 					u.MfaSecret = secret
-					c.JSON(http.StatusOK, gin.H{"mfaEnable": false, "user": u})
+					c.JSON(http.StatusOK, gin.H{"mfaEnable": false, "user": u, "otpauthUrl": otpauthUrl})
 				}
 			} else {
 				c.JSON(http.StatusOK, gin.H{"mfaEnable": true, "user": u})
@@ -2284,8 +2358,65 @@ func Run(info BuildInfo) {
 			if !vaild {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "验证码错误"})
 			} else {
-				db.Model(&User{}).Where("id = ?", u.ID).Update("mfa_secret", u.MfaSecret)
-				c.JSON(http.StatusOK, gin.H{"message": "MFA 已启用"})
+				db.Model(&User{}).Where("id = ?", u.ID).Updates(map[string]interface{}{
+					"mfa_secret":  u.MfaSecret,
+					"mfa_enabled": true,
+				})
+
+				// 异步重新生成客户端配置文件（含 static-challenge）并发送邮件通知
+				go func(userID uint) {
+					cu := User{ID: userID}.Info()
+					if cu.Email == "" {
+						return
+					}
+
+					// 重新生成客户端配置文件（先删除旧的，再生成含 MFA 的新配置）
+					if cu.OvpnConfig != "" {
+						clientFilePath := filepath.Join(ovData, "clients", cu.OvpnConfig)
+						os.Remove(clientFilePath)
+						if err := generateClientConfig(strings.TrimSuffix(cu.OvpnConfig, ".ovpn"), true); err != nil {
+							logger.Error(context.Background(), "重新生成客户端配置失败: %s", err.Error())
+						}
+					}
+
+					var buf bytes.Buffer
+					tpl, err := template.New("account-email").Parse(accountEmailTemplate)
+					if err != nil {
+						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
+						return
+					}
+					err = tpl.Execute(&buf, struct {
+						Type          string
+						Name          string
+						Username      string
+						Password      string
+						SiteUrl       string
+						LocalPackages []LocalPackageInfo
+					}{
+						Type:     "mfaEnabled",
+						Name:     cu.Name,
+						Username: cu.Username,
+						SiteUrl:  viper.GetString("system.base.site_url"),
+					})
+					if err != nil {
+						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
+						return
+					}
+
+					var attachments []string
+					if cu.OvpnConfig != "" {
+						clientFilePath := filepath.Join(ovData, "clients", cu.OvpnConfig)
+						if _, err := os.Stat(clientFilePath); err == nil {
+							attachments = append(attachments, clientFilePath)
+						}
+					}
+
+					if err := sendUserEmail(cu.Email, "MFA 已启用通知", buf.String(), attachments, cu.Username, "mfa_enabled"); err != nil {
+						logger.Error(context.Background(), "发送 MFA 启用邮件失败: %s", err.Error())
+					}
+				}(u.ID)
+
+				c.JSON(http.StatusOK, gin.H{"message": "MFA 已启用，最新客户端配置文件已发送至您的邮箱"})
 			}
 		})
 
@@ -2303,7 +2434,10 @@ func Run(info BuildInfo) {
 			}
 
 			targetUser := User{ID: u.ID}.Info()
-			db.Model(&User{}).Where("id = ?", u.ID).Update("mfa_secret", nil)
+			db.Model(&User{}).Where("id = ?", u.ID).Updates(map[string]interface{}{
+				"mfa_secret":  nil,
+				"mfa_enabled": false,
+			})
 
 			go func() {
 				if targetUser.Email != "" {

@@ -5,6 +5,7 @@ interface LoginResponse {
   message: string;
   redirect?: string;
   user?: ClientUserInfo;
+  mfaRequired?: boolean;
 }
 
 interface AuthContextType {

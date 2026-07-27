@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Lock, User as UserIcon, ShieldCheck, Save } from 'lucide-react';
+import QRCode from 'qrcode';
 import { toast } from 'sonner';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
+import { Button } from '@/ui/button';
+import { Badge } from '@/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
 import { Separator } from '@/ui/separator';
 import { api } from '@/api';
@@ -64,6 +67,16 @@ export default function ProfilePage() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordErrors, setPasswordErrors] = useState<FieldErrors>({});
 
+  // MFA 绑定状态
+  const [mfaBound, setMfaBound] = useState(false);
+  const [mfaBinding, setMfaBinding] = useState(false);
+  const [mfaSecret, setMfaSecret] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [mfaPasscode, setMfaPasscode] = useState('');
+  const [mfaError, setMfaError] = useState('');
+  const [mfaSaving, setMfaSaving] = useState(false);
+  const [mfaUnbinding, setMfaUnbinding] = useState(false);
+
   // 加载当前用户信息
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +110,7 @@ export default function ProfilePage() {
           setEditName(record?.name ?? user?.name ?? '');
           setEditEmail(record?.email ?? user?.email ?? '');
           setProfileErrors({});
+          setMfaBound(!!record?.mfaSecret || !!record?.mfaEnabled);
         }
       } catch (error) {
         if (!cancelled) {
@@ -240,6 +254,76 @@ export default function ProfilePage() {
       toast.error(`修改失败：${messageOf(error)}`);
     } finally {
       setSavingPassword(false);
+    }
+  }
+
+  // 开始 MFA 绑定：调用 GET /client/mfa 获取 secret 和 otpauthUrl
+  const handleStartBindMfa = useCallback(async () => {
+    setMfaBinding(true);
+    setMfaPasscode('');
+    setMfaError('');
+    try {
+      const data = await api.get<{ mfaEnable: boolean; user: UserRecord; otpauthUrl?: string }>('/client/mfa');
+      if (data.otpauthUrl && data.user?.mfaSecret) {
+        setMfaSecret(data.user.mfaSecret);
+        const url = await QRCode.toDataURL(data.otpauthUrl, { width: 200, margin: 2 });
+        setQrDataUrl(url);
+      }
+    } catch (error) {
+      toast.error(`获取 MFA 信息失败：${messageOf(error)}`);
+      setMfaBinding(false);
+    }
+  }, []);
+
+  // 确认绑定 MFA：调用 POST /client/mfa 验证 passcode 并保存 secret
+  async function handleConfirmBindMfa(e: React.FormEvent) {
+    e.preventDefault();
+    if (!mfaPasscode.trim()) {
+      setMfaError('请输入验证码');
+      return;
+    }
+    setMfaSaving(true);
+    try {
+      await api.postForm('/client/mfa', {
+        id: user?.id ?? 0,
+        mfaSecret,
+        passcode: mfaPasscode,
+      });
+      toast.success('MFA 绑定成功，新的客户端配置文件已发送至您的邮箱，请使用新配置连接 VPN');
+      setMfaBound(true);
+      setMfaBinding(false);
+      setMfaPasscode('');
+      setMfaSecret('');
+      setQrDataUrl('');
+      setProfile((prev) => (prev ? { ...prev, mfaSecret: '***', mfaEnabled: true } : prev));
+    } catch (error) {
+      setMfaError(messageOf(error));
+    } finally {
+      setMfaSaving(false);
+    }
+  }
+
+  // 取消 MFA 绑定
+  function handleCancelBindMfa() {
+    setMfaBinding(false);
+    setMfaPasscode('');
+    setMfaError('');
+    setMfaSecret('');
+    setQrDataUrl('');
+  }
+
+  // 解除 MFA 绑定
+  async function handleUnbindMfa() {
+    setMfaUnbinding(true);
+    try {
+      await api.delete(`/client/mfa/${user?.id ?? 0}`);
+      toast.success('MFA 已解除绑定');
+      setMfaBound(false);
+      setProfile((prev) => (prev ? { ...prev, mfaSecret: '', mfaEnabled: false } : prev));
+    } catch (error) {
+      toast.error(`解除绑定失败：${messageOf(error)}`);
+    } finally {
+      setMfaUnbinding(false);
     }
   }
 
@@ -447,6 +531,112 @@ export default function ProfilePage() {
           </form>
         </CardContent>
       </Card>
+
+      {/* MFA 双因素认证：仅非系统内置用户可绑定 */}
+      {!isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4" />
+              MFA 双因素认证
+            </CardTitle>
+            <CardDescription>
+              使用 TOTP 认证 App（如 Google Authenticator）绑定动态口令，绑定后登录管理后台和连接 OpenVPN 均需输入验证码
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* 未绑定 — 初始状态 */}
+            {!mfaBound && !mfaBinding && (
+              <div className="space-y-4">
+                <FormField id="mfa-status" label="当前状态">
+                  <div className="pt-2">
+                    <Badge variant="outline">未绑定</Badge>
+                  </div>
+                </FormField>
+                <div className="flex justify-end pt-2">
+                  <GlowButton
+                    type="button"
+                    icon={<ShieldCheck className="w-4 h-4" />}
+                    onClick={handleStartBindMfa}
+                  >
+                    绑定 MFA
+                  </GlowButton>
+                </div>
+              </div>
+            )}
+
+            {/* 绑定流程 — 显示二维码和验证码输入 */}
+            {!mfaBound && mfaBinding && (
+              <form onSubmit={handleConfirmBindMfa} className="space-y-4">
+                <div className="flex flex-col items-center gap-3 py-2">
+                  {qrDataUrl && (
+                    <img src={qrDataUrl} alt="MFA 二维码" className="w-[200px] h-[200px] rounded-lg" />
+                  )}
+                  <p className="text-xs text-muted-foreground text-center">
+                    请使用 TOTP 认证 App 扫描二维码
+                  </p>
+                  {mfaSecret && (
+                    <div className="text-xs text-muted-foreground">
+                      无法扫码？手动输入密钥：
+                      <code className="ml-2 font-mono bg-muted/40 px-2 py-1 rounded">{mfaSecret}</code>
+                    </div>
+                  )}
+                </div>
+
+                <FormField id="mfa-passcode" label="验证码" required error={mfaError}>
+                  <Input
+                    id="mfa-passcode"
+                    value={mfaPasscode}
+                    onChange={(e) => {
+                      setMfaPasscode(e.target.value);
+                      setMfaError('');
+                    }}
+                    placeholder="请输入 6 位动态验证码"
+                    maxLength={6}
+                    autoFocus
+                    className={cn(mfaError && 'border-destructive focus-visible:ring-destructive/40')}
+                  />
+                </FormField>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button type="button" variant="outline" onClick={handleCancelBindMfa}>
+                    取消
+                  </Button>
+                  <GlowButton
+                    type="submit"
+                    loading={mfaSaving}
+                    loadingText="验证中…"
+                    icon={<ShieldCheck className="w-4 h-4" />}
+                  >
+                    确认绑定
+                  </GlowButton>
+                </div>
+              </form>
+            )}
+
+            {/* 已绑定 */}
+            {mfaBound && (
+              <div className="space-y-4">
+                <FormField id="mfa-status-bound" label="当前状态">
+                  <div className="pt-2">
+                    <Badge variant="secondary">已绑定</Badge>
+                  </div>
+                </FormField>
+                <div className="flex justify-end pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleUnbindMfa}
+                    disabled={mfaUnbinding}
+                  >
+                    {mfaUnbinding ? '解除中…' : '解除绑定'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
