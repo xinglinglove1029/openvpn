@@ -806,20 +806,12 @@ func roleDeleteHandler(c *gin.Context) {
 
 // roleAssignPermissionsHandler PUT /ovpn/role/:id/permissions
 // 全量替换 role_permission
-// - 内置角色权限由系统管理，拒绝修改
 // - 返回未识别的权限 code 列表
 func roleAssignPermissionsHandler(c *gin.Context) {
 	id := c.Param("id")
 	var role Role
 	if err := db.Where("id = ?", id).First(&role).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "角色不存在"})
-		return
-	}
-
-	// 内置角色保护：拒绝修改权限
-	if role.IsBuiltin {
-		recordAudit(c, "role", "assign_permissions", role.Name, false, "内置角色权限由系统管理，不允许修改")
-		c.JSON(http.StatusBadRequest, gin.H{"message": "内置角色权限由系统管理，不允许修改"})
 		return
 	}
 
