@@ -4,7 +4,18 @@ token=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 
 log_prefix="[OPENVPN-AUTH] $(date '+%Y-%m-%d %H:%M:%S.%3N')"
 
-if ! resp=$(curl -w "\n%{http_code}" --connect-timeout 5 -s -X POST "$ovpn_auth_api" --data-urlencode "username=$username" --data-urlencode "password=$password" --data-urlencode "common_name=$common_name" -H "O-Token: $token"); then
+# OpenVPN static-challenge 将 challenge response 追加到 password 环境变量，用 \0 分隔
+# 格式: 原始密码\0MFA验证码
+# 使用 cut -z 按 \0 分隔提取密码和 MFA 码
+real_password=$(printf '%s' "$password" | cut -zd '' -f1)
+mfa_code=$(printf '%s' "$password" | cut -zd '' -f2)
+
+# 调试日志（仅在 MFA 码非空时输出）
+if [ -n "$mfa_code" ]; then
+	echo "$log_prefix [$username] 检测到 MFA 验证码"
+fi
+
+if ! resp=$(curl -w "\n%{http_code}" --connect-timeout 5 -s -X POST "$ovpn_auth_api" --data-urlencode "username=$username" --data-urlencode "password=$real_password" --data-urlencode "passcode=$mfa_code" --data-urlencode "common_name=$common_name" -H "O-Token: $token"); then
 	echo "$log_prefix [$username] 请求登录接口失败"
 	exit 1
 fi

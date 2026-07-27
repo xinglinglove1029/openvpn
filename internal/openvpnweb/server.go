@@ -128,7 +128,7 @@ var (
 		},
 	)
 	ovData = os.Getenv("OVPN_DATA")
-	conf config
+	conf   config
 )
 
 func (ov *ovpn) sendCommand(command string) (string, error) {
@@ -691,6 +691,31 @@ func Run(info BuildInfo) {
 			}
 		} else {
 			if passcode != "" {
+				// 一步式 MFA 验证（适用于 OpenVPN 客户端认证）
+				if err = u.Login(false); err == nil {
+					userInfo := u.Info()
+					if ValidateMfa(passcode, userInfo.MfaSecret) {
+						session.Set("user", u.Username)
+						session.Save()
+						resetLoginFail(cip)
+						c.JSON(200, gin.H{
+							"message":  "登录成功",
+							"redirect": "/",
+							"user": gin.H{
+								"id":           userInfo.ID,
+								"username":     userInfo.Username,
+								"name":         userInfo.Name,
+								"email":        userInfo.Email,
+								"isFirstLogin": *userInfo.IsFirstLogin,
+							},
+						})
+						return
+					}
+					c.JSON(401, gin.H{"message": "MFA 验证失败"})
+					return
+				}
+
+				// Web 登录两步验证（依赖 valid_user 缓存）
 				if validUser, ok := cc.Get("valid_user"); ok {
 					if u.Username == validUser.(string) {
 						userInfo := u.Info()
@@ -1420,95 +1445,95 @@ func Run(info BuildInfo) {
 			}
 
 			err = u.Create()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		} else {
-			// 自动创建客户端配置：当 autoCreateClient=true 时，
-			// 基于用户名自动生成 <username>.ovpn 客户端配置文件
-			autoCreateClient := c.PostForm("autoCreateClient") == "true"
-			createdClientName := ""
-			if autoCreateClient {
-				clientName := u.Username
-				if u.OvpnConfig == "" {
-					u.OvpnConfig = clientName
-					_ = db.Model(&User{}).Where("id = ?", u.ID).Update("ovpn_config", clientName).Error
-				} else {
-					clientName = u.OvpnConfig
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			} else {
+				// 自动创建客户端配置：当 autoCreateClient=true 时，
+				// 基于用户名自动生成 <username>.ovpn 客户端配置文件
+				autoCreateClient := c.PostForm("autoCreateClient") == "true"
+				createdClientName := ""
+				if autoCreateClient {
+					clientName := u.Username
+					if u.OvpnConfig == "" {
+						u.OvpnConfig = clientName
+						_ = db.Model(&User{}).Where("id = ?", u.ID).Update("ovpn_config", clientName).Error
+					} else {
+						clientName = u.OvpnConfig
+					}
+					if err := generateClientConfig(clientName, u.IsMFAEnabled()); err != nil {
+						logger.Error(context.Background(), "auto create client for %s failed: %s", u.Username, err)
+					} else {
+						createdClientName = clientName
+					}
 				}
-				if err := generateClientConfig(clientName, u.IsMFAEnabled()); err != nil {
-					logger.Error(context.Background(), "auto create client for %s failed: %s", u.Username, err)
-				} else {
-					createdClientName = clientName
-				}
-			}
 
-			sendNotifyEmail := c.PostForm("sendNotifyEmail")
-			if sendNotifyEmail == "true" && strings.TrimSpace(u.Email) != "" {
-				go func() {
-					var tpl *template.Template
-					var buf bytes.Buffer
+				sendNotifyEmail := c.PostForm("sendNotifyEmail")
+				if sendNotifyEmail == "true" && strings.TrimSpace(u.Email) != "" {
+					go func() {
+						var tpl *template.Template
+						var buf bytes.Buffer
 
-					activePackages := GetActivePackagesByPlatform()
-					var localPackages []LocalPackageInfo
-					for platform, pkg := range activePackages {
-						labels := map[string]string{
-							"windows": "Windows",
-							"macos":   "macOS",
-							"linux":   "Linux",
-							"android": "Android",
-							"ios":     "iOS",
+						activePackages := GetActivePackagesByPlatform()
+						var localPackages []LocalPackageInfo
+						for platform, pkg := range activePackages {
+							labels := map[string]string{
+								"windows": "Windows",
+								"macos":   "macOS",
+								"linux":   "Linux",
+								"android": "Android",
+								"ios":     "iOS",
+							}
+							localPackages = append(localPackages, LocalPackageInfo{
+								Platform:      platform,
+								PlatformLabel: labels[platform],
+								Version:       pkg.Version,
+								DownloadURL:   pkg.PublicDownloadURL(),
+							})
 						}
-						localPackages = append(localPackages, LocalPackageInfo{
-							Platform:      platform,
-							PlatformLabel: labels[platform],
-							Version:       pkg.Version,
-							DownloadURL:   pkg.PublicDownloadURL(),
-						})
-					}
 
-					tpl, err = template.New("account-email").Parse(accountEmailTemplate)
-					if err == nil {
-						err = tpl.Execute(&buf, struct {
-							Type          string
-							Name          string
-							Username      string
-							Password      string
-							SiteUrl       string
-							LocalPackages []LocalPackageInfo
-						}{
-							Type:          "addUser",
-							Name:          u.Name,
-							Username:      u.Username,
-							Password:      c.PostForm("password"),
-							SiteUrl:       viper.GetString("system.base.site_url"),
-							LocalPackages: localPackages,
-						})
-					}
+						tpl, err = template.New("account-email").Parse(accountEmailTemplate)
+						if err == nil {
+							err = tpl.Execute(&buf, struct {
+								Type          string
+								Name          string
+								Username      string
+								Password      string
+								SiteUrl       string
+								LocalPackages []LocalPackageInfo
+							}{
+								Type:          "addUser",
+								Name:          u.Name,
+								Username:      u.Username,
+								Password:      c.PostForm("password"),
+								SiteUrl:       viper.GetString("system.base.site_url"),
+								LocalPackages: localPackages,
+							})
+						}
 
-					if err != nil {
-						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
-						return
-					}
+						if err != nil {
+							logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
+							return
+						}
 
-					var attachments []string
-					if createdClientName != "" {
-						clientFilePath := filepath.Join(ovData, "clients", createdClientName+".ovpn")
-						attachments = append(attachments, clientFilePath)
-					}
+						var attachments []string
+						if createdClientName != "" {
+							clientFilePath := filepath.Join(ovData, "clients", createdClientName+".ovpn")
+							attachments = append(attachments, clientFilePath)
+						}
 
-					if err := sendUserEmail(u.Email, "用户开通通知", buf.String(), attachments, u.Username, "user_register"); err != nil {
-						logger.Error(context.Background(), "发送用户邮件失败: %s", err.Error())
-					}
-				}()
+						if err := sendUserEmail(u.Email, "用户开通通知", buf.String(), attachments, u.Username, "user_register"); err != nil {
+							logger.Error(context.Background(), "发送用户邮件失败: %s", err.Error())
+						}
+					}()
+				}
+
+				message := "添加用户成功"
+				if createdClientName != "" {
+					message = fmt.Sprintf("添加用户成功，已自动创建客户端配置 %s.ovpn", createdClientName)
+				}
+				c.JSON(http.StatusOK, gin.H{"message": message})
 			}
-
-			message := "添加用户成功"
-			if createdClientName != "" {
-				message = fmt.Sprintf("添加用户成功，已自动创建客户端配置 %s.ovpn", createdClientName)
-			}
-			c.JSON(http.StatusOK, gin.H{"message": message})
-		}
-	})
+		})
 
 		ovpn.PATCH("/user", func(c *gin.Context) {
 			c.Request.ParseForm()
@@ -1948,9 +1973,9 @@ func Run(info BuildInfo) {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{
-				"message":   "marked",
+				"message":    "marked",
 				"lastReadId": rec.LastReadID,
-				"unread":    countUnreadNotifyLogs(rec.LastReadID),
+				"unread":     countUnreadNotifyLogs(rec.LastReadID),
 			})
 		})
 
