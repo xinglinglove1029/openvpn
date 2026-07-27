@@ -23,7 +23,7 @@ function Remove-WorkspacePath {
 }
 
 # The legacy frontend has been removed. The active admin UI is the React/Vite
-# project under frontend/admin, built into
+# project under frontend, built into
 # internal/openvpnweb/templates/static/admin.
 Remove-WorkspacePath 'src' -Recurse
 Remove-WorkspacePath 'build\openvpn-web'

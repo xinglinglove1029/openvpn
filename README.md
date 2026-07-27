@@ -21,7 +21,7 @@ openvpn/
 |   `-- templates/                           # Go embed 模板和静态资源
 |       `-- index.html                     # /login、/、/admin 的 React 宿主页
 |       `-- static/admin/                    # React 构建产物
-|-- frontend/admin/                          # React 源码
+|-- frontend/                          # React 源码
 |-- build/                                   # Docker 镜像文件和 OpenVPN 辅助脚本
 |-- scripts/                                 # 本地构建、清理和安装脚本
 |-- doc/                                     # 项目文档
@@ -85,10 +85,10 @@ docker run -d \
 
 ## 本地开发
 
-前端源码在 `frontend/admin`，构建后输出到 Go embed 目录：
+前端源码在 `frontend`，构建后输出到 Go embed 目录：
 
 ```bash
-cd frontend/admin
+cd frontend
 npm install
 npm run build
 
@@ -101,7 +101,7 @@ go run ./cmd/openvpn-web
 Windows PowerShell：
 
 ```powershell
-cd frontend\admin
+cd frontend
 npm.cmd install
 npm.cmd run build
 
@@ -111,7 +111,7 @@ $env:OVPN_DATA = (Resolve-Path .\data).Path
 go run .\cmd\openvpn-web
 ```
 
-修改 `frontend/admin` 后必须重新执行 `npm run build`，并重启 Go 服务或重新打包二进制。Go 使用 `go:embed` 嵌入静态资源，仅刷新浏览器不会更新已嵌入的前端资源。
+修改 `frontend` 后必须重新执行 `npm run build`，并重启 Go 服务或重新打包二进制。Go 使用 `go:embed` 嵌入静态资源，仅刷新浏览器不会更新已嵌入的前端资源。
 
 ## 构建打包
 
@@ -205,7 +205,7 @@ DOCKERHUB_TOKEN=<Docker Hub Access Token>
 ## 验证命令
 
 ```bash
-cd frontend/admin
+cd frontend
 npm run build
 
 cd ../..
@@ -216,7 +216,7 @@ docker compose config
 Windows PowerShell 前端构建建议使用：
 
 ```powershell
-cd frontend\admin
+cd frontend
 npm.cmd run build
 ```
 

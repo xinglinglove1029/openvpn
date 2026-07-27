@@ -513,7 +513,7 @@ npm run build
 3. **国际化**: 抽取文案到 i18n 资源文件
 4. **单元测试**: 使用 Vitest + React Testing Library 编写测试
 5. **移动端适配**: 响应式断点优化
-6. **旧代码清理**: 已完成（移除了旧版 `App.tsx` 单文件和 `styles.css`，目录从 `frontend/admin/` 简化为 `frontend/`）
+6. **旧代码清理**: 已完成（移除了旧版 `App.tsx` 单文件和 `styles.css`，目录从 `frontend/` 简化为 `frontend/`）
 
 ## 十六、已完成的优化记录
 

@@ -70,7 +70,7 @@ Generic binary usage:
 
 Push-Location $repo
 try {
-  Push-Location (Join-Path $repo 'frontend\admin')
+  Push-Location (Join-Path $repo 'frontend')
   try {
     $npm = 'npm'
     if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {

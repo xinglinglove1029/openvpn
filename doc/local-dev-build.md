@@ -13,7 +13,7 @@ openvpn/
 |       `-- static/
 |           |-- cropped-openvpn-32x32.png    # favicon
 |           `-- admin/                       # React 构建产物
-|-- frontend/admin/                          # React 源码
+|-- frontend/                          # React 源码
 |-- build/                                   # Docker 镜像文件和 OpenVPN 辅助脚本
 |-- scripts/                                 # 本地构建、清理和安装脚本
 |-- doc/                                     # 项目文档
@@ -29,7 +29,7 @@ openvpn/
 
 - `cmd/openvpn-web` 是命令入口，只调用 `internal/openvpnweb.Run(...)`。
 - `internal/openvpnweb` 是项目私有业务包，用于承载 Web 服务、路由、模板、模型和 OpenVPN 管理逻辑。
-- `frontend/admin` 是唯一保留的前端源码目录，登录页、管理员后台和用户自助页均从这里构建。
+- `frontend` 是唯一保留的前端源码目录，登录页、管理员后台和用户自助页均从这里构建。
 - `build/Dockerfile` 是唯一保留的 Dockerfile，不再维护 `Dockerfile.dev`。
 - `dist/` 是本地编译产物目录，不提交 Git。
 
@@ -85,12 +85,12 @@ cd F:\develop\openvpn
 
 ## 4. 构建 React 管理后台
 
-新版前端源码在 `frontend/admin`。
+新版前端源码在 `frontend`。
 
 Linux / macOS / WSL：
 
 ```bash
-cd frontend/admin
+cd frontend
 npm install
 npm run build
 ```
@@ -98,7 +98,7 @@ npm run build
 Windows PowerShell：
 
 ```powershell
-cd frontend\admin
+cd frontend
 npm.cmd install
 npm.cmd run build
 ```
@@ -210,7 +210,7 @@ docker build -f build/Dockerfile -t xinglinglove1029/openvpn:latest .
 
 这个命令会执行完整多阶段构建：
 
-1. 使用 Node 镜像安装 `frontend/admin` 依赖并执行 `npm run build`。
+1. 使用 Node 镜像安装 `frontend` 依赖并执行 `npm run build`。
 2. 使用 Go 镜像编译 `cmd/openvpn-web`。
 3. 使用 Alpine 镜像安装 OpenVPN、EasyRSA、supervisor、iptables/nftables 等运行依赖。
 4. 把最终二进制和 OpenVPN 辅助脚本打进运行镜像。
@@ -390,7 +390,7 @@ darwin/arm64
 
 - `build/Dockerfile` 是否仍在仓库内。
 - `.dockerignore` 是否误排除了必须文件。
-- `frontend/admin/package-lock.json` 是否和 `package.json` 同步。
+- `frontend/package-lock.json` 是否和 `package.json` 同步。
 - Go 依赖是否可以正常下载。
 
 ## 8. 多平台二进制打包
@@ -447,7 +447,7 @@ goreleaser release --snapshot --clean
 ### 9.1 前端构建检查
 
 ```powershell
-cd frontend\admin
+cd frontend
 npm.cmd run build
 ```
 
@@ -510,7 +510,7 @@ React 构建后的 `app.js`、`app.css` 会被 Go embed 进二进制。`index.ht
 
 开发时建议按下面顺序操作：
 
-1. 修改 `frontend/admin` 源码。
+1. 修改 `frontend` 源码。
 2. 执行 `npm run build` 或 `npm.cmd run build`。
 3. 停止当前 Go 服务。
 4. 回到项目根目录重新执行 `go run ./cmd/openvpn-web`。
