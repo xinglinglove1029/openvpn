@@ -36,6 +36,8 @@ import { PageHeader } from '@/components/PageHeader';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ConfirmDialog, type ConfirmState } from '@/components/ConfirmDialog';
 import { DatePickerField } from '@/components/DatePickerField';
+import { HasPermission } from '@/components/HasPermission';
+import { useAuth } from '@/store/auth';
 import { Card, CardContent, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
@@ -60,7 +62,7 @@ import { Switch } from '@/ui/switch';
 import { Checkbox } from '@/ui/checkbox';
 import { Textarea } from '@/ui/textarea';
 import { Separator } from '@/ui/separator';
-import type { UserRecord, GroupRecord, ClientRecord } from '@/types';
+import type { UserRecord, GroupRecord, ClientRecord, Role } from '@/types';
 
 /* ───────── 常量 ───────── */
 
@@ -100,6 +102,7 @@ function useNotify() {
 
 export default function UsersPage() {
   const { notify } = useNotify();
+  const { isAdmin } = useAuth();
   const [reloadKey, setReloadKey] = useState(0);
   // 用户列表独立刷新 key：编辑/启用/禁用/删除等用户操作只刷新用户列表，不影响分组树和客户端列表
   const [usersReloadKey, setUsersReloadKey] = useState(0);
@@ -128,9 +131,18 @@ export default function UsersPage() {
         .then((v) => ({ users: normalizeList<UserRecord>(v, ['users', 'data']), authUser: v.authUser })),
     [selectedGroupId, usersReloadKey],
   );
+  // RBAC：加载角色列表（仅 admin 需要展示角色下拉）
+  const rolesState = useAsync<Role[]>(
+    () =>
+      api
+        .get<{ data?: Role[] } | Role[]>('/ovpn/role')
+        .then((v) => normalizeList<Role>(v, ['data'])),
+    [],
+  );
 
   const groups = groupsState.data || [];
   const clients = clientsState.data || [];
+  const roles = rolesState.data || [];
 
   useEffect(() => {
     if (!groups.length) return;
@@ -164,6 +176,8 @@ export default function UsersPage() {
           selectedGroupId={selectedGroupId}
           usersState={usersState}
           clients={clients}
+          roles={roles}
+          isAdmin={isAdmin}
           notify={notify}
           reload={refreshUsers}
           confirmAction={setConfirmState}
@@ -604,6 +618,8 @@ function UserTablePanel({
   selectedGroupId,
   usersState,
   clients,
+  roles,
+  isAdmin,
   notify,
   reload,
   confirmAction,
@@ -612,6 +628,8 @@ function UserTablePanel({
   selectedGroupId: number;
   usersState: { loading: boolean; error?: string; data?: { users: UserRecord[]; authUser?: boolean } };
   clients: ClientRecord[];
+  roles: Role[];
+  isAdmin: boolean;
   notify: (type: 'success' | 'error' | 'info', message: string) => void;
   reload: () => void;
   confirmAction: (state: ConfirmState) => void;
@@ -912,33 +930,50 @@ function UserTablePanel({
       header: '操作',
       render: (user) => (
         <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openEditUser(user)}>
-            编辑
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2"
-            onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}
-          >
-            {user.isEnable === false ? '启用' : '禁用'}
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openResetPassword(user)}>
-            重置密码
-          </Button>
-          {(user.mfaSecret || user.mfaEnabled) && (
-            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resetMfa(user)}>
-              重置 MFA
+          <HasPermission code="user:update">
+            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openEditUser(user)}>
+              编辑
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-destructive hover:text-destructive"
-            onClick={() => deleteUser(user)}
+          </HasPermission>
+          <HasPermission
+            code={user.isEnable === false ? 'user:enable' : 'user:disable'}
+            fallback={
+              <Button size="sm" variant="ghost" className="h-7 px-2" disabled>
+                {user.isEnable === false ? '启用' : '禁用'}
+              </Button>
+            }
           >
-            删除
-          </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2"
+              onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}
+            >
+              {user.isEnable === false ? '启用' : '禁用'}
+            </Button>
+          </HasPermission>
+          <HasPermission code="user:reset_password">
+            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openResetPassword(user)}>
+              重置密码
+            </Button>
+          </HasPermission>
+          {(user.mfaSecret || user.mfaEnabled) && (
+            <HasPermission code="user:reset_mfa">
+              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resetMfa(user)}>
+                重置 MFA
+              </Button>
+            </HasPermission>
+          )}
+          <HasPermission code="user:delete">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-destructive hover:text-destructive"
+              onClick={() => deleteUser(user)}
+            >
+              删除
+            </Button>
+          </HasPermission>
         </div>
       ),
     },
@@ -954,10 +989,12 @@ function UserTablePanel({
               VPN 账号
             </CardTitle>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
-                <Upload className="mr-1 h-3.5 w-3.5" />
-                导入 CSV
-              </Button>
+              <HasPermission code="user:import">
+                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                  <Upload className="mr-1 h-3.5 w-3.5" />
+                  导入 CSV
+                </Button>
+              </HasPermission>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -965,22 +1002,28 @@ function UserTablePanel({
                 className="hidden"
                 onChange={(e) => importUsers(e.target.files?.[0])}
               />
-              <Button size="sm" variant="outline" asChild>
-                <a href="/user/template">
-                  <Download className="mr-1 h-3.5 w-3.5" />
-                  模板
-                </a>
-              </Button>
-              <Button size="sm" variant="outline" asChild>
-                <a href={`/ovpn/user/export?gid=${selectedGroupId}`}>
-                  <Download className="mr-1 h-3.5 w-3.5" />
-                  导出分组
-                </a>
-              </Button>
-              <Button size="sm" onClick={openAddUser}>
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                添加用户
-              </Button>
+              <HasPermission code="user:export">
+                <Button size="sm" variant="outline" asChild>
+                  <a href="/user/template">
+                    <Download className="mr-1 h-3.5 w-3.5" />
+                    模板
+                  </a>
+                </Button>
+              </HasPermission>
+              <HasPermission code="user:export">
+                <Button size="sm" variant="outline" asChild>
+                  <a href={`/ovpn/user/export?gid=${selectedGroupId}`}>
+                    <Download className="mr-1 h-3.5 w-3.5" />
+                    导出分组
+                  </a>
+                </Button>
+              </HasPermission>
+              <HasPermission code="user:create">
+                <Button size="sm" onClick={openAddUser}>
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  添加用户
+                </Button>
+              </HasPermission>
             </div>
           </div>
         </CardHeader>
@@ -1039,72 +1082,82 @@ function UserTablePanel({
             <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-4 py-2">
               <span className="text-sm font-medium">已选择 {selectedUserIds.length} 个账号</span>
               <Separator orientation="vertical" className="h-4" />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  batchAction(
-                    '批量启用账号',
-                    '确认启用这些账号吗？',
-                    (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: true }),
-                    '批量启用完成',
-                  )
-                }
-              >
-                启用
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  batchAction(
-                    '批量禁用账号',
-                    '确认禁用这些账号吗？',
-                    (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: false }),
-                    '批量禁用完成',
-                    true,
-                  )
-                }
-              >
-                禁用
-              </Button>
-              {hasSelectedMfaUser && (
+              <HasPermission code="user:enable">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() =>
                     batchAction(
-                      '批量重置 MFA',
-                      '确认重置这些账号的 MFA 吗？',
-                      (u) => api.delete(`/client/mfa/${u.id}`),
-                      '批量 MFA 重置完成',
+                      '批量启用账号',
+                      '确认启用这些账号吗？',
+                      (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: true }),
+                      '批量启用完成',
+                    )
+                  }
+                >
+                  启用
+                </Button>
+              </HasPermission>
+              <HasPermission code="user:disable">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    batchAction(
+                      '批量禁用账号',
+                      '确认禁用这些账号吗？',
+                      (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: false }),
+                      '批量禁用完成',
                       true,
                     )
                   }
                 >
-                  重置 MFA
+                  禁用
                 </Button>
+              </HasPermission>
+              {hasSelectedMfaUser && (
+                <HasPermission code="user:reset_mfa">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      batchAction(
+                        '批量重置 MFA',
+                        '确认重置这些账号的 MFA 吗？',
+                        (u) => api.delete(`/client/mfa/${u.id}`),
+                        '批量 MFA 重置完成',
+                        true,
+                      )
+                    }
+                  >
+                    重置 MFA
+                  </Button>
+                </HasPermission>
               )}
-              <Button size="sm" variant="outline" onClick={exportSelectedUsers}>
-                <Download className="mr-1 h-3.5 w-3.5" />
-                导出选中
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-destructive hover:text-destructive"
-                onClick={() =>
-                  batchAction(
-                    '批量删除账号',
-                    '确认删除这些账号吗？该操作不可恢复。',
-                    (u) => api.delete(`/ovpn/user/${u.id}`),
-                    '批量删除完成',
-                    true,
-                  )
-                }
-              >
-                删除
-              </Button>
+              <HasPermission code="user:export">
+                <Button size="sm" variant="outline" onClick={exportSelectedUsers}>
+                  <Download className="mr-1 h-3.5 w-3.5" />
+                  导出选中
+                </Button>
+              </HasPermission>
+              <HasPermission code="user:delete">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() =>
+                    batchAction(
+                      '批量删除账号',
+                      '确认删除这些账号吗？该操作不可恢复。',
+                      (u) => api.delete(`/ovpn/user/${u.id}`),
+                      '批量删除完成',
+                      true,
+                    )
+                  }
+                >
+                  删除
+                </Button>
+              </HasPermission>
             </div>
           )}
 

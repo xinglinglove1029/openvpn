@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { ClientUserInfo } from '../types';
 
 interface LoginResponse {
@@ -11,6 +11,10 @@ interface LoginResponse {
 interface AuthContextType {
   user: ClientUserInfo | null;
   isLoading: boolean;
+  /** 系统超管（绕过权限检查） */
+  isAdmin: boolean;
+  /** 判断当前用户是否拥有指定权限 code（admin 或 ["*"] 直接通过） */
+  hasPermission: (code: string) => boolean;
   login: (user: ClientUserInfo, remember?: boolean) => void;
   loginWithCredentials: (username: string, password: string, remember?: boolean) => Promise<LoginResponse>;
   logout: () => Promise<void>;
@@ -58,6 +62,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
   }, []);
+
+  // RBAC：检测权限数据异常（user 存在且非 admin 但 permissions 缺失/非数组）
+  // 触发场景：localStorage 缓存了旧版本数据、后端异常返回不含 permissions 的 JSON、数据被篡改
+  // 处理：清除本地登录态并跳转登录页，避免用户卡在空白页无任何提示
+  useEffect(() => {
+    if (!user) return;
+    if (user.isAdmin) return;
+    const perms = user.permissions;
+    if (!perms || !Array.isArray(perms)) {
+      window.localStorage.removeItem(STORAGE_KEY);
+      window.location.href = '/login';
+    }
+  }, [user]);
 
   // 简单的凭据登录：仅当后端返回 user 对象时才算登录成功
   const loginWithCredentials = async (
@@ -116,9 +133,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // RBAC：admin 用户由后端下发的 isAdmin 字段决定
+  // 不再使用 id<=0 兜底判断，避免 LDAP 用户（后端返回 id=0, isAdmin=false）被误判为 admin
+  const isAdmin = !!user?.isAdmin;
+
+  // RBAC：权限判断
+  // - admin 用户绕过所有检查
+  // - permissions 含 "*" 也直接通过
+  // - 否则匹配 code
+  // - permissions 缺失或非数组时返回 false（与 user.permissions undefined 卡住场景配合，由 AuthProvider 登出）
+  const hasPermission = useCallback((code: string): boolean => {
+    if (!user) return false;
+    if (user.isAdmin) return true;
+    const perms = user.permissions;
+    if (!perms || !Array.isArray(perms)) return false;
+    if (perms.includes('*')) return true;
+    return perms.includes(code);
+  }, [user]);
+
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, login, loginWithCredentials, logout, updateUser }}
+      value={{ user, isLoading, isAdmin, hasPermission, login, loginWithCredentials, logout, updateUser }}
     >
       {children}
     </AuthContext.Provider>

@@ -62,6 +62,11 @@ export function isUserExpiring(user: UserRecord) {
 }
 
 export function messageOf(error: unknown) {
+  // RBAC：api.ts 已对 403 等错误主动 toast，此处返回空字符串避免调用方再次 toast 导致双重提示
+  // 调用方 toast.error(`prefix：${messageOf(error)}`) 会显示 "prefix："，不再追加错误消息
+  if (error && typeof error === 'object' && 'handled' in error && (error as { handled: boolean }).handled) {
+    return '';
+  }
   return error instanceof Error ? error.message : String(error);
 }
 

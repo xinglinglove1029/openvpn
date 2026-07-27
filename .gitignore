@@ -20,4 +20,7 @@ config.json
 /gover.txt
 /check_app.cjs
 
+# BMAD 工件目录（不入库，本地保留 spec/diff 等中间产物）
+/_bmad-output/
+
 

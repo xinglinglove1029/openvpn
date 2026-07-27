@@ -116,6 +116,10 @@ export interface UserRecord {
   lastLoginAt?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** RBAC：角色 ID */
+  roleId?: number | null;
+  /** RBAC：角色名称（仅用于展示，由后端 join 返回） */
+  roleName?: string;
 }
 
 export interface ClientRecord {
@@ -391,6 +395,51 @@ export interface ClientUserInfo {
   isFirstLogin?: boolean;
   /** 自定义头像：data URL（base64）或预设样式标识 */
   avatar?: string;
+  /** RBAC：角色 ID（admin 用户为 null） */
+  roleId?: number | null;
+  /** RBAC：权限 code 列表（admin 为 ["*"]） */
+  permissions?: string[];
+  /** RBAC：是否为系统超管（绕过权限检查） */
+  isAdmin?: boolean;
+}
+
+/** RBAC：角色 */
+export interface Role {
+  id: number;
+  name: string;
+  code: string;
+  description?: string;
+  isBuiltin: boolean;
+  isEnable: boolean;
+  sort: number;
+  createdAt?: string;
+  updatedAt?: string;
+  /** 角色已分配的权限 code 列表 */
+  permissions?: string[];
+}
+
+/** RBAC：权限定义 */
+export interface Permission {
+  id: number;
+  parentId?: number;
+  name: string;
+  code: string;
+  type: 'menu' | 'button';
+  path?: string;
+  icon?: string;
+  sort: number;
+}
+
+/** RBAC：权限树节点（带 children） */
+export interface PermissionTreeNode {
+  id: number;
+  name: string;
+  code: string;
+  type: 'menu' | 'button';
+  path?: string;
+  icon?: string;
+  sort: number;
+  children?: PermissionTreeNode[];
 }
 
 export interface ClientMfaResponse {

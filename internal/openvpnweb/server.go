@@ -9,6 +9,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -482,34 +483,48 @@ func AuthMiddleWare() gin.HandlerFunc {
 			return
 		}
 
-		if user, ok := user.(string); ok {
-			c.Set("user", user)
+		if username, ok := user.(string); ok {
+			c.Set("user", username)
 
-			isPublicPath := func(path string) bool {
-				if path == "/" ||
-					strings.HasPrefix(path, "/client") ||
-					strings.HasPrefix(path, "/ovpn/ws") ||
-					strings.HasPrefix(path, "/ovpn/notify") ||
-					strings.HasPrefix(path, "/ovpn/dashboard") ||
-					strings.HasPrefix(path, "/ovpn/audit") ||
-					strings.HasPrefix(path, "/ovpn/client") ||
-					strings.HasPrefix(path, "/ovpn/user") ||
-					strings.HasPrefix(path, "/ovpn/history") ||
-					strings.HasPrefix(path, "/ovpn/online-client") ||
-					strings.HasPrefix(path, "/ovpn/certs") {
-					return true
-				}
-				if path == "/ovpn/settings" && c.Request.Method == "GET" {
-					return true
-				}
-				return false
+			// admin 用户直接放行，不查权限表
+			// 仅当 adminUsername 非空时才判超管，避免配置缺失导致空用户名被误判为 admin
+			if adminUsername != "" && username == adminUsername {
+				c.Set("permissions", []string{"*"})
+				c.Set("isAdmin", true)
+				c.Next()
+				return
 			}
 
-			if !isPublicPath(c.Request.URL.Path) && user != adminUsername {
-				c.Redirect(302, "/")
+			// 普通用户：加载权限 code 列表
+			u := User{Username: username}.Info()
+			// 用户已被删除：session 仍有效但 DB 无记录，清除 session 强制登出（与角色禁用处理一致）
+			if u.ID == 0 {
+				session.Clear()
+				session.Options(sessions.Options{Path: "/", MaxAge: -1})
+				session.Save()
+				c.Redirect(302, "/login")
 				c.Abort()
 				return
 			}
+			codes, err := u.LoadPermissionCodes(db)
+			if err != nil {
+				// 角色被禁用或不存在：清除 session 强制登出
+				if errors.Is(err, ErrRoleDisabled) || errors.Is(err, ErrRoleNotFound) {
+					session.Clear()
+					session.Options(sessions.Options{Path: "/", MaxAge: -1})
+					session.Save()
+					c.Redirect(302, "/login")
+					c.Abort()
+					return
+				}
+				// 其他错误（如 DB 连接断开）：拒绝访问，避免静默赋空权限让用户陷入"突然无权限"的困惑
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
+				c.Abort()
+				return
+			}
+			c.Set("permissions", codes)
+			c.Set("isAdmin", false)
+			c.Set("roleId", u.RoleID)
 		}
 
 		c.Next()
@@ -569,6 +584,26 @@ func Run(info BuildInfo) {
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
 	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
+	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{})
+
+	// 初始化权限定义与内置角色（administrator / user）
+	if err := SeedPermissionsAndRoles(db); err != nil {
+		logger.Error(context.Background(), "SeedPermissionsAndRoles 失败: %s", err.Error())
+	}
+
+	// 历史用户 role_id 为 NULL 时回填到普通用户角色 ID
+	// 检查回填错误并记日志，避免静默失败导致历史用户登录时按 ErrRoleNotFound 兜底
+	defaultRoleID := GetDefaultRoleID(db)
+	if defaultRoleID > 0 {
+		result := db.Model(&User{}).Where("role_id IS NULL").Update("role_id", defaultRoleID)
+		if result.Error != nil {
+			logger.Error(context.Background(), "回填历史用户 role_id 失败: %s", result.Error.Error())
+		} else if result.RowsAffected > 0 {
+			logger.Error(context.Background(), "已回填 %d 个历史用户到普通用户角色 (role_id=%d)", result.RowsAffected, defaultRoleID)
+		}
+	} else {
+		logger.Error(context.Background(), "未找到普通用户角色，跳过历史用户 role_id 回填")
+	}
 
 	// 旧表 channel_type 列数据迁移到新 channel_name 列
 	migrateNotifyLogChannelName()
@@ -683,6 +718,9 @@ func Run(info BuildInfo) {
 						"name":         adminUser.Name,
 						"email":        adminUser.Email,
 						"isFirstLogin": false,
+						"isAdmin":      true,
+						"permissions":  []string{"*"},
+						"roleId":       nil,
 					},
 				})
 				return
@@ -695,6 +733,15 @@ func Run(info BuildInfo) {
 				if err = u.Login(false); err == nil {
 					userInfo := u.Info()
 					if ValidateMfa(passcode, userInfo.MfaSecret) {
+						// 校验角色是否启用
+						permCodes, perr := userInfo.LoadPermissionCodes(db)
+						if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+							c.JSON(403, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+							return
+						}
+						if permCodes == nil {
+							permCodes = []string{}
+						}
 						session.Set("user", u.Username)
 						session.Save()
 						resetLoginFail(cip)
@@ -707,6 +754,9 @@ func Run(info BuildInfo) {
 								"name":         userInfo.Name,
 								"email":        userInfo.Email,
 								"isFirstLogin": *userInfo.IsFirstLogin,
+								"isAdmin":      false,
+								"permissions":  permCodes,
+								"roleId":       userInfo.RoleID,
 							},
 						})
 						return
@@ -720,6 +770,14 @@ func Run(info BuildInfo) {
 					if u.Username == validUser.(string) {
 						userInfo := u.Info()
 						if ValidateMfa(passcode, userInfo.MfaSecret) {
+							permCodes, perr := userInfo.LoadPermissionCodes(db)
+							if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+								c.JSON(403, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+								return
+							}
+							if permCodes == nil {
+								permCodes = []string{}
+							}
 							cc.Delete("valid_user")
 							session.Set("user", u.Username)
 							session.Save()
@@ -733,6 +791,9 @@ func Run(info BuildInfo) {
 									"name":         userInfo.Name,
 									"email":        userInfo.Email,
 									"isFirstLogin": *userInfo.IsFirstLogin,
+									"isAdmin":      false,
+									"permissions":  permCodes,
+									"roleId":       userInfo.RoleID,
 								},
 							})
 						} else {
@@ -755,6 +816,16 @@ func Run(info BuildInfo) {
 					return
 				}
 
+				// 校验角色是否启用
+				permCodes, perr := user.LoadPermissionCodes(db)
+				if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+					c.JSON(403, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+					return
+				}
+				if permCodes == nil {
+					permCodes = []string{}
+				}
+
 				session.Set("user", u.Username)
 				session.Save()
 
@@ -769,6 +840,9 @@ func Run(info BuildInfo) {
 						"name":         user.Name,
 						"email":        user.Email,
 						"isFirstLogin": *user.IsFirstLogin,
+						"isAdmin":      false,
+						"permissions":  permCodes,
+						"roleId":       user.RoleID,
 					},
 				})
 				return
@@ -836,18 +910,18 @@ func Run(info BuildInfo) {
 	ovpn := r.Group("/ovpn")
 	{
 		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
-		ovpn.GET("/dashboard/summary", ov.dashboardSummary)
-		ovpn.GET("/audit/logs", auditLogsHandler)
-		ovpn.GET("/audit/export", auditExportHandler)
+		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
+		ovpn.GET("/audit/logs", RequirePermission("audit:view"), auditLogsHandler)
+		ovpn.GET("/audit/export", RequirePermission("audit:view"), auditExportHandler)
 
-		ovpn.GET("/settings", func(c *gin.Context) {
+		ovpn.GET("/settings", RequirePermission("settings:view"), func(c *gin.Context) {
 			var conf config
 			viper.Unmarshal(&conf)
 
 			c.JSON(http.StatusOK, conf)
 		})
 
-		ovpn.POST("/settings", func(c *gin.Context) {
+		ovpn.POST("/settings", RequirePermission("settings:update"), func(c *gin.Context) {
 			c.Request.ParseForm()
 			for k, vs := range c.Request.PostForm {
 				val := vs[0]
@@ -911,7 +985,7 @@ func Run(info BuildInfo) {
 		})
 
 		// 客户端安装包管理
-		ovpn.GET("/client-packages", func(c *gin.Context) {
+		ovpn.GET("/client-packages", RequirePermission("client:manage_all"), func(c *gin.Context) {
 			pkg := &ClientPackage{}
 			packages := pkg.All()
 			type PackageWithURL struct {
@@ -927,7 +1001,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, result)
 		})
 
-		ovpn.POST("/client-packages", func(c *gin.Context) {
+		ovpn.POST("/client-packages", RequirePermission("client:manage_all"), func(c *gin.Context) {
 			file, err := c.FormFile("file")
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "请上传安装包文件"})
@@ -978,7 +1052,7 @@ func Run(info BuildInfo) {
 			})
 		})
 
-		ovpn.DELETE("/client-packages/:id", func(c *gin.Context) {
+		ovpn.DELETE("/client-packages/:id", RequirePermission("client:manage_all"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -995,7 +1069,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 		})
 
-		ovpn.POST("/client-packages/:id/enable", func(c *gin.Context) {
+		ovpn.POST("/client-packages/:id/enable", RequirePermission("client:manage_all"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -1011,7 +1085,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "已启用"})
 		})
 
-		ovpn.GET("/client-packages/:id/download", func(c *gin.Context) {
+		ovpn.GET("/client-packages/:id/download", RequirePermission("client:manage_all"), func(c *gin.Context) {
 			id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "无效的 ID"})
@@ -1041,7 +1115,7 @@ func Run(info BuildInfo) {
 			c.File(filePath)
 		})
 
-		ovpn.POST("/server", func(c *gin.Context) {
+		ovpn.POST("/server", RequirePermission("server:manage"), func(c *gin.Context) {
 			a := c.PostForm("action")
 
 			switch a {
@@ -1168,16 +1242,16 @@ func Run(info BuildInfo) {
 
 		})
 
-		ovpn.POST("/kill", func(c *gin.Context) {
+		ovpn.POST("/kill", RequirePermission("client:kill"), func(c *gin.Context) {
 			cid := c.PostForm("cid")
 			ov.killClient(cid)
 			c.JSON(http.StatusOK, gin.H{"code": http.StatusOK})
 		})
 
-		ovpn.GET("/firewall", FirewallHandler)
-		ovpn.POST("/firewall", FirewallHandler)
-		ovpn.PATCH("/firewall", FirewallHandler)
-		ovpn.DELETE("/firewall/:id", FirewallHandler)
+		ovpn.GET("/firewall", RequirePermission("firewall:view"), FirewallHandler)
+		ovpn.POST("/firewall", RequirePermission("firewall:create"), FirewallHandler)
+		ovpn.PATCH("/firewall", RequirePermission("firewall:update"), FirewallHandler)
+		ovpn.DELETE("/firewall/:id", RequirePermission("firewall:delete"), FirewallHandler)
 
 		ovpn.POST("/login", func(c *gin.Context) {
 			var u User
@@ -1192,21 +1266,21 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.GET("/online-client", func(c *gin.Context) {
+		ovpn.GET("/online-client", RequirePermission("client:view_online"), func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"server": ov.getServer(), "clients": ov.getClient()})
 		})
 
-		ovpn.GET("/group", func(c *gin.Context) {
+		ovpn.GET("/group", RequirePermission("group:view"), func(c *gin.Context) {
 			var g Group
 			c.JSON(http.StatusOK, g.All())
 		})
 
-		ovpn.GET("/group/:id", func(c *gin.Context) {
+		ovpn.GET("/group/:id", RequirePermission("group:view"), func(c *gin.Context) {
 			var g Group
 			c.JSON(http.StatusOK, g.Get(c.Param("id")))
 		})
 
-		ovpn.GET("/group/:id/users", func(c *gin.Context) {
+		ovpn.GET("/group/:id/users", RequirePermission("group:view"), func(c *gin.Context) {
 			var auth bool
 			var g Group
 
@@ -1222,7 +1296,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"users": g.GetUsers(gid), "authUser": auth})
 		})
 
-		ovpn.POST("/group", func(c *gin.Context) {
+		ovpn.POST("/group", RequirePermission("group:create"), func(c *gin.Context) {
 			var g Group
 			c.ShouldBind(&g)
 
@@ -1235,7 +1309,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "添加成功"})
 		})
 
-		ovpn.PATCH("/group", func(c *gin.Context) {
+		ovpn.PATCH("/group", RequirePermission("group:update"), func(c *gin.Context) {
 			var g Group
 			c.ShouldBind(&g)
 
@@ -1254,7 +1328,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
 		})
 
-		ovpn.DELETE("/group/:id", func(c *gin.Context) {
+		ovpn.DELETE("/group/:id", RequirePermission("group:delete"), func(c *gin.Context) {
 			var g Group
 			c.ShouldBind(&g)
 
@@ -1267,7 +1341,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 		})
 
-		ovpn.GET("/user", func(c *gin.Context) {
+		ovpn.GET("/user", RequirePermission("user:view"), func(c *gin.Context) {
 			var u User
 
 			username := c.Query("username")
@@ -1278,12 +1352,12 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, u.Info())
 		})
 
-		ovpn.GET("/user/:id", func(c *gin.Context) {
+		ovpn.GET("/user/:id", RequirePermission("user:view"), func(c *gin.Context) {
 			var u User
 			c.JSON(http.StatusOK, u.Get(c.Param("id")))
 		})
 
-		r.GET("/user/template", func(c *gin.Context) {
+		r.GET("/user/template", RequirePermission("user:export"), func(c *gin.Context) {
 			c.Header("Content-Type", "text/csv")
 			c.Header("Content-Disposition", "attachment; filename=user_template.csv")
 
@@ -1297,7 +1371,7 @@ func Run(info BuildInfo) {
 			writer.Write([]string{"lisi", "123456", "鏉庡洓", "lisi@example.com", "0", "", "", "tt-sh.ovpn"})
 		})
 
-		ovpn.GET("/user/export", func(c *gin.Context) {
+		ovpn.GET("/user/export", RequirePermission("user:export"), func(c *gin.Context) {
 			gid := c.Query("gid")
 
 			fileName := fmt.Sprintf("user_%s.csv", time.Now().Format("20060102150405"))
@@ -1370,7 +1444,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.POST("/user", func(c *gin.Context) {
+		ovpn.POST("/user", RequirePermission("user:create"), func(c *gin.Context) {
 			var u User
 			c.ShouldBind(&u)
 
@@ -1399,6 +1473,9 @@ func Run(info BuildInfo) {
 					return
 				}
 
+				// 导入用户默认绑定普通用户角色
+				importDefaultRoleID := GetDefaultRoleID(db)
+
 				for {
 					record, err := reader.Read()
 					if err == io.EOF {
@@ -1412,7 +1489,7 @@ func Run(info BuildInfo) {
 
 					enable := record[4] == "1"
 					gid64, err := strconv.ParseUint(gid, 10, 64)
-					u := User{
+					newUser := User{
 						Username:   record[0],
 						Password:   record[1],
 						Name:       record[2],
@@ -1423,8 +1500,11 @@ func Run(info BuildInfo) {
 						OvpnConfig: record[7],
 						Gid:        uint(gid64),
 					}
+					if importDefaultRoleID > 0 {
+						newUser.RoleID = &importDefaultRoleID
+					}
 
-					err = u.Create()
+					err = newUser.Create()
 					if err != nil {
 						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 						return
@@ -1442,6 +1522,13 @@ func Run(info BuildInfo) {
 
 			if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
 				u.MfaEnabled = mfaEnabled[0] == "true"
+			}
+
+			// 未指定角色时默认绑定普通用户角色
+			if u.RoleID == nil {
+				if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+					u.RoleID = &defaultRoleID
+				}
 			}
 
 			err = u.Create()
@@ -1535,7 +1622,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.PATCH("/user", func(c *gin.Context) {
+		ovpn.PATCH("/user", RequirePermission("user:update"), func(c *gin.Context) {
 			c.Request.ParseForm()
 			formData := make(map[string]string)
 			for k, v := range c.Request.PostForm {
@@ -1547,6 +1634,13 @@ func Run(info BuildInfo) {
 
 			var u User
 			c.ShouldBind(&u)
+
+			// 校验 role_id 有效性：复用 role.go 中的 validateRoleID 统一校验逻辑
+			// 避免孤儿 user.role_id（角色不存在或已禁用）
+			if err := validateRoleID(db, u.RoleID); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
 
 			if ipAddr, ok := c.Request.PostForm["ipAddr"]; ok {
 				if ipAddr[0] == "" {
@@ -1624,7 +1718,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.DELETE("/user/:id", func(c *gin.Context) {
+		ovpn.DELETE("/user/:id", RequirePermission("user:delete"), func(c *gin.Context) {
 			var u User
 			id := c.Param("id")
 
@@ -1636,7 +1730,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.GET("/client", func(c *gin.Context) {
+		ovpn.GET("/client", RequirePermission("client:create"), func(c *gin.Context) {
 			clients := make([]ClientConfigData, 0)
 
 			files, _ := os.ReadDir(filepath.Join(ovData, "clients"))
@@ -1660,7 +1754,7 @@ func Run(info BuildInfo) {
 
 		})
 
-		ovpn.GET("/client/:name/ccd", func(c *gin.Context) {
+		ovpn.GET("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {
 			name := c.Param("name")
 			ccdDir := filepath.Join(ovData, "ccd")
 
@@ -1687,7 +1781,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"content": string(data)})
 		})
 
-		ovpn.GET("/client/:name/config", func(c *gin.Context) {
+		ovpn.GET("/client/:name/config", RequirePermission("client:download"), func(c *gin.Context) {
 			name := c.Param("name")
 			clientsDir := filepath.Join(ovData, "clients")
 
@@ -1708,7 +1802,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"content": string(data)})
 		})
 
-		ovpn.PUT("/client/:name/ccd", func(c *gin.Context) {
+		ovpn.PUT("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {
 			name := c.Param("name")
 			content := c.PostForm("content")
 			msg := "客户端更新成功"
@@ -1748,7 +1842,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": msg})
 		})
 
-		ovpn.PUT("/client/:name/config", func(c *gin.Context) {
+		ovpn.PUT("/client/:name/config", RequirePermission("client:regenerate"), func(c *gin.Context) {
 			name := c.Param("name")
 			content := c.PostForm("content")
 			clientsDir := filepath.Join(ovData, "clients")
@@ -1770,7 +1864,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.POST("/client", func(c *gin.Context) {
+		ovpn.POST("/client", RequirePermission("client:create"), func(c *gin.Context) {
 			name := c.PostForm("name")
 			serverAddr := strings.TrimSpace(c.PostForm("serverAddr"))
 			serverPort := strings.TrimSpace(c.PostForm("serverPort"))
@@ -1862,7 +1956,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"message": "客户端已存在"})
 		})
 
-		ovpn.DELETE("/client/:name", func(c *gin.Context) {
+		ovpn.DELETE("/client/:name", RequirePermission("client:delete"), func(c *gin.Context) {
 			name := c.Param("name")
 
 			cmd := exec.Command("easyrsa", "--batch", "revoke", name)
@@ -1896,7 +1990,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "删除客户端成功"})
 		})
 
-		ovpn.GET("/history", func(c *gin.Context) {
+		ovpn.GET("/history", RequirePermission("history:view"), func(c *gin.Context) {
 			var h History
 			var p Params
 
@@ -1990,14 +2084,14 @@ func Run(info BuildInfo) {
 		})
 
 		// 通知渠道维护：CRUD + Test
-		ovpn.GET("/channel-types", channelTypesHandler)
-		ovpn.GET("/channel", channelHandler)
-		ovpn.GET("/channel/:id", channelHandler)
-		ovpn.POST("/channel", channelHandler)
-		ovpn.PUT("/channel/:id", channelHandler)
-		ovpn.PATCH("/channel/:id", channelHandler)
-		ovpn.DELETE("/channel/:id", channelHandler)
-		ovpn.POST("/channel/:id/test", channelTestHandler)
+		ovpn.GET("/channel-types", RequirePermission("channel:view"), channelTypesHandler)
+		ovpn.GET("/channel", RequirePermission("channel:view"), channelHandler)
+		ovpn.GET("/channel/:id", RequirePermission("channel:view"), channelHandler)
+		ovpn.POST("/channel", RequirePermission("channel:create"), channelHandler)
+		ovpn.PUT("/channel/:id", RequirePermission("channel:update"), channelHandler)
+		ovpn.PATCH("/channel/:id", RequirePermission("channel:update"), channelHandler)
+		ovpn.DELETE("/channel/:id", RequirePermission("channel:delete"), channelHandler)
+		ovpn.POST("/channel/:id/test", RequirePermission("channel:test"), channelTestHandler)
 
 		ovpn.POST("/notify", func(c *gin.Context) {
 			bytesReceived, _ := strconv.ParseFloat(c.PostForm("bytes_received"), 64)
@@ -2047,7 +2141,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{"message": "notify sent"})
 		})
 
-		ovpn.GET("/history/export", func(c *gin.Context) {
+		ovpn.GET("/history/export", RequirePermission("history:view"), func(c *gin.Context) {
 			var p Params
 			c.ShouldBindQuery(&p)
 
@@ -2110,9 +2204,20 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.GET("/certs", func(c *gin.Context) {
+		ovpn.GET("/certs", RequirePermission("cert:view"), func(c *gin.Context) {
 			c.JSON(http.StatusOK, getCerts(ovData))
 		})
+
+		// 角色管理：CRUD + 分配权限
+		ovpn.GET("/role", RequirePermission("role:view"), roleListHandler)
+		ovpn.GET("/role/:id", RequirePermission("role:view"), roleDetailHandler)
+		ovpn.POST("/role", RequirePermission("role:create"), roleCreateHandler)
+		ovpn.PATCH("/role/:id", RequirePermission("role:update"), roleUpdateHandler)
+		ovpn.DELETE("/role/:id", RequirePermission("role:delete"), roleDeleteHandler)
+		ovpn.PUT("/role/:id/permissions", RequirePermission("role:assign_permissions"), roleAssignPermissionsHandler)
+
+		// 权限定义查询：返回权限树供角色编辑页使用
+		ovpn.GET("/permission/tree", RequirePermission("permission:view"), permissionTreeHandler)
 	}
 
 	client := r.Group("/client")
@@ -2138,18 +2243,78 @@ func Run(info BuildInfo) {
 					return
 				}
 
-				c.JSON(http.StatusOK, lu)
+				// LDAP 用户也补充权限信息
+			// 角色被禁用或不存在时返回 403，与登录时行为一致，避免静默返回空权限让前端陷入空白页
+			permCodes, perr := u.LoadPermissionCodes(db)
+			if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
 				return
 			}
-
-			if u.Username == adminUsername {
-				u.Name = viper.GetString("system.base.admin_name")
-				u.Email = viper.GetString("system.base.admin_email")
-				c.JSON(http.StatusOK, u)
+			if perr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
 				return
 			}
+			if permCodes == nil {
+				permCodes = []string{}
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"id":           0,
+				"username":     lu.Username,
+				"name":         "",
+				"email":        "",
+				"ldapAuth":     true,
+				"isFirstLogin": false,
+				"isAdmin":      adminUsername != "" && u.Username == adminUsername,
+				"permissions":  permCodes,
+				"roleId":       nil,
+			})
+			return
+		}
 
-			c.JSON(http.StatusOK, u.Info())
+		if adminUsername != "" && u.Username == adminUsername {
+			u.Name = viper.GetString("system.base.admin_name")
+			u.Email = viper.GetString("system.base.admin_email")
+			c.JSON(http.StatusOK, gin.H{
+				"id":           u.ID,
+				"username":     u.Username,
+				"name":         u.Name,
+				"email":        u.Email,
+				"isFirstLogin": false,
+				"isAdmin":      true,
+				"permissions":  []string{"*"},
+				"roleId":       nil,
+			})
+			return
+		}
+
+		userInfo := u.Info()
+		// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+		if userInfo.ID == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+			return
+		}
+		permCodes, perr := userInfo.LoadPermissionCodes(db)
+		if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+			c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+			return
+		}
+		if perr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
+			return
+		}
+		if permCodes == nil {
+			permCodes = []string{}
+		}
+			c.JSON(http.StatusOK, gin.H{
+				"id":           userInfo.ID,
+				"username":     userInfo.Username,
+				"name":         userInfo.Name,
+				"email":        userInfo.Email,
+				"isFirstLogin": userInfo.IsFirstLogin,
+				"isAdmin":      false,
+				"permissions":  permCodes,
+				"roleId":       userInfo.RoleID,
+			})
 		})
 
 		client.PUT("/userinfo", func(c *gin.Context) {
@@ -2159,8 +2324,31 @@ func Run(info BuildInfo) {
 				currentUsername = user
 			}
 
+			// admin 走配置文件分支；普通用户可改自己（cu.ID == u.ID）
 			if currentUsername != adminUsername {
-				c.JSON(http.StatusForbidden, gin.H{"message": "仅系统管理员可修改个人资料"})
+				cu := User{Username: currentUsername}.Info()
+				// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+				if cu.ID == 0 {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+					return
+				}
+				formID := c.PostForm("id")
+				formIDUint, _ := strconv.ParseUint(formID, 10, 64)
+				if formID == "" || cu.ID != uint(formIDUint) {
+					c.JSON(http.StatusForbidden, gin.H{"message": "仅可修改自己的资料"})
+					return
+				}
+				// 普通用户：更新 user 表的 name/email
+				// 使用 struct Updates 触发 BeforeSave 钩子（bluemonday XSS 净化）
+				name := c.PostForm("name")
+				email := c.PostForm("email")
+				if err := db.Model(&cu).Updates(User{Name: name, Email: email}).Error; err != nil {
+					recordAudit(c, "user", "update_own", cu.Username, false, err.Error())
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+				recordAudit(c, "user", "update_own", cu.Username, true, "更新个人资料")
+				c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
 				return
 			}
 
@@ -2175,6 +2363,7 @@ func Run(info BuildInfo) {
 				return
 			}
 
+			recordAudit(c, "user", "update_own", adminUsername, true, "更新个人资料")
 			c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
 		})
 
@@ -2188,11 +2377,13 @@ func Run(info BuildInfo) {
 				currentUsername = user
 			}
 
+			// 当前登录用户（来自 session，不可被请求体篡改）
+			var cu User
 			// 校验请求中的 id 与当前登录用户一致
 			if currentUsername == adminUsername {
 				// admin 用户：忽略 u.ID 校验，密码存放在配置中
 			} else {
-				cu := User{Username: currentUsername}.Info()
+				cu = User{Username: currentUsername}.Info()
 				if u.ID != cu.ID {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
 					return
@@ -2225,7 +2416,8 @@ func Run(info BuildInfo) {
 					return
 				}
 
-				if u.Info().Password != currentPass[0] {
+				// 修复：使用 cu（来自 session）校验当前密码，避免请求体 username 篡改
+				if cu.Info().Password != currentPass[0] {
 					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
 					return
 				}
@@ -2453,7 +2645,7 @@ func Run(info BuildInfo) {
 			if user, ok := session.Get("user").(string); ok {
 				cu := User{Username: user}.Info()
 				if !(u.ID == cu.ID || cu.Username == adminUsername) {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "非法请求"})
+					c.JSON(http.StatusForbidden, gin.H{"message": "非法请求"})
 					return
 				}
 			}

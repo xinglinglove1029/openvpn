@@ -49,6 +49,9 @@ var auditTargets = []struct {
 	{http.MethodPatch, regexp.MustCompile(`^/ovpn/firewall$`), "firewall", "update"},
 	{http.MethodDelete, regexp.MustCompile(`^/ovpn/firewall/[^/]+$`), "firewall", "delete"},
 	{http.MethodPost, regexp.MustCompile(`^/ovpn/notify$`), "notify", "test"},
+	// 注意：角色管理（POST/PATCH/DELETE /ovpn/role*、PUT /ovpn/role/:id/permissions）
+	// 的审计日志已由 handler 内主动调用 recordAudit 记录，此处不再注册兜底规则，
+	// 否则 AuditMiddleware 会再次记录一次，导致审计日志出现重复条目。
 }
 
 func AuditMiddleware() gin.HandlerFunc {

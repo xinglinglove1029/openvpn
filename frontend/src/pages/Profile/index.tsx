@@ -332,8 +332,8 @@ export default function ProfilePage() {
   const displayUsername = profile?.username || user?.username || '-';
   const displayEmail = profile?.email || user?.email || '-';
   const displayUserId = user?.id && user.id > 0 ? String(user.id) : '系统内置';
-  // admin 用户的 id 在 user 表中为 0，且 username 为 'admin'
-  const isAdmin = !user?.id || user.id <= 0;
+  // RBAC：admin 用户由后端下发的 isAdmin 字段决定，兼容历史数据（id<=0）
+  const isAdmin = !!user?.isAdmin || !user?.id || user.id <= 0;
 
   function handleAvatarChange(next: string | undefined) {
     updateUser({ avatar: next });

@@ -33,9 +33,44 @@ type User struct {
 	MfaSecret    string     `json:"mfaSecret" form:"mfaSecret"`
 	MfaEnabled   bool       `gorm:"default:false" json:"mfaEnabled" form:"mfaEnabled"`
 	IsFirstLogin *bool      `gorm:"default:true" form:"isFirstLogin" json:"isFirstLogin"`
+	RoleID       *uint      `gorm:"column:role_id;default:NULL" json:"roleId" form:"roleId"`
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty" form:"lastLoginAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 	UpdatedAt    time.Time  `json:"updatedAt,omitempty" form:"updatedAt,omitempty"`
+}
+
+// ErrRoleDisabled 角色已禁用错误
+var ErrRoleDisabled = fmt.Errorf("角色已禁用，请联系管理员")
+
+// ErrRoleNotFound 角色不存在或已删除错误
+var ErrRoleNotFound = errors.New("角色不存在或已删除")
+
+// LoadPermissionCodes 加载用户权限 code 列表
+// - admin 用户（用户名等于 adminUsername 且 adminUsername 非空）返回 ["*"]
+// - 普通用户查询 role（校验 is_enable）→ role_permission → permission.code
+// - 角色被禁用返回 ErrRoleDisabled
+// - 角色不存在返回 ErrRoleNotFound
+// - role_id 为 NULL 时按普通用户角色兜底，默认角色也不存在返回 ErrRoleNotFound
+func (u *User) LoadPermissionCodes(d *gorm.DB) ([]string, error) {
+	// 仅当 adminUsername 非空时才判超管，避免配置缺失导致空用户名被误判为 admin
+	if adminUsername != "" && u.Username == adminUsername {
+		return []string{"*"}, nil
+	}
+
+	roleID := uint(0)
+	if u.RoleID != nil {
+		roleID = *u.RoleID
+	}
+	if roleID == 0 {
+		// 未绑定角色时按普通用户角色兜底
+		roleID = GetDefaultRoleID(d)
+		if roleID == 0 {
+			// 默认角色也不存在
+			return nil, ErrRoleNotFound
+		}
+	}
+
+	return LoadRolePermissionCodes(d, roleID)
 }
 
 func (u *User) IsMFAEnabled() bool {
