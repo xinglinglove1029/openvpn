@@ -2496,29 +2496,34 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			if currentPass, ok := c.Request.PostForm["currentPass"]; ok {
-				if currentUsername == adminUsername {
-					if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass[0])) != nil {
-						c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
-						return
-					}
+			currentPass := c.Request.PostFormValue("currentPass")
 
-					passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-						return
-					}
-
-					viper.Set("system.base.admin_password", string(passwd))
-					viper.WriteConfig()
-					adminPassword = string(passwd)
-
-					c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+			if currentUsername == adminUsername {
+				if currentPass == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "管理员修改密码需要输入当前密码"})
+					return
+				}
+				if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass)) != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
 					return
 				}
 
-				// 修复：使用 cu（来自 session）校验当前密码，避免请求体 username 篡改
-				if cu.Info().Password != currentPass[0] {
+				passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+
+				viper.Set("system.base.admin_password", string(passwd))
+				viper.WriteConfig()
+				adminPassword = string(passwd)
+
+				c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+				return
+			}
+
+			if currentPass != "" {
+				if cu.Info().Password != currentPass {
 					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
 					return
 				}

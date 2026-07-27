@@ -37,14 +37,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [remember7d, setRemember7d] = useState(true);
   const [passcode, setPasscode] = useState('');
-  const [currentPass, setCurrentPass] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordAgain, setNewPasswordAgain] = useState('');
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pendingUser, setPendingUser] = useState<{ id: number; username: string; isFirstLogin?: boolean } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [showCurrentPass, setShowCurrentPass] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showNewPasswordAgain, setShowNewPasswordAgain] = useState(false);
 
@@ -56,7 +54,6 @@ export default function LoginPage() {
     } else if (mode === 'mfa') {
       if (!passcode.trim()) next.passcode = '请输入验证码';
     } else if (mode === 'first-password') {
-      if (!currentPass) next.currentPass = '请输入当前密码';
       if (!newPassword || newPassword.length < 12) next.newPassword = '新密码至少 12 位';
       if (newPassword !== newPasswordAgain) next.newPasswordAgain = '两次密码不一致';
     }
@@ -151,7 +148,6 @@ export default function LoginPage() {
         credentials: 'same-origin',
         body: new URLSearchParams({
           id: String(pendingUser.id),
-          currentPass,
           password: newPassword,
           isFirstLogin: 'false',
         }).toString(),
@@ -381,39 +377,6 @@ export default function LoginPage() {
           {/* 首次登录修改密码表单 */}
           {mode === 'first-password' && (
             <form className="reference-login-fields" noValidate onSubmit={submitFirstPassword}>
-              <div className={cn('field-line reference-field-line', errors.currentPass && 'has-error')}>
-                <Label className="text-[var(--login-label-text)] text-sm">当前密码</Label>
-                <div className="field-input-wrap has-icon relative">
-                  <Input
-                    type={showCurrentPass ? 'text' : 'password'}
-                    value={currentPass}
-                    onChange={(e) => {
-                      setCurrentPass(e.target.value);
-                      clearError('currentPass');
-                    }}
-                    placeholder="请输入当前密码"
-                    autoFocus
-                    aria-invalid={errors.currentPass ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
-                  />
-                  <div className="field-icon-wrap">
-                    <Lock className="field-icon-svg w-4 h-4" />
-                  </div>
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    aria-label={showCurrentPass ? '隐藏密码' : '显示密码'}
-                    onClick={() => setShowCurrentPass(!showCurrentPass)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
-                  >
-                    {showCurrentPass ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                </div>
-                {errors.currentPass && (
-                  <p className="text-sm font-medium text-destructive">{errors.currentPass}</p>
-                )}
-              </div>
-
               <div className={cn('field-line reference-field-line', errors.newPassword && 'has-error')}>
                 <Label className="text-[var(--login-label-text)] text-sm">新密码</Label>
                 <div className="field-input-wrap has-icon relative">
@@ -425,6 +388,7 @@ export default function LoginPage() {
                       clearError('newPassword');
                     }}
                     placeholder="至少 12 位强密码"
+                    autoFocus
                     aria-invalid={errors.newPassword ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
                   />
