@@ -16,6 +16,8 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Textarea } from '@/ui/textarea';
+import { useAuth } from '@/store/auth';
+import { HasPermission } from '@/components/HasPermission';
 
 import { cn } from '@/lib/utils';
 import {
@@ -30,6 +32,7 @@ import {
 type FieldErrors = Record<string, string>;
 
 export default function ClientsPage() {
+  const { hasPermission } = useAuth();
   const [reloadKey, setReloadKey] = useState(0);
   const [search, setSearch] = useState('');
   const [confirmState, setConfirmState] = useState<ConfirmState>();
@@ -138,29 +141,39 @@ export default function ClientsPage() {
       className: 'w-[200px]',
       render: (c) => (
         <div className="flex items-center gap-1">
-          {c.file && (
-            <Button variant="ghost" size="sm" asChild>
-              <a href={c.file} download={c.fullName}>
-                <Download className="h-4 w-4 mr-1" />
-                下载
-              </a>
+          <HasPermission code="client:download">
+            {c.file && (
+              <Button variant="ghost" size="sm" asChild>
+                <a href={c.file} download={c.fullName}>
+                  <Download className="h-4 w-4 mr-1" />
+                  下载
+                </a>
+              </Button>
+            )}
+          </HasPermission>
+          <HasPermission code="client:download">
+            <Button variant="ghost" size="sm" onClick={() => copyClientFile(c)}>
+              <Copy className="h-4 w-4 mr-1" />
+              复制
             </Button>
-          )}
-          <Button variant="ghost" size="sm" onClick={() => copyClientFile(c)}>
-            <Copy className="h-4 w-4 mr-1" />
-            复制
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'config')}>
-            <FileText className="h-4 w-4 mr-1" />
-            配置
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'ccd')}>
-            <FolderOpen className="h-4 w-4 mr-1" />
-            CCD
-          </Button>
-          <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteClient(c)}>
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          </HasPermission>
+          <HasPermission code="client:regenerate">
+            <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'config')}>
+              <FileText className="h-4 w-4 mr-1" />
+              配置
+            </Button>
+          </HasPermission>
+          <HasPermission code="client:regenerate">
+            <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'ccd')}>
+              <FolderOpen className="h-4 w-4 mr-1" />
+              CCD
+            </Button>
+          </HasPermission>
+          <HasPermission code="client:delete">
+            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteClient(c)}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </HasPermission>
         </div>
       ),
     },
@@ -169,10 +182,12 @@ export default function ClientsPage() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Device" title="客户端配置" description="管理 VPN 客户端证书和 .ovpn 配置文件">
-        <Button onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4 mr-1" />
-          添加客户端
-        </Button>
+        <HasPermission code="client:create">
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            添加客户端
+          </Button>
+        </HasPermission>
       </PageHeader>
 
       {/* Search */}

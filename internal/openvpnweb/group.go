@@ -185,3 +185,28 @@ func (g *Group) GetUsers(id string) []User {
 func (Group) TableName() string {
 	return "group"
 }
+
+// GetSubtreeIDs 获取分组及其所有子节点的 ID 列表（包含自身）
+// 使用递归 CTE 查询分组树
+func GetSubtreeIDs(groupID uint) []uint {
+	var ids []uint
+	result := db.Raw(`
+		WITH RECURSIVE group_tree AS (
+			SELECT id, parent_id
+			FROM "group"
+			WHERE id = ?
+
+			UNION ALL
+
+			SELECT g.id, g.parent_id
+			FROM "group" g
+			JOIN group_tree gt ON g.parent_id = gt.id
+		)
+		SELECT id FROM group_tree
+	`, groupID).Scan(&ids)
+	if result.Error != nil {
+		logger.Error(context.Background(), result.Error.Error())
+		return []uint{}
+	}
+	return ids
+}

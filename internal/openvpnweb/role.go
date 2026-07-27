@@ -126,11 +126,12 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:users", "group:update", "更新分组", "button", "", "", 13},
 	{"menu:users", "group:delete", "删除分组", "button", "", "", 14},
 	{"menu:users", "group:config", "分组配置", "button", "", "", 15},
-	// 客户端（4）
-	{"menu:clients", "client:create", "创建客户端", "button", "", "", 1},
-	{"menu:clients", "client:download", "下载客户端", "button", "", "", 2},
-	{"menu:clients", "client:delete", "删除客户端", "button", "", "", 3},
-	{"menu:clients", "client:regenerate", "重新生成客户端", "button", "", "", 4},
+	// 客户端（5）
+	{"menu:clients", "client:view", "查看客户端", "button", "", "", 1},
+	{"menu:clients", "client:create", "创建客户端", "button", "", "", 2},
+	{"menu:clients", "client:download", "下载客户端", "button", "", "", 3},
+	{"menu:clients", "client:delete", "删除客户端", "button", "", "", 4},
+	{"menu:clients", "client:regenerate", "重新生成客户端", "button", "", "", 5},
 	// 客户端包（1）
 	{"menu:clients", "client:manage_all", "管理客户端安装包", "button", "", "", 5},
 	// 在线客户端查看（1）
@@ -190,7 +191,7 @@ var defaultUserRoleCodes = []string{
 	"menu:history",
 	"menu:notifications",
 	"menu:profile",
-	"client:create",
+	"client:view",
 	"client:download",
 	"client:delete",
 	"client:regenerate",

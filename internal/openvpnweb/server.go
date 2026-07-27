@@ -1394,6 +1394,30 @@ func Run(info BuildInfo) {
 				auth = true
 			}
 
+			// 数据权限过滤：普通用户只能查看自己分组及下级分组的数据
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+
+			if currentUsername != adminUsername {
+				currentUser := User{Username: currentUsername}.Info()
+				accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
+				requestedGid, _ := strconv.ParseUint(gid, 10, 64)
+				found := false
+				for _, id := range accessibleGroupIDs {
+					if id == uint(requestedGid) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					c.JSON(http.StatusForbidden, gin.H{"message": "无权限查看该分组数据"})
+					return
+				}
+			}
+
 			c.JSON(http.StatusOK, gin.H{"users": g.GetUsers(gid), "authUser": auth})
 		})
 
@@ -1831,7 +1855,7 @@ func Run(info BuildInfo) {
 			}
 		})
 
-		ovpn.GET("/client", RequirePermission("client:create"), func(c *gin.Context) {
+		ovpn.GET("/client", RequirePermission("client:view"), func(c *gin.Context) {
 			clients := make([]ClientConfigData, 0)
 
 			files, _ := os.ReadDir(filepath.Join(ovData, "clients"))
@@ -1855,7 +1879,7 @@ func Run(info BuildInfo) {
 
 		})
 
-		ovpn.GET("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {
+		ovpn.GET("/client/:name/ccd", RequirePermission("client:view"), func(c *gin.Context) {
 			name := c.Param("name")
 			ccdDir := filepath.Join(ovData, "ccd")
 
