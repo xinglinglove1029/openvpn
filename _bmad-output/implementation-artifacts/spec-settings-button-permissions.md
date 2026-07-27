@@ -2,9 +2,10 @@
 title: '系统设置Tab按钮权限控制'
 type: 'feature'
 created: '2026-07-27'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_revision: '60d947ce199ddf01c91d40c41ce38ada988cc012'
+final_revision: '080160fe94a89df6f9dc3a7c700a44f29a40e7a7'
 followup_review_recommended: false
 context: []
 warnings: []
@@ -160,3 +161,62 @@ const filteredDirtyKeys = dirtyKeys.filter(key => {
 - admin创建角色仅勾选settings:packages:upload → 创建用户绑定 → 登录 → 客户端包Tab可见，上传按钮可见，删除/启用按钮隐藏
 - 直接curl POST /ovpn/client-packages无权限 → 返回403
 - 直接curl POST /ovpn/server(action=restartSrv)无权限 → 返回403
+
+## Auto Run Result
+
+**Status:** done
+
+### Summary of Implemented Change
+
+实现了系统设置页面各Tab下操作按钮的权限控制：
+
+**新增8个按钮权限编码：**
+- 3个Tab保存权限：`settings:base:update`、`settings:ldap:update`、`settings:openvpn:update`
+- 2个服务管理按钮权限：`settings:service:restart`、`settings:service:config`
+- 3个客户端包按钮权限：`settings:packages:upload`、`settings:packages:delete`、`settings:packages:enable`
+
+**后端：**
+- POST /ovpn/settings 按Tab保存权限过滤字段，`settings:update`作为兼容通配
+- POST /ovpn/server 按action分派权限（restart→`settings:service:restart`，config→`settings:service:config`）
+- 客户端包API（上传/删除/启用）分别追加对应权限校验
+- GET /client-packages权限从`client:manage_all`改为`settings:packages`
+- 所有字段被权限过滤后返回403而非200
+- CIDR/IP校验错误码从500改为400
+
+**前端：**
+- SaveBar根据Tab保存权限控制显示
+- dirtyKeys按保存权限过滤后提交
+- 服务管理Tab的"重启"和"编辑server.conf"按钮用HasPermission包裹
+- 客户端包Tab的"上传/删除/启用"按钮用HasPermission包裹
+- service.auth_user保存需要server:manage或settings:update权限
+- defaultTab逻辑修复
+
+### Files Changed
+
+- `internal/openvpnweb/role.go` — 新增8个按钮权限编码，添加hasPermissionCode/requirePermissionCode辅助函数，更新user角色默认权限（添加menu:settings和settings:view）
+- `internal/openvpnweb/server.go` — POST /settings按Tab权限过滤字段，/ovpn/server和/ovpn/client-packages追加按钮权限，GET /client-packages权限改为settings:packages，savedCount检查，CIDR/IP错误码修复
+- `frontend/src/pages/Settings/index.tsx` — SaveBar显示逻辑、saveableDirtyKeys过滤、HasPermission包裹各操作按钮、defaultTab修复
+
+### Review Findings Breakdown
+
+- patch: 6项已修复（high 1, medium 4, low 1）
+- defer: 8项（预存在的设计问题，非本次引入）
+- reject: 0项
+- intent_gap: 0项
+- bad_spec: 0项
+
+### Follow-up Review Recommendation
+
+**false** — 6项patch均为权限一致性修复和边界条件处理。defer项为预存在的设计问题（如service.auth_user的权限模型、审计日志缺失等），非本次变更引入，可后续单独处理。
+
+### Verification Performed
+
+- `go build ./...` — 编译通过（EXIT_CODE=0）
+- `npx tsc --noEmit` — 前端类型检查通过（EXIT_CODE=0）
+- 手动代码审查确认权限过滤逻辑完整
+
+### Residual Risks
+
+- service.auth_user的保存仍走POST /ovpn/server(action=settings)，需要`server:manage`权限而非`settings:service:*`权限（预存在设计，已在saveableDirtyKeys中做兼容过滤）
+- system.email.*字段仍需要`settings:update`权限，未拆分为细粒度权限（超出本次范围）
+- 审计日志在成功路径上仍缺失（预存在问题）
