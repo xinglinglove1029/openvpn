@@ -146,9 +146,14 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:certs", "cert:renew", "续签证书", "button", "", "", 2},
 	// 审计（1）
 	{"menu:audit", "audit:view", "查看审计", "button", "", "", 1},
-	// 系统设置（2）
+	// 系统设置（7）
 	{"menu:settings", "settings:view", "查看设置", "button", "", "", 1},
 	{"menu:settings", "settings:update", "更新设置", "button", "", "", 2},
+	{"menu:settings", "settings:base", "基础控制Tab", "button", "", "", 3},
+	{"menu:settings", "settings:ldap", "LDAP认证Tab", "button", "", "", 4},
+	{"menu:settings", "settings:openvpn", "OpenVPN参数Tab", "button", "", "", 5},
+	{"menu:settings", "settings:service", "服务管理Tab", "button", "", "", 6},
+	{"menu:settings", "settings:packages", "客户端安装包Tab", "button", "", "", 7},
 	// 通知渠道（5）
 	{"menu:channels", "channel:view", "查看渠道", "button", "", "", 1},
 	{"menu:channels", "channel:create", "创建渠道", "button", "", "", 2},
@@ -183,6 +188,8 @@ var defaultUserRoleCodes = []string{
 	"client:regenerate",
 	"client:view_online",
 	"history:view",
+	"settings:base",      // 基础控制Tab
+	"settings:packages",  // 客户端安装包Tab
 }
 
 // SeedPermissionsAndRoles 初始化权限与内置角色

@@ -915,11 +915,54 @@ func Run(info BuildInfo) {
 		ovpn.GET("/audit/export", RequirePermission("audit:view"), auditExportHandler)
 
 		ovpn.GET("/settings", RequirePermission("settings:view"), func(c *gin.Context) {
-			var conf config
-			viper.Unmarshal(&conf)
+		var conf config
+		if err := viper.Unmarshal(&conf); err != nil {
+			// 配置解析失败，返回500错误而不是泄露零值配置
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "配置解析失败"})
+			return
+		}
 
+		// 根据用户 Tab 权限过滤返回数据
+		// admin 用户直接返回全量数据
+		if isAdmin, _ := c.Get("isAdmin"); isAdmin == true {
 			c.JSON(http.StatusOK, conf)
-		})
+			return
+		}
+
+		// 非 admin 用户：根据 settings:* 权限过滤
+		perms, _ := c.Get("permissions")
+		permList, _ := perms.([]string)
+
+		// 辅助函数：检查是否拥有某个权限
+		hasPerm := func(code string) bool {
+			// 空权限数组时，默认无任何Tab权限
+			if len(permList) == 0 {
+				return false
+			}
+			for _, p := range permList {
+				if p == "*" || p == code {
+					return true
+				}
+			}
+			return false
+		}
+
+		// 过滤数据：无对应 Tab 权限时返回空对象
+		// 注意：settings:service 和 settings:packages 权限不在此处过滤，
+		// 因为服务管理和客户端包数据不在配置文件中，而是通过独立API提供
+		filtered := conf
+		if !hasPerm("settings:base") {
+			filtered.System.Base = SysBeseConfig{}
+		}
+		if !hasPerm("settings:ldap") {
+			filtered.System.Ldap = SysLdapConfig{}
+		}
+		if !hasPerm("settings:openvpn") {
+			filtered.Openvpn = OvpnConfig{}
+		}
+
+		c.JSON(http.StatusOK, filtered)
+	})
 
 		ovpn.POST("/settings", RequirePermission("settings:update"), func(c *gin.Context) {
 			c.Request.ParseForm()

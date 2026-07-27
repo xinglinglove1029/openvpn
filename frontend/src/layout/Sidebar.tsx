@@ -17,7 +17,8 @@ import { useAuth } from '../store/auth';
 
 // 菜单项：使用 menu:* 权限 code 控制可见性
 // adminOnly 字段保留向后兼容，但已不再用于过滤（统一通过 permission 字段）
-const allNavItems: { path: string; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
+// settings 菜单特殊处理：需要检查至少有一个 Tab 权限
+const allNavItems: { path: string; label: string; icon: typeof LayoutDashboard; permission: string; settingsCheck?: string[] }[] = [
   { path: '/overview', label: '概览', icon: LayoutDashboard, permission: 'menu:overview' },
   { path: '/users', label: '账号管理', icon: Users, permission: 'menu:users' },
   { path: '/clients', label: '客户端', icon: Smartphone, permission: 'menu:clients' },
@@ -25,7 +26,13 @@ const allNavItems: { path: string; label: string; icon: typeof LayoutDashboard; 
   { path: '/history', label: '连接历史', icon: History, permission: 'menu:history' },
   { path: '/certs', label: '证书', icon: FileKey, permission: 'menu:certs' },
   { path: '/audit', label: '操作审计', icon: FileText, permission: 'menu:audit' },
-  { path: '/settings', label: '系统设置', icon: Settings, permission: 'menu:settings' },
+  {
+    path: '/settings',
+    label: '系统设置',
+    icon: Settings,
+    permission: 'menu:settings',
+    settingsCheck: ['settings:base', 'settings:ldap', 'settings:openvpn', 'settings:service', 'settings:packages'],
+  },
   { path: '/channels', label: '通知渠道', icon: BellRing, permission: 'menu:channels' },
   { path: '/notifications', label: '站内信', icon: Bell, permission: 'menu:notifications' },
   { path: '/roles', label: '角色管理', icon: ShieldCheck, permission: 'menu:roles' },
@@ -36,7 +43,15 @@ export function Sidebar() {
   const { hasPermission } = useAuth();
 
   // RBAC：仅展示当前用户拥有对应 menu 权限的菜单项
-  const navItems = allNavItems.filter((item) => hasPermission(item.permission));
+  // 对于 settings 菜单，还需要检查至少有一个 Tab 权限
+  const navItems = allNavItems.filter((item) => {
+    if (!hasPermission(item.permission)) return false;
+    // settings 菜单特殊处理：需要至少有一个 Tab 权限
+    if (item.settingsCheck) {
+      return item.settingsCheck.some((perm) => hasPermission(perm));
+    }
+    return true;
+  });
 
   return (
     <nav className="w-64 min-h-screen border-r bg-card/80 backdrop-blur flex flex-col">

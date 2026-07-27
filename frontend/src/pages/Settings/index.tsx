@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, Download, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 
 import { api } from '@/api';
 import type { SettingsResponse } from '@/types';
 import { messageOf } from '@/lib/format';
+import { useAuth } from '@/store/auth';
 import {
   trimText,
   isValidUrl,
@@ -250,12 +252,31 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
 }
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
+  const { hasPermission } = useAuth();
   const [settings, setSettings] = useState<SettingsResponse>();
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [originals, setOriginals] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [saving, setSaving] = useState(false);
+
+  // 检查 Tab 权限
+  const canViewBase = hasPermission('settings:base');
+  const canViewLdap = hasPermission('settings:ldap');
+  const canViewOpenvpn = hasPermission('settings:openvpn');
+  const canViewService = hasPermission('settings:service');
+  const canViewPackages = hasPermission('settings:packages');
+  const canUpdate = hasPermission('settings:update');
+
+  // 检查是否至少有一个 Tab 权限，否则重定向到概览页
+  const hasAnyTabPermission = canViewBase || canViewLdap || canViewOpenvpn || canViewService || canViewPackages;
+
+  useEffect(() => {
+    if (!loading && !hasAnyTabPermission) {
+      navigate('/overview', { replace: true });
+    }
+  }, [loading, hasAnyTabPermission, navigate]);
 
   function loadSettings() {
     setLoading(true);
@@ -407,314 +428,339 @@ export default function SettingsPage() {
     validateAll,
   };
 
+  // 确定默认 Tab 值：取第一个有权限的 Tab
+  const defaultTab = canViewBase ? 'base' : canViewLdap ? 'ldap' : canViewOpenvpn ? 'openvpn' : canViewService ? 'service' : 'packages';
+
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Control" title="系统设置" description="配置系统参数、LDAP认证和OpenVPN参数" />
 
-      <Tabs defaultValue="base" className="w-full">
+      <Tabs defaultValue={defaultTab} className="w-full">
         <TabsList>
-          <TabsTrigger value="base" className="gap-1.5">
-            <Settings className="h-4 w-4" />
-            基础控制
-          </TabsTrigger>
-          <TabsTrigger value="ldap" className="gap-1.5">
-            <Shield className="h-4 w-4" />
-            LDAP认证
-          </TabsTrigger>
-          <TabsTrigger value="openvpn" className="gap-1.5">
-            <Server className="h-4 w-4" />
-            OpenVPN参数
-          </TabsTrigger>
-          <TabsTrigger value="service" className="gap-1.5">
-            <Wrench className="h-4 w-4" />
-            服务管理
-          </TabsTrigger>
-          <TabsTrigger value="packages" className="gap-1.5">
-            <Package className="h-4 w-4" />
-            客户端安装包
-          </TabsTrigger>
+          {canViewBase && (
+            <TabsTrigger value="base" className="gap-1.5">
+              <Settings className="h-4 w-4" />
+              基础控制
+            </TabsTrigger>
+          )}
+          {canViewLdap && (
+            <TabsTrigger value="ldap" className="gap-1.5">
+              <Shield className="h-4 w-4" />
+              LDAP认证
+            </TabsTrigger>
+          )}
+          {canViewOpenvpn && (
+            <TabsTrigger value="openvpn" className="gap-1.5">
+              <Server className="h-4 w-4" />
+              OpenVPN参数
+            </TabsTrigger>
+          )}
+          {canViewService && (
+            <TabsTrigger value="service" className="gap-1.5">
+              <Wrench className="h-4 w-4" />
+              服务管理
+            </TabsTrigger>
+          )}
+          {canViewPackages && (
+            <TabsTrigger value="packages" className="gap-1.5">
+              <Package className="h-4 w-4" />
+              客户端安装包
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ====== Tab 1: 基础控制 ====== */}
-        <TabsContent value="base">
-          <Card>
-            <CardHeader>
-              <CardTitle>基础控制</CardTitle>
-              <CardDescription>站点地址、管理员、系统行为等核心参数</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-6 sm:grid-cols-2">
-                <SettingField
-                  label="站点地址"
-                  value={base.site_url}
-                  settingKey="system.base.site_url"
-                  placeholder="https://example.com"
-                  store={store}
-                />
-                <SettingField
-                  label="VPN 服务器地址"
-                  value={base.server_addr}
-                  settingKey="system.base.server_addr"
-                  placeholder="公网 IP 或域名，留空则从站点地址解析"
-                  store={store}
-                />
-                <SettingField
-                  label="Web 端口"
-                  value={base.web_port}
-                  settingKey="system.base.web_port"
-                  placeholder="8080"
-                  store={store}
-                />
-                <SettingField
-                  label="管理员账号"
-                  value={base.admin_username}
-                  settingKey="system.base.admin_username"
-                  store={store}
-                />
-                <SettingField
-                  label="管理员新密码"
-                  value=""
-                  settingKey="system.base.admin_password"
-                  type="password"
-                  placeholder="留空不改；建议 12 位强密码"
-                  saveOnlyIfValue
-                  visibilityToggle
-                  store={store}
-                />
-                <SettingField
-                  label="历史保留天数"
-                  value={base.history_max_days}
-                  settingKey="system.base.history_max_days"
-                  store={store}
-                />
-                <SettingField
-                  label="重复登录数"
-                  value={base.max_duplicate_login}
-                  settingKey="system.base.max_duplicate_login"
-                  store={store}
-                />
-              </div>
+        {canViewBase && (
+          <TabsContent value="base">
+            <Card>
+              <CardHeader>
+                <CardTitle>基础控制</CardTitle>
+                <CardDescription>站点地址、管理员、系统行为等核心参数</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <SettingField
+                    label="站点地址"
+                    value={base.site_url}
+                    settingKey="system.base.site_url"
+                    placeholder="https://example.com"
+                    store={store}
+                  />
+                  <SettingField
+                    label="VPN 服务器地址"
+                    value={base.server_addr}
+                    settingKey="system.base.server_addr"
+                    placeholder="公网 IP 或域名，留空则从站点地址解析"
+                    store={store}
+                  />
+                  <SettingField
+                    label="Web 端口"
+                    value={base.web_port}
+                    settingKey="system.base.web_port"
+                    placeholder="8080"
+                    store={store}
+                  />
+                  <SettingField
+                    label="管理员账号"
+                    value={base.admin_username}
+                    settingKey="system.base.admin_username"
+                    store={store}
+                  />
+                  <SettingField
+                    label="管理员新密码"
+                    value=""
+                    settingKey="system.base.admin_password"
+                    type="password"
+                    placeholder="留空不改；建议 12 位强密码"
+                    saveOnlyIfValue
+                    visibilityToggle
+                    store={store}
+                  />
+                  <SettingField
+                    label="历史保留天数"
+                    value={base.history_max_days}
+                    settingKey="system.base.history_max_days"
+                    store={store}
+                  />
+                  <SettingField
+                    label="重复登录数"
+                    value={base.max_duplicate_login}
+                    settingKey="system.base.max_duplicate_login"
+                    store={store}
+                  />
+                </div>
 
-              <Separator />
+                <Separator />
 
-              <div className="space-y-4">
-                <SettingSwitch
-                  label="自动更新 OpenVPN 配置"
-                  description="保存设置后自动同步 server.conf"
-                  checked={base.auto_update_ovpn_config}
-                  settingKey="system.base.auto_update_ovpn_config"
-                  store={store}
-                />
-                <SettingSwitch
-                  label="校验客户端配置"
-                  description="登录时校验用户绑定的配置文件"
-                  checked={base.validate_client_config}
-                  settingKey="system.base.validate_client_config"
-                  store={store}
-                />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+                <div className="space-y-4">
+                  <SettingSwitch
+                    label="自动更新 OpenVPN 配置"
+                    description="保存设置后自动同步 server.conf"
+                    checked={base.auto_update_ovpn_config}
+                    settingKey="system.base.auto_update_ovpn_config"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="校验客户端配置"
+                    description="登录时校验用户绑定的配置文件"
+                    checked={base.validate_client_config}
+                    settingKey="system.base.validate_client_config"
+                    store={store}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         {/* ====== Tab 2: LDAP认证 ====== */}
-        <TabsContent value="ldap">
-          <Card>
-            <CardHeader>
-              <CardTitle>LDAP 认证</CardTitle>
-              <CardDescription>配置 LDAP 外部认证源，启用后本地 VPN 账号不参与认证</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <SettingSwitch
-                label="启用 LDAP"
-                description="启用后本地 VPN 账号不参与认证"
-                checked={ldap.ldap_auth}
-                settingKey="system.ldap.ldap_auth"
-                store={store}
-              />
-
-              <Separator />
-
-              <div className="grid gap-6 sm:grid-cols-2">
-                <SettingField
-                  label="LDAP URL"
-                  value={ldap.ldap_url}
-                  settingKey="system.ldap.ldap_url"
-                  placeholder="ldap://ldap.example.com:389"
-                  store={store}
-                />
-                <SettingField
-                  label="Base DN"
-                  value={ldap.ldap_base_dn}
-                  settingKey="system.ldap.ldap_base_dn"
-                  placeholder="dc=example,dc=com"
-                  store={store}
-                />
-                <SettingField
-                  label="用户属性"
-                  value={ldap.ldap_user_attribute}
-                  settingKey="system.ldap.ldap_user_attribute"
-                  placeholder="uid"
-                  store={store}
-                />
-                <SettingField
-                  label="绑定 DN"
-                  value={ldap.ldap_bind_user_dn}
-                  settingKey="system.ldap.ldap_bind_user_dn"
-                  store={store}
-                />
-                <SettingField
-                  label="绑定密码"
-                  value={ldap.ldap_bind_password}
-                  settingKey="system.ldap.ldap_bind_password"
-                  type="password"
-                  visibilityToggle
-                  store={store}
-                />
-                <SettingField
-                  label="IP 属性名"
-                  value={ldap.ldap_user_attr_ipaddr_name}
-                  settingKey="system.ldap.ldap_user_attr_ipaddr_name"
-                  store={store}
-                />
-                <SettingField
-                  label="配置属性名"
-                  value={ldap.ldap_user_attr_config_name}
-                  settingKey="system.ldap.ldap_user_attr_config_name"
-                  store={store}
-                />
-              </div>
-
-              <Separator />
-
-              <div className="space-y-4">
+        {canViewLdap && (
+          <TabsContent value="ldap">
+            <Card>
+              <CardHeader>
+                <CardTitle>LDAP 认证</CardTitle>
+                <CardDescription>配置 LDAP 外部认证源，启用后本地 VPN 账号不参与认证</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
                 <SettingSwitch
-                label="用户组过滤"
-                description="只允许指定 memberOf 登录"
-                checked={ldap.ldap_user_group_filter}
-                settingKey="system.ldap.ldap_user_group_filter"
-                store={store}
-              />
-                <SettingField
-                  label="用户组 DN"
-                  value={ldap.ldap_user_group_dn}
-                  settingKey="system.ldap.ldap_user_group_dn"
+                  label="启用 LDAP"
+                  description="启用后本地 VPN 账号不参与认证"
+                  checked={ldap.ldap_auth}
+                  settingKey="system.ldap.ldap_auth"
                   store={store}
                 />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+
+                <Separator />
+
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <SettingField
+                    label="LDAP URL"
+                    value={ldap.ldap_url}
+                    settingKey="system.ldap.ldap_url"
+                    placeholder="ldap://ldap.example.com:389"
+                    store={store}
+                  />
+                  <SettingField
+                    label="Base DN"
+                    value={ldap.ldap_base_dn}
+                    settingKey="system.ldap.ldap_base_dn"
+                    placeholder="dc=example,dc=com"
+                    store={store}
+                  />
+                  <SettingField
+                    label="用户属性"
+                    value={ldap.ldap_user_attribute}
+                    settingKey="system.ldap.ldap_user_attribute"
+                    placeholder="uid"
+                    store={store}
+                  />
+                  <SettingField
+                    label="绑定 DN"
+                    value={ldap.ldap_bind_user_dn}
+                    settingKey="system.ldap.ldap_bind_user_dn"
+                    store={store}
+                  />
+                  <SettingField
+                    label="绑定密码"
+                    value={ldap.ldap_bind_password}
+                    settingKey="system.ldap.ldap_bind_password"
+                    type="password"
+                    visibilityToggle
+                    store={store}
+                  />
+                  <SettingField
+                    label="IP 属性名"
+                    value={ldap.ldap_user_attr_ipaddr_name}
+                    settingKey="system.ldap.ldap_user_attr_ipaddr_name"
+                    store={store}
+                  />
+                  <SettingField
+                    label="配置属性名"
+                    value={ldap.ldap_user_attr_config_name}
+                    settingKey="system.ldap.ldap_user_attr_config_name"
+                    store={store}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <SettingSwitch
+                    label="用户组过滤"
+                    description="只允许指定 memberOf 登录"
+                    checked={ldap.ldap_user_group_filter}
+                    settingKey="system.ldap.ldap_user_group_filter"
+                    store={store}
+                  />
+                  <SettingField
+                    label="用户组 DN"
+                    value={ldap.ldap_user_group_dn}
+                    settingKey="system.ldap.ldap_user_group_dn"
+                    store={store}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         {/* ====== Tab 3: OpenVPN参数 ====== */}
-        <TabsContent value="openvpn">
-          <Card>
-            <CardHeader>
-              <CardTitle>OpenVPN 参数</CardTitle>
-              <CardDescription>端口、协议、网段、DNS 等核心 OpenVPN 服务配置</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-6 sm:grid-cols-2">
-                <SettingField
-                  label="端口"
-                  value={ovpn.ovpn_port}
-                  settingKey="openvpn.ovpn_port"
-                  store={store}
-                />
-                <SettingSelectField
-                  label="协议"
-                  value={ovpn.ovpn_proto}
-                  settingKey="openvpn.ovpn_proto"
-                  options={[
-                    { value: 'udp', label: 'UDP（低延迟，常用推荐）' },
-                    { value: 'tcp', label: 'TCP（穿透性更好，稳定优先）' },
-                  ]}
-                  store={store}
-                />
-                <SettingField
-                  label="IPv4 网段"
-                  value={ovpn.ovpn_subnet}
-                  settingKey="openvpn.ovpn_subnet"
-                  placeholder="10.8.0.0/24"
-                  store={store}
-                />
-                <SettingField
-                  label="最大客户端"
-                  value={ovpn.ovpn_max_clients}
-                  settingKey="openvpn.ovpn_max_clients"
-                  store={store}
-                />
-                <SettingField
-                  label="Management"
-                  value={ovpn.ovpn_management}
-                  settingKey="openvpn.ovpn_management"
-                  placeholder="127.0.0.1:7505"
-                  store={store}
-                />
-                <SettingField
-                  label="DNS1"
-                  value={ovpn.ovpn_push_dns1}
-                  settingKey="openvpn.ovpn_push_dns1"
-                  placeholder="8.8.8.8"
-                  store={store}
-                />
-                <SettingField
-                  label="DNS2"
-                  value={ovpn.ovpn_push_dns2}
-                  settingKey="openvpn.ovpn_push_dns2"
-                  placeholder="8.8.4.4"
-                  store={store}
-                />
-              </div>
+        {canViewOpenvpn && (
+          <TabsContent value="openvpn">
+            <Card>
+              <CardHeader>
+                <CardTitle>OpenVPN 参数</CardTitle>
+                <CardDescription>端口、协议、网段、DNS 等核心 OpenVPN 服务配置</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <SettingField
+                    label="端口"
+                    value={ovpn.ovpn_port}
+                    settingKey="openvpn.ovpn_port"
+                    store={store}
+                  />
+                  <SettingSelectField
+                    label="协议"
+                    value={ovpn.ovpn_proto}
+                    settingKey="openvpn.ovpn_proto"
+                    options={[
+                      { value: 'udp', label: 'UDP（低延迟，常用推荐）' },
+                      { value: 'tcp', label: 'TCP（穿透性更好，稳定优先）' },
+                    ]}
+                    store={store}
+                  />
+                  <SettingField
+                    label="IPv4 网段"
+                    value={ovpn.ovpn_subnet}
+                    settingKey="openvpn.ovpn_subnet"
+                    placeholder="10.8.0.0/24"
+                    store={store}
+                  />
+                  <SettingField
+                    label="最大客户端"
+                    value={ovpn.ovpn_max_clients}
+                    settingKey="openvpn.ovpn_max_clients"
+                    store={store}
+                  />
+                  <SettingField
+                    label="Management"
+                    value={ovpn.ovpn_management}
+                    settingKey="openvpn.ovpn_management"
+                    placeholder="127.0.0.1:7505"
+                    store={store}
+                  />
+                  <SettingField
+                    label="DNS1"
+                    value={ovpn.ovpn_push_dns1}
+                    settingKey="openvpn.ovpn_push_dns1"
+                    placeholder="8.8.8.8"
+                    store={store}
+                  />
+                  <SettingField
+                    label="DNS2"
+                    value={ovpn.ovpn_push_dns2}
+                    settingKey="openvpn.ovpn_push_dns2"
+                    placeholder="8.8.4.4"
+                    store={store}
+                  />
+                </div>
 
-              <Separator />
+                <Separator />
 
-              <div className="space-y-4">
-                <SettingSwitch
-                  label="全局网关"
-                  description="推送默认路由"
-                  checked={ovpn.ovpn_gateway}
-                  settingKey="openvpn.ovpn_gateway"
-                  store={store}
-                />
-                <SettingSwitch
-                  label="IPv6"
-                  description="启用 IPv6 地址池"
-                  checked={ovpn.ovpn_ipv6}
-                  settingKey="openvpn.ovpn_ipv6"
-                  store={store}
-                />
-                <SettingField
-                  label="IPv6 网段"
-                  value={ovpn.ovpn_subnet6}
-                  settingKey="openvpn.ovpn_subnet6"
-                  placeholder="fd00::/64"
-                  store={store}
-                />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+                <div className="space-y-4">
+                  <SettingSwitch
+                    label="全局网关"
+                    description="推送默认路由"
+                    checked={ovpn.ovpn_gateway}
+                    settingKey="openvpn.ovpn_gateway"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="IPv6"
+                    description="启用 IPv6 地址池"
+                    checked={ovpn.ovpn_ipv6}
+                    settingKey="openvpn.ovpn_ipv6"
+                    store={store}
+                  />
+                  <SettingField
+                    label="IPv6 网段"
+                    value={ovpn.ovpn_subnet6}
+                    settingKey="openvpn.ovpn_subnet6"
+                    placeholder="fd00::/64"
+                    store={store}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         {/* ====== Tab 4: 服务管理 ====== */}
-        <TabsContent value="service">
-          <ServiceTab store={store} />
-        </TabsContent>
+        {canViewService && (
+          <TabsContent value="service">
+            <ServiceTab store={store} />
+          </TabsContent>
+        )}
 
         {/* ====== Tab 5: 客户端安装包管理 ====== */}
-        <TabsContent value="packages">
-          <ClientPackagesTab />
-        </TabsContent>
+        {canViewPackages && (
+          <TabsContent value="packages">
+            <ClientPackagesTab />
+          </TabsContent>
+        )}
       </Tabs>
 
-      {/* 整页统一的保存条：固定在底部，所有 Tab 共享 */}
-      <SaveBar
-        dirtyCount={dirtyKeys.length}
-        saving={saving}
-        disabled={!isDirty}
-        onSave={handleSave}
-        onReset={handleReset}
-      />
+      {/* 整页统一的保存条：固定在底部，所有 Tab 共享；仅对有 settings:update 权限的用户显示 */}
+      {canUpdate && (
+        <SaveBar
+          dirtyCount={dirtyKeys.length}
+          saving={saving}
+          disabled={!isDirty}
+          onSave={handleSave}
+          onReset={handleReset}
+        />
+      )}
     </div>
   );
 }
