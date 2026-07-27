@@ -268,14 +268,13 @@ export default function SettingsPage() {
   const canViewOpenvpn = hasPermission('settings:openvpn');
   const canViewService = hasPermission('settings:service');
   const canViewPackages = hasPermission('settings:packages');
-  const canUpdate = hasPermission('settings:update');
 
-  // 检查各 Tab 的保存权限（settings:update 作为兼容通配，拥有即等价于所有 Tab 保存权限）
-  const canSaveBase = canUpdate || hasPermission('settings:base:update');
-  const canSaveLdap = canUpdate || hasPermission('settings:ldap:update');
-  const canSaveOvpn = canUpdate || hasPermission('settings:openvpn:update');
-  // service.auth_user 的保存需要 server:manage 或 settings:update
-  const canSaveServiceAuth = canUpdate || hasPermission('server:manage');
+  // 检查各 Tab 的保存权限
+  const canSaveBase = hasPermission('settings:base:update');
+  const canSaveLdap = hasPermission('settings:ldap:update');
+  const canSaveOvpn = hasPermission('settings:openvpn:update');
+  // service.auth_user 的保存需要 server:manage 权限
+  const canSaveServiceAuth = hasPermission('server:manage');
   // SaveBar 仅在用户拥有至少一个 Tab 的保存权限时显示
   const canShowSaveBar = canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth;
 
@@ -334,7 +333,7 @@ export default function SettingsPage() {
       if (key.startsWith('system.base.') && !canSaveBase) return false;
       if (key.startsWith('system.ldap.') && !canSaveLdap) return false;
       if (key.startsWith('openvpn.') && !canSaveOvpn) return false;
-      // service.auth_user 的保存需要 server:manage 或 settings:update
+      // service.auth_user 的保存需要 server:manage 权限
       if (key === 'service.auth_user' && !canSaveServiceAuth) return false;
       return true;
     });
@@ -773,7 +772,7 @@ export default function SettingsPage() {
         )}
       </Tabs>
 
-      {/* 整页统一的保存条：固定在底部，所有 Tab 共享；拥有 settings:update 或至少一个 Tab:update 权限时显示 */}
+      {/* 整页统一的保存条：固定在底部，所有 Tab 共享；拥有至少一个 Tab:update 权限时显示 */}
       {canShowSaveBar && (
         <SaveBar
           dirtyCount={saveableDirtyKeys.length}

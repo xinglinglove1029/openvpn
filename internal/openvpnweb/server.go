@@ -967,10 +967,10 @@ func Run(info BuildInfo) {
 		ovpn.POST("/settings", func(c *gin.Context) {
 		c.Request.ParseForm()
 
-		// 按Tab计算保存权限：admin 和 settings:update 自动拥有所有Tab保存权限（向后兼容）
-		canSaveBase := hasPermissionCode(c, "settings:base:update") || hasPermissionCode(c, "settings:update")
-		canSaveLdap := hasPermissionCode(c, "settings:ldap:update") || hasPermissionCode(c, "settings:update")
-		canSaveOvpn := hasPermissionCode(c, "settings:openvpn:update") || hasPermissionCode(c, "settings:update")
+		// 按Tab计算保存权限
+		canSaveBase := hasPermissionCode(c, "settings:base:update")
+		canSaveLdap := hasPermissionCode(c, "settings:ldap:update")
+		canSaveOvpn := hasPermissionCode(c, "settings:openvpn:update")
 
 		// 非 admin 用户：如果没有任何Tab保存权限，返回 403
 		if !canSaveBase && !canSaveLdap && !canSaveOvpn {
@@ -991,11 +991,9 @@ func Run(info BuildInfo) {
 			if strings.HasPrefix(k, "openvpn.") && !canSaveOvpn {
 				continue
 			}
-			// 其他字段（如 system.email.*）仅在有 settings:update 时允许
+			// 其他字段跳过（不属于任何Tab的配置不在此接口保存）
 			if !strings.HasPrefix(k, "system.base.") && !strings.HasPrefix(k, "system.ldap.") && !strings.HasPrefix(k, "openvpn.") {
-				if !hasPermissionCode(c, "settings:update") {
-					continue
-				}
+				continue
 			}
 
 			savedCount++

@@ -148,12 +148,11 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:audit", "audit:view", "查看审计", "button", "", "", 1},
 	// 系统设置（7）
 	{"menu:settings", "settings:view", "查看设置", "button", "", "", 1},
-	{"menu:settings", "settings:update", "更新设置", "button", "", "", 2},
-	{"menu:settings", "settings:base", "基础控制Tab", "button", "", "", 3},
-	{"menu:settings", "settings:ldap", "LDAP认证Tab", "button", "", "", 4},
-	{"menu:settings", "settings:openvpn", "OpenVPN参数Tab", "button", "", "", 5},
-	{"menu:settings", "settings:service", "服务管理Tab", "button", "", "", 6},
-	{"menu:settings", "settings:packages", "客户端安装包Tab", "button", "", "", 7},
+	{"menu:settings", "settings:base", "基础控制Tab", "button", "", "", 2},
+	{"menu:settings", "settings:ldap", "LDAP认证Tab", "button", "", "", 3},
+	{"menu:settings", "settings:openvpn", "OpenVPN参数Tab", "button", "", "", 4},
+	{"menu:settings", "settings:service", "服务管理Tab", "button", "", "", 5},
+	{"menu:settings", "settings:packages", "客户端安装包Tab", "button", "", "", 6},
 	// 系统设置按钮级权限（8）：各Tab操作按钮的独立权限码
 	{"settings:base", "settings:base:update", "保存基础控制", "button", "", "", 1},
 	{"settings:ldap", "settings:ldap:update", "保存LDAP认证", "button", "", "", 2},
