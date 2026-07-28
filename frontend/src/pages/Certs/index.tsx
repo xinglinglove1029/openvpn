@@ -8,6 +8,7 @@ import { messageOf, normalizeList } from '@/lib/format';
 import { PageHeader } from '@/components/PageHeader';
 import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
+import { HasPermission } from '@/components/HasPermission';
 import { Card, CardContent } from '@/ui/card';
 import { Button } from '@/ui/button';
 import {
@@ -126,10 +127,12 @@ export default function CertsPage() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Trust" title="证书管理" description="管理 CA 证书与客户端证书生命周期">
-        <Button size="sm" onClick={() => setRenewOpen(true)}>
-          <ShieldCheck className="h-4 w-4 mr-1" />
-          更新证书
-        </Button>
+        <HasPermission code="cert:renew">
+          <Button size="sm" onClick={() => setRenewOpen(true)}>
+            <ShieldCheck className="h-4 w-4 mr-1" />
+            更新证书
+          </Button>
+        </HasPermission>
       </PageHeader>
 
       <Card>

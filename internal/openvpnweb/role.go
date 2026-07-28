@@ -185,6 +185,8 @@ var buttonPermissions = []permissionSeedItem{
 }
 
 // 普通用户角色默认权限（菜单 + 按钮）
+// 说明：系统设置（menu:settings / settings:*）默认不授予普通用户
+//       管理员可在"角色管理"页面按需为普通用户分配设置类权限
 var defaultUserRoleCodes = []string{
 	"menu:overview",
 	"menu:clients",
@@ -197,10 +199,6 @@ var defaultUserRoleCodes = []string{
 	"client:regenerate",
 	"client:view_online",
 	"history:view",
-	"menu:settings",      // 系统设置菜单
-	"settings:view",      // 查看设置
-	"settings:base",      // 基础控制Tab
-	"settings:packages",   // 客户端安装包Tab
 }
 
 // SeedPermissionsAndRoles 初始化权限与内置角色
@@ -217,10 +215,17 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 	// 先写菜单（parentID=0）
 	for _, p := range menuPermissions {
 		var perm Permission
-		if err := db.Where("code = ?", p.Code).FirstOrCreate(&perm, Permission{
-			Name: p.Name, Code: p.Code, Type: p.Type, Path: p.Path, Icon: p.Icon, Sort: p.Sort,
-		}).Error; err != nil {
-			return err
+		if err := db.Where("code = ?", p.Code).First(&perm).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				perm = Permission{
+					Name: p.Name, Code: p.Code, Type: p.Type, Path: p.Path, Icon: p.Icon, Sort: p.Sort,
+				}
+				if err := db.Create(&perm).Error; err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
 		}
 		// 更新元数据（已有记录时同步名称/路径/排序）
 		db.Model(&perm).Where("id = ?", perm.ID).Updates(map[string]interface{}{
@@ -231,10 +236,17 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 	// 再写按钮（按 parentCode 关联）
 	for _, p := range buttonPermissions {
 		var perm Permission
-		if err := db.Where("code = ?", p.Code).FirstOrCreate(&perm, Permission{
-			Name: p.Name, Code: p.Code, Type: p.Type, Sort: p.Sort,
-		}).Error; err != nil {
-			return err
+		if err := db.Where("code = ?", p.Code).First(&perm).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				perm = Permission{
+					Name: p.Name, Code: p.Code, Type: p.Type, Sort: p.Sort,
+				}
+				if err := db.Create(&perm).Error; err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
 		}
 		parentID := uint(0)
 		if p.ParentCode != "" {
@@ -282,9 +294,10 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 	})
 
 	// 4. 内置角色权限同步策略：
-	//    administrator：首次初始化写入全权限，之后保留管理员运行期修改，不再自动同步
-	//    user：每次启动时 FirstOrCreate 同步 defaultUserRoleCodes 中的默认权限
-	//          （新增的默认权限项会被自动补齐，管理员额外添加的权限保留，管理员移除的默认权限不强行回填）
+	//    administrator 与 user 均采用"首次初始化"策略：
+	//    - 仅当角色尚未有任何 role_permission 记录时才写入默认权限
+	//    - 之后保留管理员运行期修改，不再自动同步，避免管理员移除的权限被回填
+	//    - 新增的权限项需管理员在"角色管理"页面手动分配
 	return db.Transaction(func(tx *gorm.DB) error {
 		// administrator 角色：仅首次初始化时写入全权限
 		var adminCount int64
@@ -299,17 +312,23 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 			}
 		}
 
-		// user 角色：每次启动确保 defaultUserRoleCodes 中的权限都存在
-		// 这样新增的默认权限项会被自动同步，但不会删除管理员移除的权限
-		for _, code := range defaultUserRoleCodes {
-			pid, ok := codeToID[code]
-			if !ok {
-				// 权限清单中不存在该 code（可能是配置错误），跳过并记日志
-				logger.Error(context.Background(), "SeedPermissionsAndRoles: defaultUserRoleCodes 引用未定义的权限 code: %s", code)
-				continue
-			}
-			if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: userRole.ID, PermissionID: pid}).Error; err != nil {
-				return err
+		// user 角色：仅首次初始化时写入 defaultUserRoleCodes
+		// 管理员后续在"角色管理"页面移除/新增的权限不会被自动覆盖
+		var userCount int64
+		if err := tx.Model(&RolePermission{}).Where("role_id = ?", userRole.ID).Count(&userCount).Error; err != nil {
+			return err
+		}
+		if userCount == 0 {
+			for _, code := range defaultUserRoleCodes {
+				pid, ok := codeToID[code]
+				if !ok {
+					// 权限清单中不存在该 code（可能是配置错误），跳过并记日志
+					logger.Error(context.Background(), "SeedPermissionsAndRoles: defaultUserRoleCodes 引用未定义的权限 code: %s", code)
+					continue
+				}
+				if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: userRole.ID, PermissionID: pid}).Error; err != nil {
+					return err
+				}
 			}
 		}
 

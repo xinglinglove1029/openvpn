@@ -291,7 +291,7 @@ export default function SettingsPage() {
     setLoading(true);
     Promise.all([
       api.get<SettingsResponse>('/ovpn/settings'),
-      api.get<{ authUser?: boolean }>('/ovpn/group/1/users').catch(() => ({ authUser: false })),
+      api.get<{ authUser?: boolean }>('/ovpn/auth-status').catch(() => ({ authUser: false })),
     ])
       .then(([data, authData]) => {
         setSettings(data);

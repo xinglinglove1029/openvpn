@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { RefreshCw, Download, Search } from 'lucide-react';
+import { RefreshCw, Download } from 'lucide-react';
 import { api } from '../../api';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
@@ -11,7 +11,6 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
 import { Card, CardContent } from '@/ui/card';
 import { Button } from '@/ui/button';
-import { Input } from '@/ui/input';
 import {
   Select,
   SelectContent,
@@ -19,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/ui/select';
-import type { AuditLogRecord } from '../../types';
+import type { AuditLogRecord, UserRecord } from '../../types';
 
 const moduleOptions = [
   { value: '', label: '全部模块' },
@@ -51,6 +50,15 @@ export default function AuditPage() {
   const [action, setAction] = useState('');
   const [dateRange, setDateRange] = useState({ from: '', to: '' });
   const [reloadKey, setReloadKey] = useState(0);
+
+  const usersState = useAsync<UserRecord[]>(
+    () =>
+      api
+        .get<{ data?: UserRecord[] } | UserRecord[]>('/ovpn/audit/user-options')
+        .then((v) => normalizeList<UserRecord>(v, ['data'])),
+    [],
+  );
+  const users = usersState.data || [];
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ limit: '100' });
@@ -161,15 +169,19 @@ export default function AuditPage() {
         <CardContent className="p-6">
           {/* 过滤栏 */}
           <div className="flex flex-wrap items-center gap-3 mb-6">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                className="pl-8 w-[160px]"
-                value={operator}
-                placeholder="操作人"
-                onChange={(e) => setOperator(e.target.value)}
-              />
-            </div>
+            <Select value={operator} onValueChange={setOperator}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="全部操作人" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">全部操作人</SelectItem>
+                {users.map((u) => (
+                  <SelectItem key={u.id} value={u.username}>
+                    {u.username}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={module} onValueChange={setModule}>
               <SelectTrigger className="w-[130px]">
                 <SelectValue placeholder="全部模块" />

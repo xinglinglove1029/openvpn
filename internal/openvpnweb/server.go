@@ -913,8 +913,14 @@ func Run(info BuildInfo) {
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
 		ovpn.GET("/audit/logs", RequirePermission("audit:view"), auditLogsHandler)
 		ovpn.GET("/audit/export", RequirePermission("audit:view"), auditExportHandler)
+		ovpn.GET("/audit/user-options", RequirePermission("audit:view"), auditUserOptionsHandler)
+		ovpn.GET("/auth-status", func(c *gin.Context) {
+			cmd := exec.Command("egrep", "^auth-user-pass-verify", filepath.Join(ovData, "server.conf"))
+			auth := cmd.Run() == nil
+			c.JSON(http.StatusOK, gin.H{"authUser": auth})
+		})
 
-		ovpn.GET("/settings", RequirePermission("settings:view"), func(c *gin.Context) {
+		ovpn.GET("/settings", func(c *gin.Context) {
 		var conf config
 		if err := viper.Unmarshal(&conf); err != nil {
 			// 配置解析失败，返回500错误而不是泄露零值配置
@@ -929,9 +935,22 @@ func Run(info BuildInfo) {
 			return
 		}
 
-		// 非 admin 用户：根据 settings:* 权限过滤
+		// 非 admin 用户：检查是否有 settings 相关权限
 		perms, _ := c.Get("permissions")
 		permList, _ := perms.([]string)
+
+		// 检查是否有任何 settings 权限
+		hasSettingsAccess := false
+		for _, p := range permList {
+			if p == "*" || strings.HasPrefix(p, "settings:") {
+				hasSettingsAccess = true
+				break
+			}
+		}
+		if !hasSettingsAccess {
+			c.JSON(http.StatusForbidden, gin.H{"message": "无权限访问系统设置"})
+			return
+		}
 
 		// 辅助函数：检查是否拥有某个权限
 		hasPerm := func(code string) bool {
@@ -1373,7 +1392,45 @@ func Run(info BuildInfo) {
 
 		ovpn.GET("/group", RequirePermission("group:view"), func(c *gin.Context) {
 			var g Group
-			c.JSON(http.StatusOK, g.All())
+			allGroups := g.All()
+
+			// admin 直接返回全部分组
+			if isAdmin, _ := c.Get("isAdmin"); isAdmin == true {
+				c.JSON(http.StatusOK, allGroups)
+				return
+			}
+
+			// 普通用户：只返回自己所在分组及其所有下级分组
+			currentUsername := ""
+			if user, ok := c.Get("user"); ok {
+				if s, ok := user.(string); ok {
+					currentUsername = s
+				}
+			}
+			if currentUsername == "" {
+				c.JSON(http.StatusOK, []Group{})
+				return
+			}
+
+			currentUser := User{Username: currentUsername}.Info()
+			if currentUser.ID == 0 || currentUser.Gid == 0 {
+				c.JSON(http.StatusOK, []Group{})
+				return
+			}
+
+			accessibleIDs := GetSubtreeIDs(currentUser.Gid)
+			idSet := make(map[uint]bool, len(accessibleIDs))
+			for _, id := range accessibleIDs {
+				idSet[id] = true
+			}
+
+			filtered := make([]Group, 0, len(allGroups))
+			for _, group := range allGroups {
+				if idSet[group.ID] {
+					filtered = append(filtered, group)
+				}
+			}
+			c.JSON(http.StatusOK, filtered)
 		})
 
 		ovpn.GET("/group/:id", RequirePermission("group:view"), func(c *gin.Context) {
@@ -1472,9 +1529,48 @@ func Run(info BuildInfo) {
 			username := c.Query("username")
 			if username != "" {
 				u.Username = username
+				c.JSON(http.StatusOK, u.Info())
+				return
 			}
 
-			c.JSON(http.StatusOK, u.Info())
+			// 无 username 参数时返回当前用户可见的用户列表（轻量，仅 id 和 username）
+			type SimpleUser struct {
+				ID       uint   `json:"id"`
+				Username string `json:"username"`
+			}
+
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+
+			var users []SimpleUser
+
+			if isAdmin == true {
+				if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Find(&users).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+					return
+				}
+			} else {
+				// 普通用户：只返回自己所在分组及下级分组的用户
+				if currentUserStr == "" {
+					c.JSON(http.StatusOK, []SimpleUser{})
+					return
+				}
+				accessibleUsers, skipFilter := GetAccessibleUsernames(currentUserStr)
+				if skipFilter {
+					if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Find(&users).Error; err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+						return
+					}
+				} else {
+					if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Where("username IN ?", accessibleUsers).Find(&users).Error; err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+						return
+					}
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{"data": users})
 		})
 
 		ovpn.GET("/user/:id", RequirePermission("user:view"), func(c *gin.Context) {
@@ -1749,13 +1845,6 @@ func Run(info BuildInfo) {
 
 		ovpn.PATCH("/user", RequirePermission("user:update"), func(c *gin.Context) {
 			c.Request.ParseForm()
-			formData := make(map[string]string)
-			for k, v := range c.Request.PostForm {
-				if len(v) > 0 {
-					formData[k] = v[0]
-				}
-			}
-			os.WriteFile("data/debug_patch_user.log", []byte(fmt.Sprintf("form data: %v\nu.Password: %q\nsendNotifyEmail: %q", formData, c.PostForm("password"), c.PostForm("sendNotifyEmail"))), 0644)
 
 			var u User
 			c.ShouldBind(&u)
@@ -1765,6 +1854,38 @@ func Run(info BuildInfo) {
 			if err := validateRoleID(db, u.RoleID); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
+			}
+
+			// 数据权限校验：普通用户修改目标 gid 时，仅允许迁移到自己所在分组及其下级分组
+			// admin 用户跳过此校验
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+			if adminUsername != "" && currentUsername == adminUsername {
+				// admin 不做数据权限校验
+			} else if currentUsername != "" {
+				currentUser := User{Username: currentUsername}.Info()
+				if currentUser.ID == 0 {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+					return
+				}
+				// 目标分组必须为当前用户可访问的分组（自己及其下级）
+				if u.Gid != 0 && u.Gid != currentUser.Gid {
+					accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
+					found := false
+					for _, id := range accessibleGroupIDs {
+						if id == u.Gid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						c.JSON(http.StatusForbidden, gin.H{"message": "无权限将用户迁移到该分组"})
+						return
+					}
+				}
 			}
 
 			if ipAddr, ok := c.Request.PostForm["ipAddr"]; ok {
@@ -1781,60 +1902,50 @@ func Run(info BuildInfo) {
 
 			sendNotifyEmail := c.PostForm("sendNotifyEmail")
 			rawPassword := u.Password
-			logger.Error(context.Background(), "PATCH user debug before update - sendNotifyEmail=%s, rawPwdLen=%d", sendNotifyEmail, len(rawPassword))
 
 			err := u.Update()
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
 				if sendNotifyEmail == "true" && rawPassword != "" {
-					os.WriteFile("data/debug_patch_user.log", []byte(fmt.Sprintf("form data: %v\nu.Password: %q\nsendNotifyEmail: %q\n进入goroutine前，u.ID=%d, rawPwdLen=%d", formData, c.PostForm("password"), c.PostForm("sendNotifyEmail"), u.ID, len(rawPassword))), 0644)
 					go func(userID uint, password string) {
-						os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n", userID, len(password))), 0644)
 						var cu User
-						result := db.First(&cu, userID)
-						os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
+						if err := db.First(&cu, userID).Error; err != nil {
+							logger.Error(context.Background(), "发送邮件通知失败，查询用户出错: %s", err.Error())
+							return
+						}
 
-						if cu.Email != "" {
-							var tpl *template.Template
-							var buf bytes.Buffer
-							var tplErr error
-
-							tpl, tplErr = template.New("account-email").Parse(accountEmailTemplate)
-							if tplErr == nil {
-								tplErr = tpl.Execute(&buf, struct {
-									Type          string
-									Name          string
-									Username      string
-									Password      string
-									SiteUrl       string
-									LocalPackages []LocalPackageInfo
-								}{
-									Type:          "resetPass",
-									Name:          cu.Name,
-									Username:      cu.Username,
-									Password:      password,
-									SiteUrl:       viper.GetString("system.base.site_url"),
-									LocalPackages: nil,
-								})
-							}
-
-							if tplErr != nil {
-								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染失败: %v\n", userID, len(password), result.Error, cu.Username, cu.Email, tplErr)), 0644)
-								logger.Error(context.Background(), "渲染邮件模板失败: %s", tplErr.Error())
-								return
-							}
-
-							os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
-							if sendErr := sendUserEmail(cu.Email, "用户密码配置通知", buf.String(), nil, cu.Username, "password_reset"); sendErr != nil {
-								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\nsendUserEmail失败: %v\n", userID, len(password), result.Error, cu.Username, cu.Email, sendErr)), 0644)
-								logger.Error(context.Background(), "发送用户邮件失败: %s", sendErr.Error())
-							} else {
-								os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n模板渲染成功，准备调用sendUserEmail\nsendUserEmail成功\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
-							}
-						} else {
-							os.WriteFile("data/debug_goroutine.log", []byte(fmt.Sprintf("goroutine开始执行，userID=%d, pwdLen=%d\n查询用户结果: error=%v, username=%s, email=%s\n用户没有邮箱，跳过发送\n", userID, len(password), result.Error, cu.Username, cu.Email)), 0644)
+						if cu.Email == "" {
 							logger.Error(context.Background(), "发送邮件通知失败，用户没有配置邮箱地址")
+							return
+						}
+
+						var buf bytes.Buffer
+						tpl, tplErr := template.New("account-email").Parse(accountEmailTemplate)
+						if tplErr == nil {
+							tplErr = tpl.Execute(&buf, struct {
+								Type          string
+								Name          string
+								Username      string
+								Password      string
+								SiteUrl       string
+								LocalPackages []LocalPackageInfo
+							}{
+								Type:          "resetPass",
+								Name:          cu.Name,
+								Username:      cu.Username,
+								Password:      password,
+								SiteUrl:       viper.GetString("system.base.site_url"),
+								LocalPackages: nil,
+							})
+						}
+						if tplErr != nil {
+							logger.Error(context.Background(), "渲染邮件模板失败: %s", tplErr.Error())
+							return
+						}
+
+						if sendErr := sendUserEmail(cu.Email, "用户密码配置通知", buf.String(), nil, cu.Username, "password_reset"); sendErr != nil {
+							logger.Error(context.Background(), "发送用户邮件失败: %s", sendErr.Error())
 						}
 					}(u.ID, rawPassword)
 				}
@@ -2121,7 +2232,21 @@ func Run(info BuildInfo) {
 
 			c.ShouldBindQuery(&p)
 
-			c.JSON(http.StatusOK, h.Query(p))
+			// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的连接历史
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+
+			var accessibleUsers []string
+			skipFilter := false
+
+			if isAdmin == true {
+				skipFilter = true
+			} else if currentUserStr != "" {
+				accessibleUsers, skipFilter = GetAccessibleUsernames(currentUserStr)
+			}
+
+			c.JSON(http.StatusOK, h.Query(p, accessibleUsers, skipFilter))
 		})
 
 		ovpn.POST("/history", func(c *gin.Context) {
@@ -2154,19 +2279,23 @@ func Run(info BuildInfo) {
 
 		ovpn.GET("/notify/logs", func(c *gin.Context) {
 			limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-			c.JSON(http.StatusOK, gin.H{"data": queryNotifyLogs(limit)})
+			uname, _ := c.Get("user")
+			unameStr, _ := uname.(string)
+			isAdmin, _ := c.Get("isAdmin")
+			c.JSON(http.StatusOK, gin.H{"data": queryNotifyLogs(limit, unameStr, isAdmin == true)})
 		})
 
 		// 站内信：未读数 + 标记已读
 		ovpn.GET("/notify/unread-count", func(c *gin.Context) {
 			username, _ := c.Get("user")
 			uname, _ := username.(string)
+			isAdmin, _ := c.Get("isAdmin")
 			rec := getUserNotifyRead(uname)
-			total := countUnreadNotifyLogs(rec.LastReadID)
+			total := countUnreadNotifyLogs(rec.LastReadID, uname, isAdmin == true)
 			c.JSON(http.StatusOK, gin.H{
 				"unread":     total,
 				"lastReadId": rec.LastReadID,
-				"maxId":      maxNotifyLogID(),
+				"maxId":      maxNotifyLogID(uname, isAdmin == true),
 			})
 		})
 
@@ -2177,6 +2306,7 @@ func Run(info BuildInfo) {
 				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
 				return
 			}
+			isAdmin, _ := c.Get("isAdmin")
 			// 可选：客户端传入 lastReadId；未传则推进到当前最大 id
 			var body struct {
 				LastReadID uint `json:"lastReadId"`
@@ -2184,7 +2314,7 @@ func Run(info BuildInfo) {
 			_ = c.ShouldBind(&body)
 			target := body.LastReadID
 			if target == 0 {
-				target = maxNotifyLogID()
+				target = maxNotifyLogID(uname, isAdmin == true)
 			}
 			rec, err := markUserNotifyRead(uname, target)
 			if err != nil {
@@ -2194,7 +2324,7 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, gin.H{
 				"message":    "marked",
 				"lastReadId": rec.LastReadID,
-				"unread":     countUnreadNotifyLogs(rec.LastReadID),
+				"unread":     countUnreadNotifyLogs(rec.LastReadID, uname, isAdmin == true),
 			})
 		})
 
@@ -2270,6 +2400,12 @@ func Run(info BuildInfo) {
 			var p Params
 			c.ShouldBindQuery(&p)
 
+			// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的连接历史
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+
+			accessibleUsers, skipFilter := GetAccessibleUsernames(currentUserStr)
+
 			fileName := fmt.Sprintf("history_%s.csv", time.Now().Format("20060102150405"))
 
 			c.Header("Content-Type", "text/csv; charset=utf-8")
@@ -2292,6 +2428,11 @@ func Run(info BuildInfo) {
 				if len(qt) == 2 {
 					query = query.Where("time_unix BETWEEN ? AND ?", qt[0], qt[1])
 				}
+			}
+
+			// 数据权限过滤
+			if !skipFilter && len(accessibleUsers) > 0 {
+				query = query.Where("username IN ?", accessibleUsers)
 			}
 
 			rows, err := query.Rows()

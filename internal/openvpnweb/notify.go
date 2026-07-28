@@ -149,7 +149,7 @@ func migrateNotifyLogChannelName() {
 	}
 }
 
-func queryNotifyLogs(limit int) []NotifyLog {
+func queryNotifyLogs(limit int, currentUsername string, isAdmin bool) []NotifyLog {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -159,7 +159,17 @@ func queryNotifyLogs(limit int) []NotifyLog {
 		return logs
 	}
 
-	if err := db.WithContext(context.Background()).Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
+	query := db.WithContext(context.Background()).Model(&NotifyLog{})
+
+	// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的站内信
+	if !isAdmin && currentUsername != "" {
+		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		if !skipFilter {
+			query = query.Where("username IN ?", accessibleUsers)
+		}
+	}
+
+	if err := query.Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
 		logger.Error(context.Background(), "query notify logs failed: %s", err)
 		return []NotifyLog{}
 	}

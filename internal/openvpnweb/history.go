@@ -76,7 +76,7 @@ func (h History) Delete(id string) error {
 	return result.Error
 }
 
-func (h History) Query(p Params) QueryData {
+func (h History) Query(p Params, accessibleUsers []string, skipFilter bool) QueryData {
 	var qd QueryData
 	var itmes []History
 	var totalCount int64
@@ -84,6 +84,11 @@ func (h History) Query(p Params) QueryData {
 
 	db := db.Table(h.TableName())
 	qdb := db.WithContext(context.Background())
+
+	// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的连接历史
+	if !skipFilter && len(accessibleUsers) > 0 {
+		qdb = qdb.Where("username IN ?", accessibleUsers)
+	}
 
 	db.Count(&totalCount)
 

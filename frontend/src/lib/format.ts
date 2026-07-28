@@ -82,8 +82,14 @@ export function normalizeList<T>(value: unknown, candidates: string[] = []): T[]
 }
 
 export function buildTree(groups: GroupRecord[], parentId: number | null = null, depth = 0): Array<GroupRecord & { depth: number }> {
+  const idSet = new Set(groups.map((g) => g.id));
   return groups
-    .filter((item) => (item.parent_id === item.id ? null : item.parent_id ?? null) === parentId)
+    .filter((item) => {
+      const pid = item.parent_id === item.id ? null : item.parent_id ?? null;
+      if (parentId !== null) return pid === parentId;
+      // 根节点：parent_id 为 null，或父节点不在可见列表中（数据权限过滤后的子树）
+      return pid === null || !idSet.has(pid);
+    })
     .flatMap((item) => [{ ...item, depth }, ...buildTree(groups, item.id, depth + 1)]);
 }
 

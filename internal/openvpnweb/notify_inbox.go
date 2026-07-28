@@ -68,15 +68,23 @@ func markUserNotifyRead(username string, lastID uint) (UserNotifyRead, error) {
 }
 
 // countUnreadNotifyLogs 计算全局 NotifyLog 中 id > lastReadID 的数量
-func countUnreadNotifyLogs(lastReadID uint) int64 {
+// 数据权限：普通用户只统计自己所在分组及下级分组用户的未读数
+func countUnreadNotifyLogs(lastReadID uint, currentUsername string, isAdmin bool) int64 {
 	if db == nil {
 		return 0
 	}
+	query := db.WithContext(context.Background()).Model(&NotifyLog{}).Where("id > ?", lastReadID)
+
+	// 数据权限过滤
+	if !isAdmin && currentUsername != "" {
+		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		if !skipFilter {
+			query = query.Where("username IN ?", accessibleUsers)
+		}
+	}
+
 	var n int64
-	if err := db.WithContext(context.Background()).
-		Model(&NotifyLog{}).
-		Where("id > ?", lastReadID).
-		Count(&n).Error; err != nil {
+	if err := query.Count(&n).Error; err != nil {
 		logger.Error(context.Background(), "count unread notify logs failed: %s", err.Error())
 		return 0
 	}
@@ -84,15 +92,23 @@ func countUnreadNotifyLogs(lastReadID uint) int64 {
 }
 
 // maxNotifyLogID 获取当前最大 NotifyLog id；表为空时返回 0
-func maxNotifyLogID() uint {
+// 数据权限：普通用户只统计自己所在分组及下级分组用户的最大 id
+func maxNotifyLogID(currentUsername string, isAdmin bool) uint {
 	if db == nil {
 		return 0
 	}
+	query := db.WithContext(context.Background()).Model(&NotifyLog{})
+
+	// 数据权限过滤
+	if !isAdmin && currentUsername != "" {
+		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		if !skipFilter {
+			query = query.Where("username IN ?", accessibleUsers)
+		}
+	}
+
 	var maxID *uint
-	if err := db.WithContext(context.Background()).
-		Model(&NotifyLog{}).
-		Select("MAX(id)").
-		Scan(&maxID).Error; err != nil {
+	if err := query.Select("MAX(id)").Scan(&maxID).Error; err != nil {
 		logger.Error(context.Background(), "max notify log id failed: %s", err.Error())
 		return 0
 	}

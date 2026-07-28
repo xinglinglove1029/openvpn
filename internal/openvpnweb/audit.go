@@ -133,6 +133,21 @@ func queryAuditLogs(c *gin.Context) ([]AuditLog, int64, error) {
 	}
 
 	query := db.WithContext(context.Background()).Model(&AuditLog{})
+
+	// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的审计日志
+	currentUsername := ""
+	if user, ok := c.Get("user"); ok {
+		if s, ok := user.(string); ok {
+			currentUsername = s
+		}
+	}
+	if isAdmin, _ := c.Get("isAdmin"); isAdmin != true && currentUsername != "" {
+		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		if !skipFilter {
+			query = query.Where("operator IN ?", accessibleUsers)
+		}
+	}
+
 	if operator := strings.TrimSpace(c.Query("operator")); operator != "" {
 		query = query.Where("operator LIKE ?", "%"+operator+"%")
 	}
@@ -203,4 +218,43 @@ func auditExportHandler(c *gin.Context) {
 
 func csvCell(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+type auditUserOption struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+}
+
+func auditUserOptionsHandler(c *gin.Context) {
+	isAdmin, _ := c.Get("isAdmin")
+	currentUsername, _ := c.Get("user")
+	currentUserStr, _ := currentUsername.(string)
+
+	var users []auditUserOption
+
+	if isAdmin == true {
+		if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Find(&users).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+			return
+		}
+	} else {
+		if currentUserStr == "" {
+			c.JSON(http.StatusOK, []auditUserOption{})
+			return
+		}
+		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUserStr)
+		if skipFilter {
+			if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Find(&users).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+				return
+			}
+		} else {
+			if err := db.WithContext(context.Background()).Model(&User{}).Select("id", "username").Where("username IN ?", accessibleUsers).Find(&users).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "查询用户列表失败"})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": users})
 }

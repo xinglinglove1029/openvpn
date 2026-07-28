@@ -46,10 +46,6 @@ export function Sidebar() {
   // 对于 settings 菜单，还需要检查至少有一个 Tab 权限
   const navItems = allNavItems.filter((item) => {
     if (!hasPermission(item.permission)) return false;
-    // settings 菜单特殊处理：需要至少有一个 Tab 权限
-    if (item.settingsCheck) {
-      return item.settingsCheck.some((perm) => hasPermission(perm));
-    }
     return true;
   });
 

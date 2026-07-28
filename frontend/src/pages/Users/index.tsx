@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   Users,
@@ -126,25 +126,37 @@ export default function UsersPage() {
     () => api.get<unknown>('/ovpn/client').then((v) => normalizeList<ClientRecord>(v, ['clients', 'data'])),
     [reloadKey],
   );
+  const groups = groupsState.data || [];
+  const groupIdSet = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
   const usersState = useAsync(
-    () =>
-      api
+    () => {
+      // 仅当选中的分组在可见列表中时才请求用户列表（避免普通用户请求无权限的分组）
+      if (!groupIdSet.has(selectedGroupId)) {
+        return Promise.resolve({ users: [], authUser: false });
+      }
+      return api
         .get<{ users?: UserRecord[]; authUser?: boolean }>(`/ovpn/group/${selectedGroupId}/users`)
-        .then((v) => ({ users: normalizeList<UserRecord>(v, ['users', 'data']), authUser: v.authUser })),
-    [selectedGroupId, usersReloadKey],
+        .then((v) => ({ users: normalizeList<UserRecord>(v, ['users', 'data']), authUser: v.authUser }));
+    },
+    [selectedGroupId, usersReloadKey, groupIdSet],
   );
-  // RBAC：加载角色列表（仅 admin 需要展示角色下拉）
+  // RBAC：加载角色列表（仅拥有 user:create 或 user:update 权限的用户需要，用于角色选择）
+  const { hasPermission } = useAuth();
+  const canManageUserRole = hasPermission('user:create') || hasPermission('user:update');
   const rolesState = useAsync<Role[]>(
-    () =>
-      api
+    () => {
+      if (!canManageUserRole) return Promise.resolve([]);
+      return api
         .get<{ data?: Role[] } | Role[]>('/ovpn/role')
-        .then((v) => normalizeList<Role>(v, ['data'])),
-    [],
+        .then((v) => normalizeList<Role>(v, ['data']));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canManageUserRole],
   );
 
-  const groups = groupsState.data || [];
-  const clients = clientsState.data || [];
   const roles = rolesState.data || [];
+
+  const clients = clientsState.data || [];
 
   useEffect(() => {
     if (!groups.length) return;
@@ -280,10 +292,12 @@ function GroupTreePanel({
               <FolderTree className="h-4 w-4" />
               用户组
             </CardTitle>
-            <Button size="sm" variant="outline" onClick={openAddGroup}>
-              <Plus className="mr-1 h-3.5 w-3.5" />
-              新增
-            </Button>
+            <HasPermission code="group:create">
+              <Button size="sm" variant="outline" onClick={openAddGroup}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                新增
+              </Button>
+            </HasPermission>
           </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-3">
@@ -332,18 +346,24 @@ function GroupTreePanel({
             <>
               <Separator />
               <div className="flex flex-col gap-1">
-                <Button size="sm" variant="ghost" className="justify-start" onClick={openEditGroup}>
-                  <Edit className="mr-2 h-3.5 w-3.5" />
-                  编辑分组
-                </Button>
-                <Button size="sm" variant="ghost" className="justify-start" onClick={openGroupConfig}>
-                  <KeyRound className="mr-2 h-3.5 w-3.5" />
-                  组配置
-                </Button>
-                <Button size="sm" variant="ghost" className="justify-start text-destructive hover:text-destructive" onClick={deleteGroup}>
-                  <Trash2 className="mr-2 h-3.5 w-3.5" />
-                  删除分组
-                </Button>
+                <HasPermission code="group:update">
+                  <Button size="sm" variant="ghost" className="justify-start w-full" onClick={openEditGroup}>
+                    <Edit className="mr-2 h-3.5 w-3.5" />
+                    编辑分组
+                  </Button>
+                </HasPermission>
+                <HasPermission code="group:config">
+                  <Button size="sm" variant="ghost" className="justify-start w-full" onClick={openGroupConfig}>
+                    <KeyRound className="mr-2 h-3.5 w-3.5" />
+                    组配置
+                  </Button>
+                </HasPermission>
+                <HasPermission code="group:delete">
+                  <Button size="sm" variant="ghost" className="justify-start text-destructive hover:text-destructive w-full" onClick={deleteGroup}>
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    删除分组
+                  </Button>
+                </HasPermission>
               </div>
             </>
           )}
@@ -1206,6 +1226,7 @@ function UserTablePanel({
         mode={userFormMode}
         user={editingUser}
         clients={clients}
+        groups={groups}
         selectedGroupId={selectedGroupId}
         notify={notify}
         reload={reload}
@@ -1231,6 +1252,7 @@ function UserFormDialog({
   mode,
   user,
   clients,
+  groups,
   selectedGroupId,
   notify,
   reload,
@@ -1240,6 +1262,7 @@ function UserFormDialog({
   mode: 'add' | 'edit';
   user?: UserRecord;
   clients: ClientRecord[];
+  groups: GroupRecord[];
   selectedGroupId: number;
   notify: (type: 'success' | 'error' | 'info', message: string) => void;
   reload: () => void;
@@ -1257,6 +1280,11 @@ function UserFormDialog({
   const [isFirstLogin, setIsFirstLogin] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
+  // 分组选择：编辑模式下可切换用户所属分组
+  const [gid, setGid] = useState<string>(String(selectedGroupId));
+
+  // 分组树（用于下拉展示层级关系）
+  const groupTree = useMemo(() => buildTree(groups), [groups]);
 
   useEffect(() => {
     if (open) {
@@ -1271,9 +1299,11 @@ function UserFormDialog({
       setSendNotifyEmail(false);
       setAutoCreateClient(true);
       setIsFirstLogin(false);
+      // 编辑模式下使用用户当前分组，新增模式下使用当前选中的分组
+      setGid(mode === 'edit' && user ? String(user.gid ?? selectedGroupId) : String(selectedGroupId));
       setErrors({});
     }
-  }, [open, mode, user, clients]);
+  }, [open, mode, user, clients, selectedGroupId]);
 
   function validate() {
     const next: FieldErrors = {};
@@ -1300,7 +1330,7 @@ function UserFormDialog({
           password: trimText(password),
           email: trimText(email),
           ipAddr: trimText(ipAddr),
-          gid: selectedGroupId,
+          gid: Number(gid) || selectedGroupId,
           ovpnConfig,
           expireDate,
           sendNotifyEmail,
@@ -1315,7 +1345,7 @@ function UserFormDialog({
           name: trimText(name),
           email: trimText(email),
           ipAddr: trimText(ipAddr),
-          gid: user?.gid || selectedGroupId,
+          gid: Number(gid) || user?.gid || selectedGroupId,
           ovpnConfig,
           expireDate,
         });
@@ -1410,6 +1440,24 @@ function UserFormDialog({
                 placeholder="留空则自动分配"
               />
               {errors.ipAddr && <p className="text-xs text-destructive">{errors.ipAddr}</p>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">所属分组</Label>
+            <div className="space-y-1.5 min-w-0">
+              <Select value={gid} onValueChange={setGid}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择分组" />
+                </SelectTrigger>
+                <SelectContent>
+                  {groupTree.map((g) => (
+                    <SelectItem key={g.id} value={String(g.id)}>
+                      {`${'— '.repeat(g.depth)}${g.name}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

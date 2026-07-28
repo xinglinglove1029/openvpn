@@ -330,3 +330,38 @@ func (u *User) GetGroups() []Group {
 func (User) TableName() string {
 	return "user"
 }
+
+// GetAccessibleUsernames 获取当前登录用户可见的所有用户名列表
+// 基于分组数据权限：用户只能看到自己所在分组及其下级分组中的用户
+// admin 用户返回空切片和 true（表示不做过滤）
+func GetAccessibleUsernames(currentUsername string) ([]string, bool) {
+	// admin 不做数据权限过滤
+	if adminUsername != "" && currentUsername == adminUsername {
+		return nil, true
+	}
+
+	currentUser := User{Username: currentUsername}.Info()
+	if currentUser.ID == 0 || currentUser.Gid == 0 {
+		return []string{currentUsername}, false
+	}
+
+	// 获取当前用户所在分组及其所有下级分组的 ID
+	groupIDs := GetSubtreeIDs(currentUser.Gid)
+	if len(groupIDs) == 0 {
+		return []string{currentUsername}, false
+	}
+
+	// 查询这些分组下的所有用户名
+	var usernames []string
+	if err := db.WithContext(context.Background()).
+		Model(&User{}).
+		Where("gid IN ?", groupIDs).
+		Pluck("username", &usernames).Error; err != nil {
+		return []string{currentUsername}, false
+	}
+
+	if len(usernames) == 0 {
+		return []string{currentUsername}, false
+	}
+	return usernames, false
+}
