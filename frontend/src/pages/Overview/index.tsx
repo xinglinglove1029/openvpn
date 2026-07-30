@@ -44,6 +44,8 @@ import SystemMonitor from '@/components/SystemMonitor';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { api } from '@/api';
+import { useAuth } from '@/store/auth';
+import { HasPermission } from '@/components/HasPermission';
 import {
   formatBytes,
   getClientName,
@@ -71,6 +73,7 @@ type ModalState =
 /* ---------- main component ---------- */
 
 export default function OverviewPage() {
+  const { hasPermission } = useAuth();
   const [confirmState, setConfirmState] = useState<ConfirmState>();
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
 
@@ -233,26 +236,32 @@ export default function OverviewPage() {
       header: '操作',
       render: (c) => (
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="h-7 text-destructive" onClick={() => killClient(c)}>
-            <XCircle className="h-3.5 w-3.5 mr-1" />
-            断开
-          </Button>
-          <Button variant="ghost" size="sm" className="h-7" onClick={() => openRateLimit(c)}>
-            <Gauge className="h-3.5 w-3.5 mr-1" />
-            限速
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7"
-            onClick={() => setBlacklist(c, c.isNftBlacklist || c.isNftBlackList ? 'remove_blacklist' : 'add_blacklist')}
-          >
-            {c.isNftBlacklist || c.isNftBlackList ? (
-              <><ShieldCheck className="h-3.5 w-3.5 mr-1" />解网</>
-            ) : (
-              <><ShieldBan className="h-3.5 w-3.5 mr-1" />禁网</>
-            )}
-          </Button>
+          <HasPermission code="client:kill">
+            <Button variant="ghost" size="sm" className="h-7 text-destructive" onClick={() => killClient(c)}>
+              <XCircle className="h-3.5 w-3.5 mr-1" />
+              断开
+            </Button>
+          </HasPermission>
+          <HasPermission code="firewall:update">
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => openRateLimit(c)}>
+              <Gauge className="h-3.5 w-3.5 mr-1" />
+              限速
+            </Button>
+          </HasPermission>
+          <HasPermission code="firewall:create">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7"
+              onClick={() => setBlacklist(c, c.isNftBlacklist || c.isNftBlackList ? 'remove_blacklist' : 'add_blacklist')}
+            >
+              {c.isNftBlacklist || c.isNftBlackList ? (
+                <><ShieldCheck className="h-3.5 w-3.5 mr-1" />解网</>
+              ) : (
+                <><ShieldBan className="h-3.5 w-3.5 mr-1" />禁网</>
+              )}
+            </Button>
+          </HasPermission>
         </div>
       ),
     },

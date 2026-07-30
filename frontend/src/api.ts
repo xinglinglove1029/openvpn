@@ -55,6 +55,8 @@ async function request<T>(url: string, options: RequestOptions = {}): Promise<T>
   const response = await fetch(url, init);
 
   if (response.redirected && response.url.includes('/login')) {
+    // 清除本地登录态缓存，避免刷新后 localStorage 中的旧 user 再次触发自动跳转
+    window.localStorage.removeItem('openvpn-admin-user');
     window.location.href = '/login';
     throw new ApiError('登录状态已过期', 401, true);
   }

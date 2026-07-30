@@ -911,6 +911,13 @@ func Run(info BuildInfo) {
 	{
 		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
+		ovpn.GET("/system-stats/history", RequirePermission("menu:overview"), func(c *gin.Context) {
+			history, latest := GetSystemStatsHistory()
+			c.JSON(http.StatusOK, gin.H{
+				"history": history,
+				"latest":  latest,
+			})
+		})
 		ovpn.GET("/audit/logs", RequirePermission("audit:view"), auditLogsHandler)
 		ovpn.GET("/audit/export", RequirePermission("audit:view"), auditExportHandler)
 		ovpn.GET("/audit/user-options", RequirePermission("audit:view"), auditUserOptionsHandler)
@@ -921,102 +928,102 @@ func Run(info BuildInfo) {
 		})
 
 		ovpn.GET("/settings", func(c *gin.Context) {
-		var conf config
-		if err := viper.Unmarshal(&conf); err != nil {
-			// 配置解析失败，返回500错误而不是泄露零值配置
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "配置解析失败"})
-			return
-		}
-
-		// 根据用户 Tab 权限过滤返回数据
-		// admin 用户直接返回全量数据
-		if isAdmin, _ := c.Get("isAdmin"); isAdmin == true {
-			c.JSON(http.StatusOK, conf)
-			return
-		}
-
-		// 非 admin 用户：检查是否有 settings 相关权限
-		perms, _ := c.Get("permissions")
-		permList, _ := perms.([]string)
-
-		// 检查是否有任何 settings 权限
-		hasSettingsAccess := false
-		for _, p := range permList {
-			if p == "*" || strings.HasPrefix(p, "settings:") {
-				hasSettingsAccess = true
-				break
+			var conf config
+			if err := viper.Unmarshal(&conf); err != nil {
+				// 配置解析失败，返回500错误而不是泄露零值配置
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "配置解析失败"})
+				return
 			}
-		}
-		if !hasSettingsAccess {
-			c.JSON(http.StatusForbidden, gin.H{"message": "无权限访问系统设置"})
-			return
-		}
 
-		// 辅助函数：检查是否拥有某个权限
-		hasPerm := func(code string) bool {
-			// 空权限数组时，默认无任何Tab权限
-			if len(permList) == 0 {
-				return false
+			// 根据用户 Tab 权限过滤返回数据
+			// admin 用户直接返回全量数据
+			if isAdmin, _ := c.Get("isAdmin"); isAdmin == true {
+				c.JSON(http.StatusOK, conf)
+				return
 			}
+
+			// 非 admin 用户：检查是否有 settings 相关权限
+			perms, _ := c.Get("permissions")
+			permList, _ := perms.([]string)
+
+			// 检查是否有任何 settings 权限
+			hasSettingsAccess := false
 			for _, p := range permList {
-				if p == "*" || p == code {
-					return true
+				if p == "*" || strings.HasPrefix(p, "settings:") {
+					hasSettingsAccess = true
+					break
 				}
 			}
-			return false
-		}
+			if !hasSettingsAccess {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限访问系统设置"})
+				return
+			}
 
-		// 过滤数据：无对应 Tab 权限时返回空对象
-		// 注意：settings:service 和 settings:packages 权限不在此处过滤，
-		// 因为服务管理和客户端包数据不在配置文件中，而是通过独立API提供
-		filtered := conf
-		if !hasPerm("settings:base") {
-			filtered.System.Base = SysBeseConfig{}
-		}
-		if !hasPerm("settings:ldap") {
-			filtered.System.Ldap = SysLdapConfig{}
-		}
-		if !hasPerm("settings:openvpn") {
-			filtered.Openvpn = OvpnConfig{}
-		}
+			// 辅助函数：检查是否拥有某个权限
+			hasPerm := func(code string) bool {
+				// 空权限数组时，默认无任何Tab权限
+				if len(permList) == 0 {
+					return false
+				}
+				for _, p := range permList {
+					if p == "*" || p == code {
+						return true
+					}
+				}
+				return false
+			}
 
-		c.JSON(http.StatusOK, filtered)
-	})
+			// 过滤数据：无对应 Tab 权限时返回空对象
+			// 注意：settings:service 和 settings:packages 权限不在此处过滤，
+			// 因为服务管理和客户端包数据不在配置文件中，而是通过独立API提供
+			filtered := conf
+			if !hasPerm("settings:base") {
+				filtered.System.Base = SysBeseConfig{}
+			}
+			if !hasPerm("settings:ldap") {
+				filtered.System.Ldap = SysLdapConfig{}
+			}
+			if !hasPerm("settings:openvpn") {
+				filtered.Openvpn = OvpnConfig{}
+			}
+
+			c.JSON(http.StatusOK, filtered)
+		})
 
 		ovpn.POST("/settings", func(c *gin.Context) {
-		c.Request.ParseForm()
+			c.Request.ParseForm()
 
-		// 按Tab计算保存权限
-		canSaveBase := hasPermissionCode(c, "settings:base:update")
-		canSaveLdap := hasPermissionCode(c, "settings:ldap:update")
-		canSaveOvpn := hasPermissionCode(c, "settings:openvpn:update")
+			// 按Tab计算保存权限
+			canSaveBase := hasPermissionCode(c, "settings:base:update")
+			canSaveLdap := hasPermissionCode(c, "settings:ldap:update")
+			canSaveOvpn := hasPermissionCode(c, "settings:openvpn:update")
 
-		// 非 admin 用户：如果没有任何Tab保存权限，返回 403
-		if !canSaveBase && !canSaveLdap && !canSaveOvpn {
-			recordAudit(c, "rbac", "deny", "settings:update", false, "无权限")
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限"})
-			return
-		}
-
-		savedCount := 0 // 记录实际保存的字段数
-		for k, vs := range c.Request.PostForm {
-			// 权限过滤：跳过用户无保存权限的Tab字段
-			if strings.HasPrefix(k, "system.base.") && !canSaveBase {
-				continue
-			}
-			if strings.HasPrefix(k, "system.ldap.") && !canSaveLdap {
-				continue
-			}
-			if strings.HasPrefix(k, "openvpn.") && !canSaveOvpn {
-				continue
-			}
-			// 其他字段跳过（不属于任何Tab的配置不在此接口保存）
-			if !strings.HasPrefix(k, "system.base.") && !strings.HasPrefix(k, "system.ldap.") && !strings.HasPrefix(k, "openvpn.") {
-				continue
+			// 非 admin 用户：如果没有任何Tab保存权限，返回 403
+			if !canSaveBase && !canSaveLdap && !canSaveOvpn {
+				recordAudit(c, "rbac", "deny", "settings:update", false, "无权限")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限"})
+				return
 			}
 
-			savedCount++
-			val := vs[0]
+			savedCount := 0 // 记录实际保存的字段数
+			for k, vs := range c.Request.PostForm {
+				// 权限过滤：跳过用户无保存权限的Tab字段
+				if strings.HasPrefix(k, "system.base.") && !canSaveBase {
+					continue
+				}
+				if strings.HasPrefix(k, "system.ldap.") && !canSaveLdap {
+					continue
+				}
+				if strings.HasPrefix(k, "openvpn.") && !canSaveOvpn {
+					continue
+				}
+				// 其他字段跳过（不属于任何Tab的配置不在此接口保存）
+				if !strings.HasPrefix(k, "system.base.") && !strings.HasPrefix(k, "system.ldap.") && !strings.HasPrefix(k, "openvpn.") {
+					continue
+				}
+
+				savedCount++
+				val := vs[0]
 
 				switch k {
 				case "system.base.admin_password":
@@ -1047,16 +1054,16 @@ func Run(info BuildInfo) {
 						}
 					}
 				case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
-				_, _, err := net.ParseCIDR(val)
-				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"message": "无效的CIDR格式: " + val})
-					return
-				}
-			case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
-				if net.ParseIP(val) == nil {
-					c.JSON(http.StatusBadRequest, gin.H{"message": "无效的IP地址: " + val})
-					return
-				}
+					_, _, err := net.ParseCIDR(val)
+					if err != nil {
+						c.JSON(http.StatusBadRequest, gin.H{"message": "无效的CIDR格式: " + val})
+						return
+					}
+				case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+					if net.ParseIP(val) == nil {
+						c.JSON(http.StatusBadRequest, gin.H{"message": "无效的IP地址: " + val})
+						return
+					}
 				}
 
 				switch val {
@@ -1069,14 +1076,14 @@ func Run(info BuildInfo) {
 				}
 			}
 
-		// 所有字段都被权限过滤掉，返回403
-		if savedCount == 0 {
-			recordAudit(c, "rbac", "deny", "settings:update", false, "无权限保存任何字段")
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限保存任何字段"})
-			return
-		}
+			// 所有字段都被权限过滤掉，返回403
+			if savedCount == 0 {
+				recordAudit(c, "rbac", "deny", "settings:update", false, "无权限保存任何字段")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "无权限保存任何字段"})
+				return
+			}
 
-		if err := viper.WriteConfig(); err != nil {
+			if err := viper.WriteConfig(); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
@@ -1578,6 +1585,86 @@ func Run(info BuildInfo) {
 			c.JSON(http.StatusOK, u.Get(c.Param("id")))
 		})
 
+		ovpn.GET("/user/me", func(c *gin.Context) {
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+			if currentUsername == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
+				return
+			}
+			u := User{Username: currentUsername}.Info()
+			if u.ID == 0 {
+				// 系统内置账号（admin）处理：从配置文件获取信息
+				if adminUsername != "" && currentUsername == adminUsername {
+					c.JSON(http.StatusOK, gin.H{
+						"id":       0,
+						"username": currentUsername,
+						"name":     viper.GetString("system.base.admin_name"),
+						"email":    viper.GetString("system.base.admin_email"),
+					})
+					return
+				}
+				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+				return
+			}
+			c.JSON(http.StatusOK, u)
+		})
+
+		// 普通用户更新个人信息（不需要 user:update 权限，只允许改自己的 name/email）
+		ovpn.PATCH("/user/profile", func(c *gin.Context) {
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+			if currentUsername == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
+				return
+			}
+
+			// 系统内置账号（admin）保存到配置文件
+			if adminUsername != "" && currentUsername == adminUsername {
+				name := c.Request.FormValue("name")
+				email := c.Request.FormValue("email")
+				if name != "" {
+					viper.Set("system.base.admin_name", name)
+				}
+				if email != "" {
+					viper.Set("system.base.admin_email", email)
+				}
+				viper.WriteConfig()
+				c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
+				return
+			}
+
+			// 普通用户：更新数据库中当前用户的 name/email
+			u := User{Username: currentUsername}.Info()
+			if u.ID == 0 {
+				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+				return
+			}
+
+			name := strings.TrimSpace(c.Request.FormValue("name"))
+			email := strings.TrimSpace(c.Request.FormValue("email"))
+			updates := map[string]interface{}{}
+			if name != "" && name != u.Name {
+				updates["name"] = name
+			}
+			if email != "" && email != u.Email {
+				updates["email"] = email
+			}
+			if len(updates) > 0 {
+				if err := db.Model(&User{}).Where("id = ?", u.ID).Updates(updates).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新失败：%v", err)})
+					return
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
+		})
+
 		r.GET("/user/template", RequirePermission("user:export"), func(c *gin.Context) {
 			c.Header("Content-Type", "text/csv")
 			c.Header("Content-Disposition", "attachment; filename=user_template.csv")
@@ -1955,10 +2042,41 @@ func Run(info BuildInfo) {
 		})
 
 		ovpn.DELETE("/user/:id", RequirePermission("user:delete"), func(c *gin.Context) {
-			var u User
 			id := c.Param("id")
 
-			err := u.Delete(id)
+			// 先获取用户信息，用 username 删除关联的客户端配置
+			var u User
+			user := u.Get(id)
+			if user.ID == 0 {
+				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+				return
+			}
+
+			username := user.Username
+
+			// 1. 撤销客户端证书
+			cmd := exec.Command("easyrsa", "--batch", "revoke", username)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				cmd = exec.Command("easyrsa", "gen-crl")
+				if out, err = cmd.CombinedOutput(); err != nil {
+					logger.Error(context.Background(), string(out))
+				}
+			} else {
+				logger.Warn(context.Background(), "revoke client cert failed (may not exist): "+string(out))
+			}
+
+			// 2. 删除客户端配置文件和 ccd 目录
+			dataRoot, err := os.OpenRoot(ovData)
+			if err == nil {
+				dataRoot.Remove(filepath.Join("clients", fmt.Sprintf("%s.ovpn", username)))
+				dataRoot.Remove(filepath.Join("ccd", username))
+				dataRoot.Close()
+			} else {
+				logger.Warn(context.Background(), "remove client files failed: "+err.Error())
+			}
+
+			// 3. 删除用户
+			err = u.Delete(id)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
@@ -1970,11 +2088,38 @@ func Run(info BuildInfo) {
 			clients := make([]ClientConfigData, 0)
 
 			files, _ := os.ReadDir(filepath.Join(ovData, "clients"))
+
+			// 数据权限过滤：普通用户只能看到自己分组及下级分组用户关联的客户端
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+
+			var accessibleConfigs []string
+			skipFilter := false
+
+			if isAdmin == true {
+				skipFilter = true
+			} else if currentUserStr != "" {
+				accessibleConfigs, skipFilter = GetAccessibleClientConfigs(currentUserStr)
+			}
+
+			configSet := make(map[string]bool)
+			if !skipFilter {
+				for _, name := range accessibleConfigs {
+					configSet[name] = true
+				}
+			}
+
 			for _, file := range files {
 				finfo, _ := file.Info()
+				name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+
+				if !skipFilter && !configSet[name] {
+					continue
+				}
 
 				f := ClientConfigData{
-					Name:     strings.TrimSuffix(file.Name(), filepath.Ext(file.Name())),
+					Name:     name,
 					FullName: file.Name(),
 					File:     fmt.Sprintf("/ovpn/download/%s", file.Name()),
 					Date:     finfo.ModTime().Local().Format("2006-01-02 15:04:05"),
@@ -1992,6 +2137,15 @@ func Run(info BuildInfo) {
 
 		ovpn.GET("/client/:name/ccd", RequirePermission("client:view"), func(c *gin.Context) {
 			name := c.Param("name")
+
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+			if isAdmin != true && !CanAccessClientConfig(currentUserStr, name) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限访问该客户端配置"})
+				return
+			}
+
 			ccdDir := filepath.Join(ovData, "ccd")
 
 			os.MkdirAll(ccdDir, 0755)
@@ -2019,6 +2173,15 @@ func Run(info BuildInfo) {
 
 		ovpn.GET("/client/:name/config", RequirePermission("client:download"), func(c *gin.Context) {
 			name := c.Param("name")
+
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+			if isAdmin != true && !CanAccessClientConfig(currentUserStr, name) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限访问该客户端配置"})
+				return
+			}
+
 			clientsDir := filepath.Join(ovData, "clients")
 
 			clientsRoot, err := os.OpenRoot(clientsDir)
@@ -2040,6 +2203,15 @@ func Run(info BuildInfo) {
 
 		ovpn.PUT("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {
 			name := c.Param("name")
+
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+			if isAdmin != true && !CanAccessClientConfig(currentUserStr, name) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限操作该客户端配置"})
+				return
+			}
+
 			content := c.PostForm("content")
 			msg := "客户端更新成功"
 			ccdDir := filepath.Join(ovData, "ccd")
@@ -2080,6 +2252,15 @@ func Run(info BuildInfo) {
 
 		ovpn.PUT("/client/:name/config", RequirePermission("client:regenerate"), func(c *gin.Context) {
 			name := c.Param("name")
+
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+			if isAdmin != true && !CanAccessClientConfig(currentUserStr, name) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限操作该客户端配置"})
+				return
+			}
+
 			content := c.PostForm("content")
 			clientsDir := filepath.Join(ovData, "clients")
 
@@ -2195,6 +2376,14 @@ func Run(info BuildInfo) {
 		ovpn.DELETE("/client/:name", RequirePermission("client:delete"), func(c *gin.Context) {
 			name := c.Param("name")
 
+			isAdmin, _ := c.Get("isAdmin")
+			currentUsername, _ := c.Get("user")
+			currentUserStr, _ := currentUsername.(string)
+			if isAdmin != true && !CanAccessClientConfig(currentUserStr, name) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "无权限删除该客户端配置"})
+				return
+			}
+
 			cmd := exec.Command("easyrsa", "--batch", "revoke", name)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
@@ -2237,16 +2426,16 @@ func Run(info BuildInfo) {
 			currentUsername, _ := c.Get("user")
 			currentUserStr, _ := currentUsername.(string)
 
-			var accessibleUsers []string
+			var accessibleUserIDs []uint
 			skipFilter := false
 
 			if isAdmin == true {
 				skipFilter = true
 			} else if currentUserStr != "" {
-				accessibleUsers, skipFilter = GetAccessibleUsernames(currentUserStr)
+				accessibleUserIDs, skipFilter = GetAccessibleUserIDs(currentUserStr)
 			}
 
-			c.JSON(http.StatusOK, h.Query(p, accessibleUsers, skipFilter))
+			c.JSON(http.StatusOK, h.Query(p, accessibleUserIDs, skipFilter))
 		})
 
 		ovpn.POST("/history", func(c *gin.Context) {
@@ -2403,8 +2592,15 @@ func Run(info BuildInfo) {
 			// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的连接历史
 			currentUsername, _ := c.Get("user")
 			currentUserStr, _ := currentUsername.(string)
+			isAdmin, _ := c.Get("isAdmin")
 
-			accessibleUsers, skipFilter := GetAccessibleUsernames(currentUserStr)
+			var accessibleUserIDs []uint
+			skipFilter := false
+			if isAdmin == true {
+				skipFilter = true
+			} else {
+				accessibleUserIDs, skipFilter = GetAccessibleUserIDs(currentUserStr)
+			}
 
 			fileName := fmt.Sprintf("history_%s.csv", time.Now().Format("20060102150405"))
 
@@ -2431,8 +2627,8 @@ func Run(info BuildInfo) {
 			}
 
 			// 数据权限过滤
-			if !skipFilter && len(accessibleUsers) > 0 {
-				query = query.Where("username IN ?", accessibleUsers)
+			if !skipFilter && len(accessibleUserIDs) > 0 {
+				query = query.Where("user_id IN ?", accessibleUserIDs)
 			}
 
 			rows, err := query.Rows()
@@ -2482,8 +2678,15 @@ func Run(info BuildInfo) {
 		ovpn.DELETE("/role/:id", RequirePermission("role:delete"), roleDeleteHandler)
 		ovpn.PUT("/role/:id/permissions", RequirePermission("role:assign_permissions"), roleAssignPermissionsHandler)
 
-		// 权限定义查询：返回权限树供角色编辑页使用
-		ovpn.GET("/permission/tree", RequirePermission("permission:view"), permissionTreeHandler)
+		// 权限定义查询：返回权限树供 Sidebar 动态渲染菜单和角色编辑页使用
+		// 所有已登录用户均可访问（菜单渲染是基本功能，不涉及敏感操作）
+		ovpn.GET("/permission/tree", permissionTreeHandler)
+
+		// 权限管理：CRUD + 批量排序（需 permission:manage 权限）
+		ovpn.POST("/permission", RequirePermission("permission:manage"), permissionCreateHandler)
+		ovpn.PUT("/permission/:id", RequirePermission("permission:manage"), permissionUpdateHandler)
+		ovpn.DELETE("/permission/:id", RequirePermission("permission:manage"), permissionDeleteHandler)
+		ovpn.PUT("/permission/sort", RequirePermission("permission:manage"), permissionSortHandler)
 	}
 
 	client := r.Group("/client")
@@ -2510,8 +2713,56 @@ func Run(info BuildInfo) {
 				}
 
 				// LDAP 用户也补充权限信息
-			// 角色被禁用或不存在时返回 403，与登录时行为一致，避免静默返回空权限让前端陷入空白页
-			permCodes, perr := u.LoadPermissionCodes(db)
+				// 角色被禁用或不存在时返回 403，与登录时行为一致，避免静默返回空权限让前端陷入空白页
+				permCodes, perr := u.LoadPermissionCodes(db)
+				if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+					c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+					return
+				}
+				if perr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
+					return
+				}
+				if permCodes == nil {
+					permCodes = []string{}
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"id":           0,
+					"username":     lu.Username,
+					"name":         "",
+					"email":        "",
+					"ldapAuth":     true,
+					"isFirstLogin": false,
+					"isAdmin":      adminUsername != "" && u.Username == adminUsername,
+					"permissions":  permCodes,
+					"roleId":       nil,
+				})
+				return
+			}
+
+			if adminUsername != "" && u.Username == adminUsername {
+				u.Name = viper.GetString("system.base.admin_name")
+				u.Email = viper.GetString("system.base.admin_email")
+				c.JSON(http.StatusOK, gin.H{
+					"id":           u.ID,
+					"username":     u.Username,
+					"name":         u.Name,
+					"email":        u.Email,
+					"isFirstLogin": false,
+					"isAdmin":      true,
+					"permissions":  []string{"*"},
+					"roleId":       nil,
+				})
+				return
+			}
+
+			userInfo := u.Info()
+			// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+			if userInfo.ID == 0 {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+				return
+			}
+			permCodes, perr := userInfo.LoadPermissionCodes(db)
 			if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
 				c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
 				return
@@ -2523,54 +2774,6 @@ func Run(info BuildInfo) {
 			if permCodes == nil {
 				permCodes = []string{}
 			}
-			c.JSON(http.StatusOK, gin.H{
-				"id":           0,
-				"username":     lu.Username,
-				"name":         "",
-				"email":        "",
-				"ldapAuth":     true,
-				"isFirstLogin": false,
-				"isAdmin":      adminUsername != "" && u.Username == adminUsername,
-				"permissions":  permCodes,
-				"roleId":       nil,
-			})
-			return
-		}
-
-		if adminUsername != "" && u.Username == adminUsername {
-			u.Name = viper.GetString("system.base.admin_name")
-			u.Email = viper.GetString("system.base.admin_email")
-			c.JSON(http.StatusOK, gin.H{
-				"id":           u.ID,
-				"username":     u.Username,
-				"name":         u.Name,
-				"email":        u.Email,
-				"isFirstLogin": false,
-				"isAdmin":      true,
-				"permissions":  []string{"*"},
-				"roleId":       nil,
-			})
-			return
-		}
-
-		userInfo := u.Info()
-		// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
-		if userInfo.ID == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
-			return
-		}
-		permCodes, perr := userInfo.LoadPermissionCodes(db)
-		if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
-			c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
-			return
-		}
-		if perr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
-			return
-		}
-		if permCodes == nil {
-			permCodes = []string{}
-		}
 			c.JSON(http.StatusOK, gin.H{
 				"id":           userInfo.ID,
 				"username":     userInfo.Username,
@@ -2851,20 +3054,17 @@ func Run(info BuildInfo) {
 					"mfa_enabled": true,
 				})
 
-				// 异步重新生成客户端配置文件（含 static-challenge）并发送邮件通知
+				// 异步更新客户端配置文件（添加 static-challenge）并发送邮件通知
 				go func(userID uint) {
 					cu := User{ID: userID}.Info()
 					if cu.Email == "" {
 						return
 					}
 
-					// 重新生成客户端配置文件（先删除旧的，再生成含 MFA 的新配置）
-					if cu.OvpnConfig != "" {
-						clientFilePath := filepath.Join(ovData, "clients", cu.OvpnConfig)
-						os.Remove(clientFilePath)
-						if err := generateClientConfig(strings.TrimSuffix(cu.OvpnConfig, ".ovpn"), true); err != nil {
-							logger.Error(context.Background(), "重新生成客户端配置失败: %s", err.Error())
-						}
+					// 更新该用户的所有客户端配置文件（添加 MFA 验证）
+					updatedConfigs, err := RegenerateUserClientConfigs(cu.Username, true)
+					if err != nil {
+						logger.Error(context.Background(), "更新客户端配置失败: %s", err.Error())
 					}
 
 					var buf bytes.Buffer
@@ -2892,8 +3092,8 @@ func Run(info BuildInfo) {
 					}
 
 					var attachments []string
-					if cu.OvpnConfig != "" {
-						clientFilePath := filepath.Join(ovData, "clients", cu.OvpnConfig)
+					for _, configName := range updatedConfigs {
+						clientFilePath := filepath.Join(ovData, "clients", configName+".ovpn")
 						if _, err := os.Stat(clientFilePath); err == nil {
 							attachments = append(attachments, clientFilePath)
 						}
@@ -2929,10 +3129,16 @@ func Run(info BuildInfo) {
 
 			go func() {
 				if targetUser.Email != "" {
+					// 更新该用户的所有客户端配置文件（移除 MFA 验证）
+					updatedConfigs, err := RegenerateUserClientConfigs(targetUser.Username, false)
+					if err != nil {
+						logger.Error(context.Background(), "更新客户端配置失败: %s", err.Error())
+					}
+
 					var tpl *template.Template
 					var buf bytes.Buffer
 
-					tpl, err := template.New("account-email").Parse(accountEmailTemplate)
+					tpl, err = template.New("account-email").Parse(accountEmailTemplate)
 					if err == nil {
 						err = tpl.Execute(&buf, struct {
 							Type          string
@@ -2956,7 +3162,15 @@ func Run(info BuildInfo) {
 						return
 					}
 
-					if err := sendUserEmail(targetUser.Email, "用户 MFA 重置通知", buf.String(), nil, targetUser.Username, "mfa_reset"); err != nil {
+					var attachments []string
+					for _, configName := range updatedConfigs {
+						clientFilePath := filepath.Join(ovData, "clients", configName+".ovpn")
+						if _, err := os.Stat(clientFilePath); err == nil {
+							attachments = append(attachments, clientFilePath)
+						}
+					}
+
+					if err := sendUserEmail(targetUser.Email, "用户 MFA 重置通知", buf.String(), attachments, targetUser.Username, "mfa_reset"); err != nil {
 						logger.Error(context.Background(), "发送用户邮件失败: %s", err.Error())
 					}
 				}

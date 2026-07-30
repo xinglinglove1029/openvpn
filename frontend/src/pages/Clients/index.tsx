@@ -47,9 +47,13 @@ export default function ClientsPage() {
     () => api.get<unknown>('/ovpn/client').then((v) => normalizeList<ClientRecord>(v, ['clients', 'data'])),
     [reloadKey],
   );
+  const canViewSettings = hasPermission('settings:view');
   const settingsState = useAsync(
-    () => api.get<SettingsResponse>('/ovpn/settings').catch(() => null as SettingsResponse | null),
-    [reloadKey],
+    () => {
+      if (!canViewSettings) return Promise.resolve(null as SettingsResponse | null);
+      return api.get<SettingsResponse>('/ovpn/settings').catch(() => null as SettingsResponse | null);
+    },
+    [reloadKey, canViewSettings],
   );
 
   const clients = clientsState.data || [];
@@ -95,17 +99,16 @@ export default function ClientsPage() {
   }
 
   async function copyClientFile(client: ClientRecord) {
-    if (!client.file) {
-      notify('error', '当前客户端没有可复制的下载地址');
-      return;
-    }
     if (!navigator.clipboard) {
       notify('error', '当前浏览器不支持剪贴板复制');
       return;
     }
     try {
-      await navigator.clipboard.writeText(client.file);
-      notify('success', '下载地址已复制');
+      const result = await api.get<{ content: string }>(
+        `/ovpn/client/${encodeURIComponent(client.name)}/config`,
+      );
+      await navigator.clipboard.writeText(result.content || '');
+      notify('success', '客户端配置已复制到剪贴板');
     } catch (error) {
       notify('error', messageOf(error));
     }

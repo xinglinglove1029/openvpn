@@ -31,6 +31,7 @@ type NotifyLog struct {
 	Event       string    `json:"event"`
 	Provider    string    `json:"provider"`    // 渠道类型：email / dingtalk / webhook ...
 	ChannelName string    `json:"channelName"` // 渠道名称：用户自定义的名称
+	UserID      uint      `gorm:"index;default:0" json:"userId"`
 	Username    string    `json:"username"`
 	Success     bool      `json:"success"`
 	Message     string    `json:"message"`
@@ -105,11 +106,13 @@ func recordNotifyLog(event NotifyEvent, provider, channelName string, success bo
 		return
 	}
 	username := displayUsername(event)
+	userID := GetUserIDByUsername(username)
 
 	logItem := NotifyLog{
 		Event:       event.Event,
 		Provider:    provider,
 		ChannelName: channelName,
+		UserID:      userID,
 		Username:    username,
 		Success:     success,
 		Message:     message,
@@ -163,9 +166,9 @@ func queryNotifyLogs(limit int, currentUsername string, isAdmin bool) []NotifyLo
 
 	// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的站内信
 	if !isAdmin && currentUsername != "" {
-		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		accessibleUserIDs, skipFilter := GetAccessibleUserIDs(currentUsername)
 		if !skipFilter {
-			query = query.Where("username IN ?", accessibleUsers)
+			query = query.Where("user_id IN ?", accessibleUserIDs)
 		}
 	}
 

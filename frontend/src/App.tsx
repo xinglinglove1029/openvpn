@@ -20,6 +20,7 @@ const NotificationsPage = lazy(() => import('./pages/Notifications'));
 const ChannelProvidersPage = lazy(() => import('./pages/ChannelProviders'));
 const ProfilePage = lazy(() => import('./pages/Profile'));
 const RolesPage = lazy(() => import('./pages/Roles'));
+const PermissionsPage = lazy(() => import('./pages/Permissions'));
 
 // 加载指示器
 function LoadingSpinner() {
@@ -62,6 +63,7 @@ function App() {
                 <Route path="channels" element={<SuspenseWrap><ChannelProvidersPage /></SuspenseWrap>} />
                 <Route path="profile" element={<SuspenseWrap><ProfilePage /></SuspenseWrap>} />
                 <Route path="roles" element={<SuspenseWrap><RolesPage /></SuspenseWrap>} />
+                <Route path="permissions" element={<SuspenseWrap><PermissionsPage /></SuspenseWrap>} />
               </Route>
 
               {/* 404 */}

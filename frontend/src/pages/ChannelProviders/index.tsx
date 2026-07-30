@@ -653,26 +653,22 @@ export default function ChannelProvidersPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardContent className="pt-6">
-          <DataTable<NotificationChannel>
-            columns={columns}
-            data={pagination.pagedItems}
-            fullData={items}
-            page={pagination.page}
-            pageSize={pagination.pageSize}
-            pageCount={pagination.pageCount}
-            total={pagination.total}
-            start={pagination.start}
-            end={pagination.end}
-            onPageChange={pagination.setPage}
-            onPageSizeChange={pagination.setPageSize}
-            emptyTitle={state.loading ? '加载中...' : '暂无渠道'}
-            emptyDescription={state.loading ? '正在拉取通知渠道' : '点击右上角"新增渠道"开始配置'}
-            keyFn={(item) => item.id}
-          />
-        </CardContent>
-      </Card>
+      <DataTable<NotificationChannel>
+        columns={columns}
+        data={pagination.pagedItems}
+        fullData={items}
+        page={pagination.page}
+        pageSize={pagination.pageSize}
+        pageCount={pagination.pageCount}
+        total={pagination.total}
+        start={pagination.start}
+        end={pagination.end}
+        onPageChange={pagination.setPage}
+        onPageSizeChange={pagination.setPageSize}
+        emptyTitle={state.loading ? '加载中...' : '暂无渠道'}
+        emptyDescription={state.loading ? '正在拉取通知渠道' : '点击右上角"新增渠道"开始配置'}
+        keyFn={(item) => item.id}
+      />
 
       <Dialog open={form.open} onOpenChange={(o) => !o && closeForm()}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">

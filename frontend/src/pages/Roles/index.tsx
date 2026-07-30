@@ -9,9 +9,11 @@ import {
   KeyRound,
   ChevronRight,
   ChevronDown,
+  Search,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card, CardContent, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
@@ -19,7 +21,13 @@ import { Badge } from '@/ui/badge';
 import { Switch } from '@/ui/switch';
 import { Textarea } from '@/ui/textarea';
 import { Checkbox } from '@/ui/checkbox';
-import { Separator } from '@/ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -52,6 +60,38 @@ function collectCodes(nodes: PermissionTreeNode[]): string[] {
   }
   walk(nodes);
   return codes;
+}
+
+/** 收集所有拥有子节点的 code（用于全部展开/折叠） */
+function collectExpandableCodes(nodes: PermissionTreeNode[]): string[] {
+  const codes: string[] = [];
+  function walk(list: PermissionTreeNode[]) {
+    for (const n of list) {
+      if (n.children && n.children.length) {
+        codes.push(n.code);
+        walk(n.children);
+      }
+    }
+  }
+  walk(nodes);
+  return codes;
+}
+
+/** 按关键词过滤权限树：命中节点及其所有祖先保留 */
+function filterTreeByKeyword(nodes: PermissionTreeNode[], kw: string): PermissionTreeNode[] {
+  function walk(list: PermissionTreeNode[]): PermissionTreeNode[] {
+    const result: PermissionTreeNode[] = [];
+    for (const n of list) {
+      const hit =
+        n.name.toLowerCase().includes(kw) || n.code.toLowerCase().includes(kw);
+      const filteredChildren = n.children ? walk(n.children) : [];
+      if (hit || filteredChildren.length > 0) {
+        result.push({ ...n, children: filteredChildren });
+      }
+    }
+    return result;
+  }
+  return walk(nodes);
 }
 
 /** 收集叶子节点 code（用于父节点全选/取消全选） */
@@ -104,14 +144,59 @@ function PermissionTree({
   onChange: (next: string[]) => void;
   disabled?: boolean;
 }) {
+  // 默认展开所有可展开节点
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    // 默认展开所有菜单节点
     const set = new Set<string>();
-    for (const n of tree) {
-      if (n.type === 'menu' && n.children && n.children.length) set.add(n.code);
+    function walk(nodes: PermissionTreeNode[]) {
+      for (const n of nodes) {
+        if (n.children && n.children.length) {
+          set.add(n.code);
+          walk(n.children);
+        }
+      }
     }
+    walk(tree);
     return set;
   });
+
+  // 搜索关键词
+  const [searchText, setSearchText] = useState('');
+
+  // 所有权限 code（全选用）
+  const allCodes = useMemo(() => collectCodes(tree), [tree]);
+
+  // 搜索过滤后的树（命中节点及其祖先保留）
+  const displayTree = useMemo(() => {
+    const kw = searchText.trim().toLowerCase();
+    if (!kw) return tree;
+    return filterTreeByKeyword(tree, kw);
+  }, [tree, searchText]);
+
+  // 所有可展开节点的 code（基于原始 tree）
+  const allExpandableCodes = useMemo(() => collectExpandableCodes(tree), [tree]);
+
+  // 搜索时自动展开所有命中节点的祖先：直接展开 displayTree 中所有有子节点的 code
+  const effectiveExpanded = useMemo(() => {
+    const kw = searchText.trim().toLowerCase();
+    if (kw) {
+      const set = new Set<string>();
+      function walk(nodes: PermissionTreeNode[]) {
+        for (const n of nodes) {
+          if (n.children && n.children.length) {
+            set.add(n.code);
+            walk(n.children);
+          }
+        }
+      }
+      walk(displayTree);
+      return set;
+    }
+    return expanded;
+  }, [searchText, displayTree, expanded]);
+
+  // 是否全部展开（用于切换按钮文案）
+  const isAllExpanded =
+    allExpandableCodes.length > 0 && allExpandableCodes.every((c) => expanded.has(c));
 
   function toggleExpand(code: string) {
     setExpanded((prev) => {
@@ -120,6 +205,24 @@ function PermissionTree({
       else next.add(code);
       return next;
     });
+  }
+
+  function toggleExpandAll() {
+    if (isAllExpanded) {
+      setExpanded(new Set());
+    } else {
+      setExpanded(new Set(allExpandableCodes));
+    }
+  }
+
+  function handleSelectAll() {
+    if (disabled) return;
+    onChange([...allCodes]);
+  }
+
+  function handleClearAll() {
+    if (disabled) return;
+    onChange([]);
   }
 
   function toggleLeaf(code: string) {
@@ -156,7 +259,7 @@ function PermissionTree({
   function renderNode(node: PermissionTreeNode, depth: number): React.ReactNode {
     const isMenu = node.type === 'menu';
     const hasChildren = !!node.children && node.children.length > 0;
-    const isExpanded = expanded.has(node.code);
+    const isExpanded = effectiveExpanded.has(node.code);
     const leafCodes = hasChildren ? collectLeafCodes(node) : [node.code];
     const checkedCount = leafCodes.filter((c) => selected.includes(c)).length;
     const checked = checkedCount === leafCodes.length;
@@ -208,12 +311,79 @@ function PermissionTree({
   }
 
   return (
-    <div className="max-h-[420px] overflow-y-auto rounded-lg border bg-muted/20 p-2">
-      {tree.length === 0 ? (
-        <div className="py-6 text-center text-sm text-muted-foreground">暂无权限定义</div>
-      ) : (
-        tree.map((n) => renderNode(n, 0))
-      )}
+    <div className="space-y-2">
+      {/* 工具栏：左侧搜索框 + 右侧一排操作按钮（全选/清空/展开折叠） */}
+      <div className="flex flex-nowrap items-center gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="搜索权限名称或编码"
+            className="pl-8 h-8 text-xs"
+          />
+        </div>
+        <div className="flex items-center gap-1.5 flex-none">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleSelectAll}
+            disabled={disabled}
+            className="h-8 px-2.5"
+          >
+            全选
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleClearAll}
+            disabled={disabled || selected.length === 0}
+            className="h-8 px-2.5"
+          >
+            清空
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={toggleExpandAll}
+            disabled={!!searchText}
+            className="h-8 px-2.5"
+          >
+            {isAllExpanded ? (
+              <>
+                <ChevronsDownUp className="h-3.5 w-3.5 mr-1" />
+                折叠
+              </>
+            ) : (
+              <>
+                <ChevronsUpDown className="h-3.5 w-3.5 mr-1" />
+                展开
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* 树容器 */}
+      <div className="max-h-[420px] overflow-y-auto rounded-lg border bg-muted/20 p-2">
+        {displayTree.length === 0 ? (
+          <div className="py-6 text-center text-sm text-muted-foreground">
+            {searchText ? '没有匹配的权限' : '暂无权限定义'}
+          </div>
+        ) : (
+          displayTree.map((n) => renderNode(n, 0))
+        )}
+      </div>
+
+      {/* 已选数量（放到树容器下方，避免和工具栏挤在一起） */}
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+        <span>
+          已选 <span className="font-medium text-foreground">{selected.length}</span> 项
+          <span className="mx-1">/</span>
+          共 {allCodes.length} 项
+        </span>
+        {searchText && <span>搜索命中 {displayTree.length ? '有结果' : '无结果'}</span>}
+      </div>
     </div>
   );
 }
@@ -459,15 +629,6 @@ function PermissionAssignDialog({
     }
   }
 
-  function selectAll() {
-    setSelected(collectCodes(tree));
-  }
-  function clearAll() {
-    setSelected([]);
-  }
-
-  const totalCodes = useMemo(() => collectCodes(tree), [tree]);
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[680px]">
@@ -480,20 +641,6 @@ function PermissionAssignDialog({
             勾选权限后保存，该角色下用户下次登录后菜单与按钮可见性将立即生效
           </DialogDescription>
         </DialogHeader>
-
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">
-            已选 {selected.length} 项 / 共 {totalCodes.length} 项
-          </span>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={selectAll} disabled={saving}>
-              全选
-            </Button>
-            <Button size="sm" variant="outline" onClick={clearAll} disabled={saving}>
-              清空
-            </Button>
-          </div>
-        </div>
 
         <PermissionTree
           tree={tree}
@@ -523,6 +670,9 @@ export default function RolesPage() {
   const [permOpen, setPermOpen] = useState(false);
   const [permRole, setPermRole] = useState<Role | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // 搜索与筛选
+  const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
 
   // 拉取角色列表
   const rolesState = useAsync(async () => {
@@ -599,9 +749,28 @@ export default function RolesPage() {
     });
   }
 
-  const items = rolesState.data ?? [];
+  // 搜索过滤：按名称、编码、描述匹配；按启用状态筛选
+  const filteredItems = useMemo(() => {
+    const kw = searchText.trim().toLowerCase();
+    return (rolesState.data ?? []).filter((item) => {
+      // 关键词过滤
+      if (kw) {
+        const hit =
+          item.name.toLowerCase().includes(kw) ||
+          item.code.toLowerCase().includes(kw) ||
+          (item.description ?? '').toLowerCase().includes(kw);
+        if (!hit) return false;
+      }
+      // 状态过滤
+      if (filterStatus === 'enabled' && !item.isEnable) return false;
+      if (filterStatus === 'disabled' && item.isEnable) return false;
+      return true;
+    });
+  }, [rolesState.data, searchText, filterStatus]);
+
+  const items = filteredItems;
   const tree = treeState.data ?? [];
-  const pagination = usePagination(items, `roles-${reloadKey}`, 10);
+  const pagination = usePagination(items, `roles-${reloadKey}-${searchText}-${filterStatus}`, 10);
 
   const columns: Column<Role>[] = useMemo(
     () => [
@@ -692,9 +861,6 @@ export default function RolesPage() {
               >
                 <KeyRound className="h-3.5 w-3.5 mr-1" />
                 分配权限
-                {item.isBuiltin && (
-                  <span className="ml-1 text-[10px] text-muted-foreground">（系统管理）</span>
-                )}
               </Button>
             </HasPermission>
             <HasPermission code="role:update">
@@ -746,58 +912,74 @@ export default function RolesPage() {
   );
 
   return (
-    <div className="space-y-6">
-      <PageHeader eyebrow="Access Control" title="角色管理" description="管理角色与权限分配，控制菜单与按钮可见性">
-        <HasPermission code="role:view">
-          <Button size="sm" variant="outline" onClick={reload}>
-            <RefreshCw className="h-3.5 w-3.5 mr-1" />
-            刷新
-          </Button>
-        </HasPermission>
-        <HasPermission code="role:create">
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            新建角色
-          </Button>
-        </HasPermission>
-      </PageHeader>
+    <div className="space-y-4">
+      <PageHeader eyebrow="Access Control" title="角色管理" description="管理角色与权限分配，控制菜单与按钮可见性" />
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <ShieldCheck className="h-4 w-4" />
-            角色列表
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {rolesState.loading ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">正在加载...</div>
-          ) : items.length === 0 ? (
-            <div className="py-10 text-center">
-              <ShieldCheck className="mx-auto h-10 w-10 text-muted-foreground/50" />
-              <p className="mt-2 text-sm font-medium">暂无角色</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                系统启动时会自动创建「系统超管」与「普通用户」两个内置角色
-              </p>
-            </div>
-          ) : (
-            <DataTable
-              columns={columns}
-              data={pagination.pagedItems}
-              fullData={items}
-              page={pagination.page}
-              pageSize={pagination.pageSize}
-              pageCount={pagination.pageCount}
-              total={pagination.total}
-              start={pagination.start}
-              end={pagination.end}
-              onPageChange={pagination.setPage}
-              onPageSizeChange={pagination.setPageSize}
-              keyFn={(item) => item.id}
-            />
-          )}
-        </CardContent>
-      </Card>
+      {/* 操作工具栏：搜索、筛选 在左，刷新、新建 在右 */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative w-48">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="搜索名称、编码、描述"
+            className="pl-9 h-8"
+          />
+        </div>
+        <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'enabled' | 'disabled')}>
+          <SelectTrigger className="w-[110px] h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="enabled">启用</SelectItem>
+            <SelectItem value="disabled">禁用</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="ml-auto flex items-center gap-2">
+          <HasPermission code="role:view">
+            <Button size="sm" variant="outline" onClick={reload}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1" />
+              刷新
+            </Button>
+          </HasPermission>
+          <HasPermission code="role:create">
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              新建角色
+            </Button>
+          </HasPermission>
+        </div>
+      </div>
+
+      {rolesState.loading ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">正在加载...</div>
+      ) : items.length === 0 ? (
+        <div className="py-10 text-center">
+          <ShieldCheck className="mx-auto h-10 w-10 text-muted-foreground/50" />
+          <p className="mt-2 text-sm font-medium">暂无角色</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {searchText || filterStatus !== 'all'
+              ? '没有匹配的角色，请调整搜索条件'
+              : '系统启动时会自动创建「系统超管」与「普通用户」两个内置角色'}
+          </p>
+        </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          data={pagination.pagedItems}
+          fullData={items}
+          page={pagination.page}
+          pageSize={pagination.pageSize}
+          pageCount={pagination.pageCount}
+          total={pagination.total}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+          keyFn={(item) => item.id}
+        />
+      )}
 
       <RoleFormDialog state={form} setForm={setForm} onSaved={reload} />
 
@@ -811,7 +993,6 @@ export default function RolesPage() {
 
       {confirm && <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />}
 
-      <Separator className="my-4" />
       <p className="text-xs text-muted-foreground">
         提示：内置角色（系统超管 / 普通用户）由系统维护，可查看与分配权限但不允许删除；
         新建角色后请点击「分配权限」按钮为其配置菜单与按钮权限。

@@ -11,43 +11,77 @@ import {
   Bell,
   BellRing,
   ShieldCheck,
+  KeyRound,
+  User,
+  type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../store/auth';
 
-// 菜单项：使用 menu:* 权限 code 控制可见性
-// adminOnly 字段保留向后兼容，但已不再用于过滤（统一通过 permission 字段）
+// 图标名称 → lucide-react 组件映射表
+// 后端 permission.icon 字段（字符串）通过此映射渲染为图标组件
+// 未识别的图标名称 fallback 到 LayoutDashboard
+const iconMap: Record<string, LucideIcon> = {
+  LayoutDashboard,
+  Users,
+  Smartphone,
+  Shield,
+  History,
+  FileKey,
+  FileText,
+  Settings,
+  Bell,
+  BellRing,
+  ShieldCheck,
+  KeyRound,
+  User,
+};
+
 // settings 菜单特殊处理：需要检查至少有一个 Tab 权限
-const allNavItems: { path: string; label: string; icon: typeof LayoutDashboard; permission: string; settingsCheck?: string[] }[] = [
-  { path: '/overview', label: '概览', icon: LayoutDashboard, permission: 'menu:overview' },
-  { path: '/users', label: '账号管理', icon: Users, permission: 'menu:users' },
-  { path: '/clients', label: '客户端', icon: Smartphone, permission: 'menu:clients' },
-  { path: '/firewall', label: '防火墙', icon: Shield, permission: 'menu:firewall' },
-  { path: '/history', label: '连接历史', icon: History, permission: 'menu:history' },
-  { path: '/certs', label: '证书', icon: FileKey, permission: 'menu:certs' },
-  { path: '/audit', label: '操作审计', icon: FileText, permission: 'menu:audit' },
-  {
-    path: '/settings',
-    label: '系统设置',
-    icon: Settings,
-    permission: 'menu:settings',
-    settingsCheck: ['settings:base', 'settings:ldap', 'settings:openvpn', 'settings:service', 'settings:packages'],
-  },
-  { path: '/channels', label: '通知渠道', icon: BellRing, permission: 'menu:channels' },
-  { path: '/notifications', label: '站内信', icon: Bell, permission: 'menu:notifications' },
-  { path: '/roles', label: '角色管理', icon: ShieldCheck, permission: 'menu:roles' },
+const settingsTabPermissions = [
+  'settings:base',
+  'settings:ldap',
+  'settings:openvpn',
+  'settings:service',
+  'settings:packages',
 ];
+
+interface NavItem {
+  path: string;
+  label: string;
+  icon: LucideIcon;
+  permission: string;
+  /** 是否为 settings 菜单（需额外检查 Tab 权限） */
+  isSettings?: boolean;
+}
 
 export function Sidebar() {
   const location = useLocation();
-  const { hasPermission } = useAuth();
+  const { hasPermission, permissionTree } = useAuth();
 
-  // RBAC：仅展示当前用户拥有对应 menu 权限的菜单项
-  // 对于 settings 菜单，还需要检查至少有一个 Tab 权限
-  const navItems = allNavItems.filter((item) => {
-    if (!hasPermission(item.permission)) return false;
-    return true;
-  });
+  // 从 permissionTree 动态构建菜单项：
+  // - 仅展示 type=menu 的根节点（parentId 为空或 0）
+  // - 按 sort 排序
+  // - 仅展示用户拥有对应 menu 权限的节点
+  // - settings 菜单特殊处理：需检查至少有一个 Tab 权限（子节点中 type=button 的权限）
+  const navItems: NavItem[] = (permissionTree || [])
+    .filter((node) => node.type === 'menu' && node.code !== 'menu:profile')
+    .sort((a, b) => a.sort - b.sort)
+    .map((node) => ({
+      path: node.path || `/${node.code.split(':')[1] || node.code}`,
+      label: node.name,
+      icon: iconMap[node.icon || ''] || LayoutDashboard,
+      permission: node.code,
+      isSettings: node.code === 'menu:settings',
+    }))
+    .filter((item) => {
+      if (!hasPermission(item.permission)) return false;
+      // settings 菜单特殊处理：需检查至少有一个 Tab 权限
+      if (item.isSettings) {
+        return settingsTabPermissions.some((p) => hasPermission(p));
+      }
+      return true;
+    });
 
   return (
     <nav className="w-64 min-h-screen border-r bg-card/80 backdrop-blur flex flex-col">

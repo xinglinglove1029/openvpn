@@ -1310,6 +1310,7 @@ function UserFormDialog({
     if (!isValidAccount(username)) next.username = '账号不能为空，长度需在 2-64 个字符内';
     if (!trimText(name)) next.name = '姓名不能为空';
     if (mode === 'add' && !isStrongPassword(password)) next.password = '初始密码需至少 12 位，包含大小写字母、数字和特殊字符';
+    if (mode === 'add' && !trimText(email)) next.email = '邮箱不能为空';
     if (trimText(email) && !isValidEmail(email)) next.email = '邮箱格式不正确';
     if (trimText(ipAddr) && !isValidIp(ipAddr)) next.ipAddr = '固定 IP 请输入合法 IPv4 或 IPv6';
     return next;
@@ -1411,7 +1412,7 @@ function UserFormDialog({
           </div>
 
           <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="user-email" className="pt-2 text-right text-sm font-medium text-foreground/80">邮箱</Label>
+            <Label htmlFor="user-email" className="pt-2 text-right text-sm font-medium text-foreground/80">邮箱 {mode === 'add' && <span className="text-destructive">*</span>}</Label>
             <div className="space-y-1.5 min-w-0">
               <Input
                 id="user-email"

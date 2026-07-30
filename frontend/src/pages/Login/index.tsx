@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Lock, User, KeyRound, ShieldCheck, Eye, EyeOff } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Navigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
@@ -31,7 +31,7 @@ function safeNextPath(raw: string | null): string {
 export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { loginWithCredentials, login } = useAuth();
+  const { loginWithCredentials, login, user } = useAuth();
   const [mode, setMode] = useState<LoginMode>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -45,6 +45,17 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showNewPasswordAgain, setShowNewPasswordAgain] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      const next = safeNextPath(searchParams.get('next'));
+      navigate(next, { replace: true });
+    }
+  }, [user, navigate, searchParams]);
+
+  if (user) {
+    return null;
+  }
 
   function validateFields(): FieldErrors {
     const next: FieldErrors = {};

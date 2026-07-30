@@ -592,3 +592,104 @@ func readServerConfKey(key string) (string, error) {
 	}
 	return "", nil
 }
+
+func SetMFAInClientConfig(name string, mfaEnabled bool) error {
+	if name == "" {
+		return fmt.Errorf("客户端名称不能为空")
+	}
+
+	clientFilePath := filepath.Join(ovData, "clients", name+".ovpn")
+	data, err := os.ReadFile(clientFilePath)
+	if err != nil {
+		return fmt.Errorf("读取客户端配置失败: %w", err)
+	}
+
+	content := string(data)
+	mfaLine := "static-challenge \"Enter MFA code\" 1"
+
+	lines := strings.Split(content, "\n")
+	var result []string
+	found := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "static-challenge") {
+			found = true
+			if mfaEnabled {
+				result = append(result, mfaLine)
+			}
+			continue
+		}
+		result = append(result, line)
+	}
+
+	if mfaEnabled && !found {
+		var newLines []string
+		inserted := false
+		for _, line := range result {
+			newLines = append(newLines, line)
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "auth SHA256" && !inserted {
+				newLines = append(newLines, mfaLine)
+				inserted = true
+			}
+		}
+		result = newLines
+	}
+
+	newContent := strings.Join(result, "\n")
+	if err := os.WriteFile(clientFilePath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("写入客户端配置失败: %w", err)
+	}
+
+	return nil
+}
+
+func RegenerateUserClientConfigs(username string, mfaEnabled bool) ([]string, error) {
+	if username == "" {
+		return nil, fmt.Errorf("用户名不能为空")
+	}
+
+	var user User
+	db.Where("username = ?", username).First(&user)
+
+	var updated []string
+
+	if user.OvpnConfig != "" {
+		configName := strings.TrimSuffix(user.OvpnConfig, ".ovpn")
+		if err := SetMFAInClientConfig(configName, mfaEnabled); err != nil {
+			return updated, fmt.Errorf("更新配置 %s 失败: %w", configName, err)
+		}
+		updated = append(updated, configName)
+	}
+
+	clientsDir := filepath.Join(ovData, "clients")
+	files, err := os.ReadDir(clientsDir)
+	if err != nil {
+		return updated, nil
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+		if name == username {
+			alreadyUpdated := false
+			for _, u := range updated {
+				if u == name {
+					alreadyUpdated = true
+					break
+				}
+			}
+			if !alreadyUpdated {
+				if err := SetMFAInClientConfig(name, mfaEnabled); err != nil {
+					return updated, fmt.Errorf("更新配置 %s 失败: %w", name, err)
+				}
+				updated = append(updated, name)
+			}
+		}
+	}
+
+	return updated, nil
+}

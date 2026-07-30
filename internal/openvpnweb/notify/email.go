@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -37,7 +38,7 @@ type emailConfig struct {
 
 func (EmailNotifier) TestConfig(raw json.RawMessage) error {
 	var c emailConfig
-	if err := unmarshalConfig(raw, &c); err != nil {
+	if err := unmarshalEmailConfig(raw, &c); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.Host) == "" {
@@ -57,7 +58,7 @@ func (EmailNotifier) TestConfig(raw json.RawMessage) error {
 
 func (EmailNotifier) Send(ctx context.Context, msg Message, raw json.RawMessage) error {
 	var c emailConfig
-	if err := unmarshalConfig(raw, &c); err != nil {
+	if err := unmarshalEmailConfig(raw, &c); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.Host) == "" || c.Port == 0 || strings.TrimSpace(c.From) == "" {
@@ -112,15 +113,17 @@ func (EmailNotifier) Send(ctx context.Context, msg Message, raw json.RawMessage)
 		m.AttachFile(filePath)
 	}
 
-	opts := []mail.Option{mail.WithPort(c.Port), mail.WithSMTPAuth(mail.SMTPAuthAutoDiscover)}
+	opts := []mail.Option{mail.WithPort(c.Port)}
 	if c.Username != "" {
+		opts = append(opts, mail.WithSMTPAuth(mail.SMTPAuthAutoDiscover))
 		opts = append(opts, mail.WithUsername(c.Username))
-	}
-	if password != "" {
-		opts = append(opts, mail.WithPassword(password))
+		if password != "" {
+			opts = append(opts, mail.WithPassword(password))
+		}
 	}
 	client, err := mail.NewClient(c.Host, opts...)
 	if err != nil {
+		log.Printf("[email] 创建 SMTP 客户端失败: %v (host=%s, port=%d, security=%s)", err, c.Host, c.Port, c.Security)
 		return err
 	}
 	switch c.Security {
@@ -128,17 +131,95 @@ func (EmailNotifier) Send(ctx context.Context, msg Message, raw json.RawMessage)
 		client.SetTLSPolicy(mail.TLSMandatory)
 	case "ssl":
 		client.SetSSL(true)
+	default:
+		client.SetTLSPolicy(mail.TLSOpportunistic)
 	}
 
-	// 简单把 ctx 接到 DialAndSend（go-mail v0.7 接受 context）
+	log.Printf("[email] 准备发送邮件: from=%s, to=%v, subject=%q", c.From, recipients, c.SubjectPrefix+msg.Title)
+
+	// 分步发送，便于排查问题
 	done := make(chan error, 1)
-	go func() { done <- client.DialAndSend(m) }()
+	go func() {
+		if dialErr := client.DialWithContext(ctx); dialErr != nil {
+			done <- fmt.Errorf("SMTP 连接失败: %w", dialErr)
+			return
+		}
+		defer client.Close()
+		if sendErr := client.Send(m); sendErr != nil {
+			done <- fmt.Errorf("SMTP 发送失败: %w", sendErr)
+			return
+		}
+		done <- nil
+	}()
 	select {
 	case err := <-done:
+		if err != nil {
+			log.Printf("[email] 邮件发送失败: %v", err)
+		} else {
+			log.Printf("[email] 邮件发送成功: to=%v, subject=%q", recipients, c.SubjectPrefix+msg.Title)
+		}
 		return err
 	case <-ctx.Done():
+		log.Printf("[email] 邮件发送超时: %v", ctx.Err())
 		return ctx.Err()
 	}
+}
+
+// unmarshalEmailConfig 解析邮件配置，兼容 to 字段为 string 或 []string 的情况
+func unmarshalEmailConfig(raw json.RawMessage, c *emailConfig) error {
+	var rawMap map[string]any
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return fmt.Errorf("配置 JSON 解析失败：%w", err)
+	}
+
+	if host, ok := rawMap["host"].(string); ok {
+		c.Host = host
+	}
+	if port, ok := rawMap["port"].(float64); ok {
+		c.Port = int(port)
+	}
+	if username, ok := rawMap["username"].(string); ok {
+		c.Username = username
+	}
+	if password, ok := rawMap["password"].(string); ok {
+		c.Password = password
+	}
+	if from, ok := rawMap["from"].(string); ok {
+		c.From = from
+	}
+	if subjectPrefix, ok := rawMap["subject_prefix"].(string); ok {
+		c.SubjectPrefix = subjectPrefix
+	}
+	if security, ok := rawMap["security"].(string); ok {
+		c.Security = security
+	}
+
+	// 兼容 to 字段为 string 或 []string
+	if toVal, ok := rawMap["to"]; ok {
+		switch v := toVal.(type) {
+		case string:
+			parts := strings.FieldsFunc(v, func(r rune) bool {
+				return r == ',' || r == ';' || r == '\n' || r == ' '
+			})
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					c.To = append(c.To, p)
+				}
+			}
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					s = strings.TrimSpace(s)
+					if s != "" {
+						c.To = append(c.To, s)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func escapeHTML(s string) string {

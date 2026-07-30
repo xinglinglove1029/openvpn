@@ -42,7 +42,9 @@ func (r *Role) BeforeSave(tx *gorm.DB) (err error) {
 	return nil
 }
 
-// Permission 权限定义模型（仅由代码 seed 维护，不暴露 CRUD）
+// Permission 权限定义模型
+// 内置权限（IsBuiltin=true）由 seed 维护，不可删除，code/type 不可修改；
+// 非内置权限支持完整 CRUD，用于运行时调整菜单结构
 type Permission struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
 	ParentID  uint      `gorm:"column:parent_id;default:0" json:"parentId"`
@@ -52,6 +54,7 @@ type Permission struct {
 	Path      string    `gorm:"column:path;size:255" json:"path" form:"path"`
 	Icon      string    `gorm:"column:icon;size:64" json:"icon" form:"icon"`
 	Sort      int       `gorm:"column:sort;default:0" json:"sort" form:"sort"`
+	IsBuiltin bool      `gorm:"column:is_builtin;default:false" json:"isBuiltin" form:"isBuiltin"`
 	CreatedAt time.Time `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 }
 
@@ -105,6 +108,7 @@ var menuPermissions = []permissionSeedItem{
 	{"", "menu:notifications", "站内信", "menu", "/notifications", "Bell", 10},
 	{"", "menu:roles", "角色管理", "menu", "/roles", "ShieldCheck", 11},
 	{"", "menu:profile", "个人中心", "menu", "/profile", "User", 12},
+	{"", "menu:permissions", "权限管理", "menu", "/permissions", "KeyRound", 13},
 }
 
 // 按钮权限（按资源分组）
@@ -182,6 +186,8 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:roles", "permission:view", "查看权限树", "button", "", "", 6},
 	// 历史记录（1）
 	{"menu:history", "history:view", "查看连接历史", "button", "", "", 1},
+	// 权限管理（1）：CRUD + 排序权限
+	{"menu:permissions", "permission:manage", "管理权限", "button", "", "", 1},
 }
 
 // 普通用户角色默认权限（菜单 + 按钮）
@@ -219,6 +225,7 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				perm = Permission{
 					Name: p.Name, Code: p.Code, Type: p.Type, Path: p.Path, Icon: p.Icon, Sort: p.Sort,
+					IsBuiltin: true,
 				}
 				if err := db.Create(&perm).Error; err != nil {
 					return err
@@ -227,9 +234,9 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 				return err
 			}
 		}
-		// 更新元数据（已有记录时同步名称/路径/排序）
+		// 更新元数据（已有记录时仅同步 is_builtin，不覆盖运行时管理员对 name/path/icon/sort 的修改）
 		db.Model(&perm).Where("id = ?", perm.ID).Updates(map[string]interface{}{
-			"name": p.Name, "type": p.Type, "path": p.Path, "icon": p.Icon, "sort": p.Sort,
+			"is_builtin": true,
 		})
 		codeToID[p.Code] = perm.ID
 	}
@@ -240,6 +247,7 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				perm = Permission{
 					Name: p.Name, Code: p.Code, Type: p.Type, Sort: p.Sort,
+					IsBuiltin: true,
 				}
 				if err := db.Create(&perm).Error; err != nil {
 					return err
@@ -260,8 +268,9 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 				}
 			}
 		}
+		// 更新元数据（已有记录时仅同步 is_builtin 和 parent_id，不覆盖运行时 sort/name 修改）
 		db.Model(&perm).Where("id = ?", perm.ID).Updates(map[string]interface{}{
-			"name": p.Name, "type": p.Type, "parent_id": parentID, "sort": p.Sort,
+			"type": p.Type, "parent_id": parentID, "is_builtin": true,
 		})
 		codeToID[p.Code] = perm.ID
 	}
@@ -463,21 +472,24 @@ func permissionTreeHandler(c *gin.Context) {
 
 	// 构建树
 	type TreeNode struct {
-		ID       uint        `json:"id"`
-		Name     string      `json:"name"`
-		Code     string      `json:"code"`
-		Type     string      `json:"type"`
-		Path     string      `json:"path"`
-		Icon     string      `json:"icon"`
-		Sort     int         `json:"sort"`
-		Children []*TreeNode `json:"children"`
+		ID        uint        `json:"id"`
+		ParentID  uint        `json:"parentId"`
+		Name      string      `json:"name"`
+		Code      string      `json:"code"`
+		Type      string      `json:"type"`
+		Path      string      `json:"path"`
+		Icon      string      `json:"icon"`
+		Sort      int         `json:"sort"`
+		IsBuiltin bool        `json:"isBuiltin"`
+		Children  []*TreeNode `json:"children"`
 	}
 
 	byID := make(map[uint]*TreeNode)
 	roots := make([]*TreeNode, 0)
 	for _, p := range perms {
 		node := &TreeNode{
-			ID: p.ID, Name: p.Name, Code: p.Code, Type: p.Type, Path: p.Path, Icon: p.Icon, Sort: p.Sort,
+			ID: p.ID, ParentID: p.ParentID, Name: p.Name, Code: p.Code, Type: p.Type,
+			Path: p.Path, Icon: p.Icon, Sort: p.Sort, IsBuiltin: p.IsBuiltin,
 		}
 		byID[p.ID] = node
 	}
@@ -495,6 +507,372 @@ func permissionTreeHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": roots})
+}
+
+// permissionCodeRegex 权限 code 格式正则：以字母开头，仅包含字母、数字、下划线、冒号
+var permissionCodeRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_:]*$`)
+
+// parsePermissionIDParam 解析 :id 路径参数为 uint，非法时返回 0 + false
+func parsePermissionIDParam(c *gin.Context) (uint, bool) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无效的权限 ID"})
+		return 0, false
+	}
+	return uint(id), true
+}
+
+// permissionCreateHandler POST /ovpn/permission 创建权限节点
+// 接收 JSON body: name, code, type(menu|button), path, icon, sort, parentID
+// 校验：code 唯一且符合格式，parentID 存在时必须是 menu 类型
+// 创建时 IsBuiltin=false
+func permissionCreateHandler(c *gin.Context) {
+	var body struct {
+		Name     string `json:"name"`
+		Code     string `json:"code"`
+		Type     string `json:"type"`
+		Path     string `json:"path"`
+		Icon     string `json:"icon"`
+		Sort     int    `json:"sort"`
+		ParentID uint   `json:"parentId"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 净化输入
+	policy := bluemonday.UGCPolicy()
+	body.Name = strings.TrimSpace(policy.Sanitize(body.Name))
+	body.Code = strings.TrimSpace(body.Code)
+	body.Type = strings.TrimSpace(body.Type)
+	body.Path = strings.TrimSpace(body.Path)
+	body.Icon = strings.TrimSpace(body.Icon)
+
+	// 校验 name 非空
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限名称不能为空"})
+		return
+	}
+	if len(body.Name) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限名称长度不能超过 64"})
+		return
+	}
+	// 校验 code 格式
+	if body.Code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限编码不能为空"})
+		return
+	}
+	if !permissionCodeRegex.MatchString(body.Code) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限编码只能以字母开头，包含字母数字下划线冒号"})
+		return
+	}
+	// 校验 type
+	if body.Type != "menu" && body.Type != "button" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限类型必须为 menu 或 button"})
+		return
+	}
+	// 校验 sort 范围
+	if body.Sort < 0 || body.Sort > 9999 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "排序值需在 0-9999 之间"})
+		return
+	}
+	// 校验 code 唯一
+	var exists int64
+	db.Model(&Permission{}).Where("code = ?", body.Code).Count(&exists)
+	if exists > 0 {
+		c.JSON(http.StatusConflict, gin.H{"message": "权限编码已存在"})
+		return
+	}
+	// 校验 parentID：非 0 时必须存在且为 menu 类型
+	if body.ParentID != 0 {
+		var parent Permission
+		if err := db.Where("id = ?", body.ParentID).First(&parent).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "父权限不存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if parent.Type != "menu" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "父权限必须为 menu 类型"})
+			return
+		}
+	}
+
+	perm := Permission{
+		Name: body.Name, Code: body.Code, Type: body.Type, Path: body.Path, Icon: body.Icon,
+		Sort: body.Sort, ParentID: body.ParentID, IsBuiltin: false,
+	}
+	if err := db.Create(&perm).Error; err != nil {
+		recordAudit(c, "permission", "create", body.Name, false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "permission", "create", body.Name, true, fmt.Sprintf("创建权限: %s (code=%s)", body.Name, body.Code))
+	c.JSON(http.StatusOK, gin.H{"message": "创建成功", "id": perm.ID})
+}
+
+// permissionUpdateHandler PUT /ovpn/permission/:id 更新权限节点
+// 允许修改：name, path, icon, sort, parentID
+// 内置权限（IsBuiltin=true）：不允许修改 code 和 type（返回 400）
+// 非内置权限：允许修改 code（需校验唯一性）和 type
+func permissionUpdateHandler(c *gin.Context) {
+	id, ok := parsePermissionIDParam(c)
+	if !ok {
+		return
+	}
+	var perm Permission
+	if err := db.Where("id = ?", id).First(&perm).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "权限不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	var body struct {
+		Name     string `json:"name"`
+		Code     string `json:"code"`
+		Type     string `json:"type"`
+		Path     string `json:"path"`
+		Icon     string `json:"icon"`
+		Sort     int    `json:"sort"`
+		ParentID uint   `json:"parentId"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	policy := bluemonday.UGCPolicy()
+	body.Name = strings.TrimSpace(policy.Sanitize(body.Name))
+	body.Code = strings.TrimSpace(body.Code)
+	body.Type = strings.TrimSpace(body.Type)
+	body.Path = strings.TrimSpace(policy.Sanitize(body.Path))
+	body.Icon = strings.TrimSpace(body.Icon)
+
+	// 校验 name 非空
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限名称不能为空"})
+		return
+	}
+	if len(body.Name) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "权限名称长度不能超过 64"})
+		return
+	}
+	// 校验 sort 范围
+	if body.Sort < 0 || body.Sort > 9999 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "排序值需在 0-9999 之间"})
+		return
+	}
+
+	// 内置权限保护：禁止修改 code 与 type
+	if perm.IsBuiltin {
+		if body.Code != "" && body.Code != perm.Code {
+			recordAudit(c, "permission", "update", perm.Name, false, "内置权限代码不允许修改")
+			c.JSON(http.StatusBadRequest, gin.H{"message": "内置权限代码不允许修改"})
+			return
+		}
+		if body.Type != "" && body.Type != perm.Type {
+			recordAudit(c, "permission", "update", perm.Name, false, "内置权限类型不允许修改")
+			c.JSON(http.StatusBadRequest, gin.H{"message": "内置权限类型不允许修改"})
+			return
+		}
+	}
+
+	// 非内置权限允许改 code：校验格式与唯一性
+	if !perm.IsBuiltin && body.Code != "" && body.Code != perm.Code {
+		if !permissionCodeRegex.MatchString(body.Code) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "权限编码只能以字母开头，包含字母数字下划线冒号"})
+			return
+		}
+		var exists int64
+		db.Model(&Permission{}).Where("code = ? AND id != ?", body.Code, perm.ID).Count(&exists)
+		if exists > 0 {
+			c.JSON(http.StatusConflict, gin.H{"message": "权限编码已存在"})
+			return
+		}
+	}
+
+	// 非内置权限允许改 type：校验取值
+	if !perm.IsBuiltin && body.Type != "" && body.Type != perm.Type {
+		if body.Type != "menu" && body.Type != "button" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "权限类型必须为 menu 或 button"})
+			return
+		}
+	}
+
+	// 校验 parentID：非 0 时必须存在且为 menu 类型；不能将自己设为父节点
+	if body.ParentID != 0 && body.ParentID != perm.ParentID {
+		if body.ParentID == perm.ID {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "不能将自己设为父节点"})
+			return
+		}
+		var parent Permission
+		if err := db.Where("id = ?", body.ParentID).First(&parent).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "父权限不存在"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+			return
+		}
+		if parent.Type != "menu" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "父权限必须为 menu 类型"})
+			return
+		}
+		// 防止循环：检查 parentID 是否在当前节点的子树中
+		descendants := collectPermissionDescendants(perm.ID)
+		for _, did := range descendants {
+			if did == body.ParentID {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "不能将子节点设为父节点（循环引用）"})
+				return
+			}
+		}
+	}
+
+	updates := map[string]interface{}{
+		"name": body.Name,
+		"sort": body.Sort,
+	}
+	// path/icon 允许置空（前端传空字符串时同步覆盖）
+	updates["path"] = body.Path
+	updates["icon"] = body.Icon
+	// parentID 仅在前端显式传值（非 0 或显式 0）时更新；这里 JSON 解析无指针，统一更新
+	updates["parent_id"] = body.ParentID
+	if !perm.IsBuiltin && body.Code != "" {
+		updates["code"] = body.Code
+	}
+	if !perm.IsBuiltin && body.Type != "" {
+		updates["type"] = body.Type
+	}
+
+	if err := db.Model(&perm).Updates(updates).Error; err != nil {
+		recordAudit(c, "permission", "update", perm.Name, false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "permission", "update", perm.Name, true, fmt.Sprintf("更新权限: %s (code=%s)", body.Name, perm.Code))
+	c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+}
+
+// collectPermissionDescendants 递归收集指定权限节点的所有后代 ID（不含自身）
+func collectPermissionDescendants(id uint) []uint {
+	var ids []uint
+	var children []Permission
+	db.Where("parent_id = ?", id).Find(&children)
+	for _, c := range children {
+		ids = append(ids, c.ID)
+		ids = append(ids, collectPermissionDescendants(c.ID)...)
+	}
+	return ids
+}
+
+// permissionDeleteHandler DELETE /ovpn/permission/:id 删除权限节点
+// - 内置权限（IsBuiltin=true）不可删除（返回 400）
+// - 级联删除所有子节点（递归删除 children）
+// - 删除关联的 RolePermission 记录
+// - 使用事务
+func permissionDeleteHandler(c *gin.Context) {
+	id, ok := parsePermissionIDParam(c)
+	if !ok {
+		return
+	}
+	var perm Permission
+	if err := db.Where("id = ?", id).First(&perm).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "权限不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	if perm.IsBuiltin {
+		recordAudit(c, "permission", "delete", perm.Name, false, "内置权限不允许删除")
+		c.JSON(http.StatusBadRequest, gin.H{"message": "内置权限不允许删除"})
+		return
+	}
+
+	// 收集所有需要删除的节点 ID（自身 + 所有后代）
+	toDelete := []uint{perm.ID}
+	toDelete = append(toDelete, collectPermissionDescendants(perm.ID)...)
+
+	// 检查后代中是否有内置权限，如有则拒绝删除
+	for _, did := range toDelete {
+		var d Permission
+		if err := db.Where("id = ?", did).First(&d).Error; err == nil && d.IsBuiltin {
+			recordAudit(c, "permission", "delete", perm.Name, false, fmt.Sprintf("子节点 %s (code=%s) 为内置权限，不允许删除", d.Name, d.Code))
+			c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("子节点 %q 为内置权限，不允许删除", d.Name)})
+			return
+		}
+	}
+
+	// 事务：删除 RolePermission + Permission
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("permission_id IN ?", toDelete).Delete(&RolePermission{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", toDelete).Delete(&Permission{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		recordAudit(c, "permission", "delete", perm.Name, false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "permission", "delete", perm.Name, true, fmt.Sprintf("删除权限: %s (code=%s), 含 %d 个子节点", perm.Name, perm.Code, len(toDelete)-1))
+	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+}
+
+// permissionSortHandler PUT /ovpn/permission/sort 批量更新排序
+// 接收 JSON body: [{id, sort}, ...]
+// 使用事务批量更新 sort 字段
+func permissionSortHandler(c *gin.Context) {
+	var body []struct {
+		ID   uint `json:"id"`
+		Sort int  `json:"sort"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	if len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "排序数据不能为空"})
+		return
+	}
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		for _, item := range body {
+			if item.ID == 0 {
+				continue
+			}
+			if item.Sort < 0 || item.Sort > 9999 {
+				return fmt.Errorf("排序值需在 0-9999 之间")
+			}
+			if err := tx.Model(&Permission{}).Where("id = ?", item.ID).Update("sort", item.Sort).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		recordAudit(c, "permission", "sort", "", false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "permission", "sort", "", true, fmt.Sprintf("批量更新 %d 个权限排序", len(body)))
+	c.JSON(http.StatusOK, gin.H{"message": "排序已更新"})
 }
 
 // validateRoleID 校验 role_id 有效性：非空且非 0 时必须存在且启用

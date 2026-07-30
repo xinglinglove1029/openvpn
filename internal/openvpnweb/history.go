@@ -13,6 +13,7 @@ import (
 
 type History struct {
 	ID            uint      `gorm:"primarykey" json:"id" form:"id"`
+	UserID        uint      `gorm:"index;default:0" json:"userId"`
 	Vip           string    `gorm:"column:vip;comment:'VPN IP'" json:"vip" form:"vip"`
 	Vip6          string    `gorm:"column:vip6;comment:'VPN IPV6'" json:"vip6" form:"vip6"`
 	Rip           string    `gorm:"column:rip;comment:'用户 IP'" json:"rip" form:"rip"`
@@ -66,6 +67,9 @@ func (h History) All() []History {
 }
 
 func (h History) Create() error {
+	if h.UserID == 0 && h.Username != "" {
+		h.UserID = GetUserIDByUsername(h.Username)
+	}
 	result := db.Table(h.TableName()).WithContext(context.Background()).Create(&h)
 
 	return result.Error
@@ -76,7 +80,7 @@ func (h History) Delete(id string) error {
 	return result.Error
 }
 
-func (h History) Query(p Params, accessibleUsers []string, skipFilter bool) QueryData {
+func (h History) Query(p Params, accessibleUserIDs []uint, skipFilter bool) QueryData {
 	var qd QueryData
 	var itmes []History
 	var totalCount int64
@@ -86,8 +90,8 @@ func (h History) Query(p Params, accessibleUsers []string, skipFilter bool) Quer
 	qdb := db.WithContext(context.Background())
 
 	// 数据权限过滤：普通用户只能看到自己所在分组及下级分组用户的连接历史
-	if !skipFilter && len(accessibleUsers) > 0 {
-		qdb = qdb.Where("username IN ?", accessibleUsers)
+	if !skipFilter && len(accessibleUserIDs) > 0 {
+		qdb = qdb.Where("user_id IN ?", accessibleUserIDs)
 	}
 
 	db.Count(&totalCount)

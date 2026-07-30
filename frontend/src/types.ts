@@ -428,17 +428,22 @@ export interface Permission {
   path?: string;
   icon?: string;
   sort: number;
+  /** 内置权限（seed 维护）：code/type 不可改，不可删 */
+  isBuiltin?: boolean;
 }
 
 /** RBAC：权限树节点（带 children） */
 export interface PermissionTreeNode {
   id: number;
+  parentId?: number;
   name: string;
   code: string;
   type: 'menu' | 'button';
   path?: string;
   icon?: string;
   sort: number;
+  /** 内置权限（seed 维护）：code/type 不可改，不可删 */
+  isBuiltin?: boolean;
   children?: PermissionTreeNode[];
 }
 

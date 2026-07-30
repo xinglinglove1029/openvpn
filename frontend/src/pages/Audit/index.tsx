@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { RefreshCw, Download } from 'lucide-react';
+import { Download, RefreshCw } from 'lucide-react';
 import { api } from '../../api';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
@@ -9,7 +9,6 @@ import { PageHeader } from '@/components/PageHeader';
 import { TimeRangePicker } from '@/components/TimeRangePicker';
 import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
-import { Card, CardContent } from '@/ui/card';
 import { Button } from '@/ui/button';
 import {
   Select,
@@ -151,111 +150,108 @@ export default function AuditPage() {
   );
 
   return (
-    <div className="space-y-6">
-      <PageHeader eyebrow="Audit" title="操作审计" description="查看系统操作日志与审计记录">
-        <Button variant="outline" size="sm" onClick={() => setReloadKey((v) => v + 1)}>
-          <RefreshCw className="h-4 w-4 mr-1" />
-          刷新
-        </Button>
-        <Button variant="outline" size="sm" asChild>
-          <a href={exportUrl}>
-            <Download className="h-4 w-4 mr-1" />
-            导出 CSV
-          </a>
-        </Button>
-      </PageHeader>
+    <div className="space-y-4">
+      <PageHeader eyebrow="Audit" title="操作审计" description="查看系统操作日志与审计记录" />
 
-      <Card>
-        <CardContent className="p-6">
-          {/* 过滤栏 */}
-          <div className="flex flex-wrap items-center gap-3 mb-6">
-            <Select value={operator} onValueChange={setOperator}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="全部操作人" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">全部操作人</SelectItem>
-                {users.map((u) => (
-                  <SelectItem key={u.id} value={u.username}>
-                    {u.username}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={module} onValueChange={setModule}>
-              <SelectTrigger className="w-[130px]">
-                <SelectValue placeholder="全部模块" />
-              </SelectTrigger>
-              <SelectContent>
-                {moduleOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={action} onValueChange={setAction}>
-              <SelectTrigger className="w-[130px]">
-                <SelectValue placeholder="全部动作" />
-              </SelectTrigger>
-              <SelectContent>
-                {actionOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <TimeRangePicker
-              value={dateRange}
-              onChange={setDateRange}
-              placeholder="选择时间范围"
-            />
-          </div>
+      {/* 操作工具栏：筛选条件 在左，刷新、导出 在右 */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Select value={operator} onValueChange={setOperator}>
+          <SelectTrigger className="w-[140px] h-8">
+            <SelectValue placeholder="全部操作人" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部操作人</SelectItem>
+            {users.map((u) => (
+              <SelectItem key={u.id} value={u.username}>
+                {u.username}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={module} onValueChange={setModule}>
+          <SelectTrigger className="w-[120px] h-8">
+            <SelectValue placeholder="全部模块" />
+          </SelectTrigger>
+          <SelectContent>
+            {moduleOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={action} onValueChange={setAction}>
+          <SelectTrigger className="w-[120px] h-8">
+            <SelectValue placeholder="全部动作" />
+          </SelectTrigger>
+          <SelectContent>
+            {actionOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <TimeRangePicker
+          value={dateRange}
+          onChange={setDateRange}
+          placeholder="选择时间范围"
+        />
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+            刷新
+          </Button>
+          <Button size="sm" variant="outline" asChild>
+            <a href={exportUrl}>
+              <Download className="h-3.5 w-3.5 mr-1" />
+              导出 CSV
+            </a>
+          </Button>
+        </div>
+      </div>
 
-          {/* 摘要 */}
-          {!state.loading && rows.length > 0 && (
-            <p className="text-sm text-muted-foreground mb-4">
-              共匹配 {total} 条记录，当前已加载 {rows.length} 条。
-            </p>
-          )}
+      {/* 摘要 */}
+      {!state.loading && rows.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          共匹配 {total} 条记录，当前已加载 {rows.length} 条。
+        </p>
+      )}
 
-          {/* 加载中 */}
-          {state.loading && (
-            <p className="text-sm text-muted-foreground text-center py-8">
-              加载中...
-            </p>
-          )}
+      {/* 加载中 */}
+      {state.loading && (
+        <p className="text-sm text-muted-foreground text-center py-8">
+          加载中...
+        </p>
+      )}
 
-          {/* 表格 */}
-          {!state.loading && rows.length > 0 && (
-            <DataTable
-              columns={columns}
-              data={pagination.pagedItems}
-              fullData={rows}
-              page={pagination.page}
-              pageSize={pagination.pageSize}
-              pageCount={pagination.pageCount}
-              total={pagination.total}
-              start={pagination.start}
-              end={pagination.end}
-              onPageChange={pagination.setPage}
-              onPageSizeChange={pagination.setPageSize}
-              keyFn={(item) => item.id}
-            />
-          )}
+      {/* 表格 */}
+      {!state.loading && rows.length > 0 && (
+        <DataTable
+          columns={columns}
+          data={pagination.pagedItems}
+          fullData={rows}
+          page={pagination.page}
+          pageSize={pagination.pageSize}
+          pageCount={pagination.pageCount}
+          total={pagination.total}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+          keyFn={(item) => item.id}
+        />
+      )}
 
-          {/* 空状态 */}
-          {!state.loading && rows.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-muted-foreground font-medium">暂无审计记录</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                登录、创建/修改/删除账号、客户端、防火墙、系统设置和通知测试都会记录在这里。
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* 空状态 */}
+      {!state.loading && rows.length === 0 && (
+        <div className="text-center py-12">
+          <p className="text-muted-foreground font-medium">暂无审计记录</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            登录、创建/修改/删除账号、客户端、防火墙、系统设置和通知测试都会记录在这里。
+          </p>
+        </div>
+      )}
     </div>
   );
 }

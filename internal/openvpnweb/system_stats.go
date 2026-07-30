@@ -122,13 +122,25 @@ type SystemNetInfo struct {
 	IsPhysical  bool    `json:"isPhysical"`  // 非虚拟接口
 }
 
+// SystemStatsHistoryPoint 历史数据点（只保留核心指标，减小内存占用）
+type SystemStatsHistoryPoint struct {
+	Timestamp   int64   `json:"timestamp"`
+	CpuPercent  float64 `json:"cpuPercent"`
+	MemPercent  float64 `json:"memPercent"`
+	DiskPercent float64 `json:"diskPercent"`
+	NetTotalBps float64 `json:"netTotalBps"`
+}
+
+const maxHistoryPoints = 60
+
 // systemStatsCollector 周期采集系统监控并通过 EventBus 广播 system:stats。
 // 设计要点：
 //   - 单 goroutine 采集，避免多客户端触发多份采集；
 //   - 采集间隔 5s，CPU 采样内部会阻塞约 1s（取两次差值），整体开销可控；
 //   - 启动时立即采集一次，让前端首屏就有数据；
 //   - 网络速率通过相邻两次采集的字节差除以间隔得到；
-//   - 失败时仅记日志，绝不因采集异常影响主流程。
+//   - 失败时仅记日志，绝不因采集异常影响主流程；
+//   - 环形缓冲区保留最近 60 个采样点（约 5 分钟），供切换页面后恢复趋势图。
 type systemStatsCollector struct {
 	mu          sync.Mutex
 	interval    time.Duration
@@ -137,6 +149,8 @@ type systemStatsCollector struct {
 	hostInfo    SystemHostInfo
 	cpuModel    string
 	cores       int
+	history     []SystemStatsHistoryPoint
+	lastPayload *SystemStatsPayload
 }
 
 var globalCollector *systemStatsCollector
@@ -162,6 +176,7 @@ func StartSystemStatsCollector(interval time.Duration) {
 		c.collectHostInfo(ctx)
 		// 立即推送一次，首屏即有数据
 		if payload, err := c.collect(context.Background()); err == nil {
+			c.appendHistory(payload)
 			Bus().Publish(systemStatsTopic, payload)
 		} else {
 			log.Printf("[system-stats] initial collect failed: %v", err)
@@ -169,6 +184,48 @@ func StartSystemStatsCollector(interval time.Duration) {
 	}()
 
 	go c.loop()
+}
+
+func (c *systemStatsCollector) appendHistory(payload *SystemStatsPayload) {
+	diskPercent := 0.0
+	if len(payload.Disks) > 0 {
+		for _, d := range payload.Disks {
+			if d.UsedPercent > diskPercent {
+				diskPercent = d.UsedPercent
+			}
+		}
+	}
+	point := SystemStatsHistoryPoint{
+		Timestamp:   payload.Timestamp,
+		CpuPercent:  payload.CpuPercent,
+		MemPercent:  payload.Memory.UsedPercent,
+		DiskPercent: diskPercent,
+		NetTotalBps: payload.NetTotalRxBps + payload.NetTotalTxBps,
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastPayload = payload
+	if len(c.history) >= maxHistoryPoints {
+		c.history = c.history[len(c.history)-maxHistoryPoints+1:]
+	}
+	c.history = append(c.history, point)
+}
+
+// GetHistory 返回最近的历史数据点和最新的完整 payload
+func GetSystemStatsHistory() ([]SystemStatsHistoryPoint, *SystemStatsPayload) {
+	if globalCollector == nil {
+		return nil, nil
+	}
+	globalCollector.mu.Lock()
+	defer globalCollector.mu.Unlock()
+	result := make([]SystemStatsHistoryPoint, len(globalCollector.history))
+	copy(result, globalCollector.history)
+	var last *SystemStatsPayload
+	if globalCollector.lastPayload != nil {
+		p := *globalCollector.lastPayload
+		last = &p
+	}
+	return result, last
 }
 
 func (c *systemStatsCollector) loop() {
@@ -182,6 +239,7 @@ func (c *systemStatsCollector) loop() {
 			log.Printf("[system-stats] collect failed: %v", err)
 			continue
 		}
+		c.appendHistory(payload)
 		Bus().Publish(systemStatsTopic, payload)
 	}
 }

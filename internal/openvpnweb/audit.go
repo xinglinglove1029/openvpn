@@ -14,15 +14,16 @@ import (
 )
 
 type AuditLog struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	Operator  string    `json:"operator"`
-	Module    string    `json:"module"`
-	Action    string    `json:"action"`
-	Target    string    `json:"target"`
-	Success   bool      `json:"success"`
-	Message   string    `json:"message"`
-	IP        string    `json:"ip"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         uint      `gorm:"primarykey" json:"id"`
+	OperatorID uint      `gorm:"index;default:0" json:"operatorId"`
+	Operator   string    `json:"operator"`
+	Module     string    `json:"module"`
+	Action     string    `json:"action"`
+	Target     string    `json:"target"`
+	Success    bool      `json:"success"`
+	Message    string    `json:"message"`
+	IP         string    `json:"ip"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 var auditTargets = []struct {
@@ -112,14 +113,18 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 		return
 	}
 
+	operator := auditOperator(c)
+	operatorID := GetUserIDByUsername(operator)
+
 	logItem := AuditLog{
-		Operator: auditOperator(c),
-		Module:   module,
-		Action:   action,
-		Target:   target,
-		Success:  success,
-		Message:  message,
-		IP:       c.ClientIP(),
+		OperatorID: operatorID,
+		Operator:   operator,
+		Module:     module,
+		Action:     action,
+		Target:     target,
+		Success:    success,
+		Message:    message,
+		IP:         c.ClientIP(),
 	}
 	if err := db.WithContext(context.Background()).Create(&logItem).Error; err != nil {
 		logger.Error(context.Background(), "record audit log failed: %s", err)
@@ -142,9 +147,9 @@ func queryAuditLogs(c *gin.Context) ([]AuditLog, int64, error) {
 		}
 	}
 	if isAdmin, _ := c.Get("isAdmin"); isAdmin != true && currentUsername != "" {
-		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		accessibleUserIDs, skipFilter := GetAccessibleUserIDs(currentUsername)
 		if !skipFilter {
-			query = query.Where("operator IN ?", accessibleUsers)
+			query = query.Where("operator_id IN ?", accessibleUserIDs)
 		}
 	}
 

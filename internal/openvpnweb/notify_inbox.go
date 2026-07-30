@@ -10,10 +10,11 @@ import (
 )
 
 // UserNotifyRead 记录每个用户对站内信（NotifyLog）的已读进度
-// Key: (Username, Scope)；Scope 预留用于将来按业务线隔离
+// Key: (UserID, Scope)；Scope 预留用于将来按业务线隔离
 type UserNotifyRead struct {
 	ID            uint   `gorm:"primarykey" json:"id"`
-	Username      string `gorm:"uniqueIndex:idx_user_scope;size:64" json:"username"`
+	UserID        uint   `gorm:"uniqueIndex:idx_user_scope;default:0;index" json:"userId"`
+	Username      string `gorm:"size:64" json:"username"`
 	Scope         string `gorm:"uniqueIndex:idx_user_scope;size:32;default:default" json:"scope"`
 	LastReadID    uint   `gorm:"default:0" json:"lastReadId"`
 	UpdatedAtUnix int64  `json:"updatedAt"`
@@ -28,9 +29,13 @@ func getUserNotifyRead(username string) UserNotifyRead {
 	if username == "" {
 		return UserNotifyRead{}
 	}
+	userID := GetUserIDByUsername(username)
+	if userID == 0 {
+		return UserNotifyRead{}
+	}
 	var rec UserNotifyRead
 	if err := db.WithContext(context.Background()).
-		Where("username = ? AND scope = ?", username, "default").
+		Where("user_id = ? AND scope = ?", userID, "default").
 		First(&rec).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error(context.Background(), "query user notify read failed: %s", err.Error())
@@ -45,8 +50,13 @@ func markUserNotifyRead(username string, lastID uint) (UserNotifyRead, error) {
 	if username == "" {
 		return UserNotifyRead{}, errors.New("username is empty")
 	}
+	userID := GetUserIDByUsername(username)
+	if userID == 0 {
+		return UserNotifyRead{}, errors.New("user not found")
+	}
 	now := time.Now().Unix()
 	rec := UserNotifyRead{
+		UserID:        userID,
 		Username:      username,
 		Scope:         "default",
 		LastReadID:    lastID,
@@ -54,10 +64,11 @@ func markUserNotifyRead(username string, lastID uint) (UserNotifyRead, error) {
 	}
 	err := db.WithContext(context.Background()).
 		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "username"}, {Name: "scope"}},
+			Columns: []clause.Column{{Name: "user_id"}, {Name: "scope"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
 				"last_read_id":    gorm.Expr("MAX(last_read_id, ?)", lastID),
 				"updated_at_unix": now,
+				"username":        username,
 			}),
 		}).
 		Create(&rec).Error
@@ -77,9 +88,9 @@ func countUnreadNotifyLogs(lastReadID uint, currentUsername string, isAdmin bool
 
 	// 数据权限过滤
 	if !isAdmin && currentUsername != "" {
-		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		accessibleUserIDs, skipFilter := GetAccessibleUserIDs(currentUsername)
 		if !skipFilter {
-			query = query.Where("username IN ?", accessibleUsers)
+			query = query.Where("user_id IN ?", accessibleUserIDs)
 		}
 	}
 
@@ -101,9 +112,9 @@ func maxNotifyLogID(currentUsername string, isAdmin bool) uint {
 
 	// 数据权限过滤
 	if !isAdmin && currentUsername != "" {
-		accessibleUsers, skipFilter := GetAccessibleUsernames(currentUsername)
+		accessibleUserIDs, skipFilter := GetAccessibleUserIDs(currentUsername)
 		if !skipFilter {
-			query = query.Where("username IN ?", accessibleUsers)
+			query = query.Where("user_id IN ?", accessibleUserIDs)
 		}
 	}
 

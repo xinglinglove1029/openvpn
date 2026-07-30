@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bell, CheckCircle2, XCircle, RefreshCw, Filter, Eye } from 'lucide-react';
+import { Bell, CheckCircle2, XCircle, RefreshCw, Eye, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Badge } from '@/ui/badge';
 import {
@@ -18,7 +17,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/ui/select';
+import { Input } from '@/ui/input';
 import { DataTable, type Column } from '@/components/DataTable';
+import { PageHeader } from '@/components/PageHeader';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
@@ -71,26 +72,37 @@ function providerLabel(provider: string) {
 export default function NotificationsPage() {
   const [eventFilter, setEventFilter] = useState<EventFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [searchUser, setSearchUser] = useState('');
+  const [searchMessage, setSearchMessage] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [detailItem, setDetailItem] = useState<NotifyLogRecord | null>(null);
   const { markRead, refresh: refreshUnread } = useNotificationHub();
 
   const state = useAsync(async () => {
-    const result = await api.get<{ data: NotifyLogRecord[] }>('/ovpn/notify/logs?limit=200');
+    const result = await api.get<{ data: NotifyLogRecord[] }>('/ovpn/notify/logs?limit=500');
     return Array.isArray(result?.data) ? result.data : [];
   }, [reloadKey]);
 
+  // 综合过滤：事件类型 + 发送结果 + 用户名 + 消息内容
   const filtered = useMemo(() => {
     const items = state.data ?? [];
+    const kwUser = searchUser.trim().toLowerCase();
+    const kwMsg = searchMessage.trim().toLowerCase();
     return items.filter((item) => {
       if (eventFilter !== 'all' && item.event !== eventFilter) return false;
       if (statusFilter === 'success' && !item.success) return false;
       if (statusFilter === 'failed' && item.success) return false;
+      if (kwUser && !(item.username ?? '').toLowerCase().includes(kwUser)) return false;
+      if (kwMsg && !(item.message ?? '').toLowerCase().includes(kwMsg)) return false;
       return true;
     });
-  }, [state.data, eventFilter, statusFilter]);
+  }, [state.data, eventFilter, statusFilter, searchUser, searchMessage]);
 
-  const pagination = usePagination(filtered, `${eventFilter}-${statusFilter}-${reloadKey}`, 10);
+  const pagination = usePagination(
+    filtered,
+    `${eventFilter}-${statusFilter}-${searchUser}-${searchMessage}-${reloadKey}`,
+    10,
+  );
 
   const handleReload = useCallback(() => {
     setReloadKey((key) => key + 1);
@@ -212,89 +224,104 @@ export default function NotificationsPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Bell className="w-7 h-7" />
-            站内信
-          </h1>
-          <p className="text-muted-foreground mt-1">查看 Webhook / 邮件等渠道发送的运维通知</p>
+    <div className="space-y-4">
+      <PageHeader eyebrow="Notification" title="站内信" description="查看 Webhook / 邮件等渠道发送的运维通知" />
+
+      {/* 操作工具栏：搜索、筛选 在左，刷新 在右 */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative w-44">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchUser}
+            onChange={(e) => setSearchUser(e.target.value)}
+            placeholder="搜索用户名"
+            className="pl-8 h-8"
+          />
         </div>
-        <Button variant="outline" onClick={handleReload} disabled={state.loading}>
-          <RefreshCw className={`w-4 h-4 mr-2 ${state.loading ? 'animate-spin' : ''}`} />
-          刷新
-        </Button>
+        <div className="relative w-56">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchMessage}
+            onChange={(e) => setSearchMessage(e.target.value)}
+            placeholder="搜索消息内容"
+            className="pl-8 h-8"
+          />
+        </div>
+        <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
+          <SelectTrigger className="w-[120px] h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部事件</SelectItem>
+            <SelectItem value="connect">上线</SelectItem>
+            <SelectItem value="disconnect">下线</SelectItem>
+            <SelectItem value="test">测试</SelectItem>
+            <SelectItem value="user_register">用户注册</SelectItem>
+            <SelectItem value="password_reset">密码重置</SelectItem>
+            <SelectItem value="mfa_reset">MFA重置</SelectItem>
+            <SelectItem value="expire_reminder">到期提醒</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+          <SelectTrigger className="w-[110px] h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部结果</SelectItem>
+            <SelectItem value="success">成功</SelectItem>
+            <SelectItem value="failed">失败</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={handleReload} disabled={state.loading}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${state.loading ? 'animate-spin' : ''}`} />
+            刷新
+          </Button>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Filter className="w-4 h-4" />
-            筛选
-          </CardTitle>
-          <CardDescription>按事件类型和发送结果过滤最近 200 条通知</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap items-center gap-6">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-right shrink-0" htmlFor="notify-event-filter" style={{ width: 70 }}>事件类型</label>
-              <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
-                <SelectTrigger id="notify-event-filter" className="w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部事件</SelectItem>
-                  <SelectItem value="connect">上线</SelectItem>
-                  <SelectItem value="disconnect">下线</SelectItem>
-                  <SelectItem value="test">测试</SelectItem>
-                  <SelectItem value="user_register">用户注册</SelectItem>
-                  <SelectItem value="password_reset">密码重置</SelectItem>
-                  <SelectItem value="mfa_reset">MFA重置</SelectItem>
-                  <SelectItem value="expire_reminder">到期提醒</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-right shrink-0" htmlFor="notify-status-filter" style={{ width: 70 }}>发送结果</label>
-              <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-                <SelectTrigger id="notify-status-filter" className="w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部结果</SelectItem>
-                  <SelectItem value="success">成功</SelectItem>
-                  <SelectItem value="failed">失败</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="text-sm text-muted-foreground ml-auto">
-              共 {filtered.length} 条
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* 摘要 */}
+      {!state.loading && filtered.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          共匹配 {filtered.length} 条记录。
+        </p>
+      )}
 
-      <Card>
-        <CardContent className="pt-6">
-          <DataTable<NotifyLogRecord>
-            columns={columns}
-            data={pagination.pagedItems}
-            fullData={filtered}
-            page={pagination.page}
-            pageSize={pagination.pageSize}
-            pageCount={pagination.pageCount}
-            total={pagination.total}
-            start={pagination.start}
-            end={pagination.end}
-            onPageChange={pagination.setPage}
-            onPageSizeChange={pagination.setPageSize}
-            emptyTitle={state.loading ? '加载中...' : '暂无通知'}
-            emptyDescription={state.loading ? '正在拉取最近的运维通知' : '当前筛选条件下还没有任何通知记录'}
-            keyFn={(item) => item.id}
-          />
-        </CardContent>
-      </Card>
+      {/* 表格 */}
+      {!state.loading && filtered.length > 0 && (
+        <DataTable<NotifyLogRecord>
+          columns={columns}
+          data={pagination.pagedItems}
+          fullData={filtered}
+          page={pagination.page}
+          pageSize={pagination.pageSize}
+          pageCount={pagination.pageCount}
+          total={pagination.total}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+          emptyTitle={state.loading ? '加载中...' : '暂无通知'}
+          emptyDescription={state.loading ? '正在拉取最近的运维通知' : '当前筛选条件下还没有任何通知记录'}
+          keyFn={(item) => item.id}
+        />
+      )}
+
+      {/* 空状态 */}
+      {state.loading && (
+        <p className="text-sm text-muted-foreground text-center py-8">加载中...</p>
+      )}
+      {!state.loading && filtered.length === 0 && (
+        <div className="text-center py-12">
+          <Bell className="mx-auto h-10 w-10 text-muted-foreground/50" />
+          <p className="mt-2 text-sm font-medium">暂无通知</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {searchUser || searchMessage || eventFilter !== 'all' || statusFilter !== 'all'
+              ? '没有匹配的通知，请调整搜索条件'
+              : 'Webhook / 邮件等渠道发送的运维通知会展示在这里'}
+          </p>
+        </div>
+      )}
 
       <Dialog open={!!detailItem} onOpenChange={(open) => !open && setDetailItem(null)}>
         <DialogContent className="max-w-2xl">

@@ -38,6 +38,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { cn } from '@/lib/utils';
 import { realtimeHub, type ConnectionState } from '@/lib/notificationHub';
 import { formatBytes } from '@/lib/format';
+import { api } from '@/api';
 import type { SystemStatsPayload } from '@/types';
 
 /* ---------- 工具函数 ---------- */
@@ -487,6 +488,19 @@ function NetRow({ net, totalBps }: { net: SystemStatsPayload['networks'][number]
 /** 趋势历史窗口大小：5 秒一次 × 60 = 5 分钟 */
 const HISTORY_LIMIT = 60;
 
+interface SystemStatsHistoryPoint {
+  timestamp: number;
+  cpuPercent: number;
+  memPercent: number;
+  diskPercent: number;
+  netTotalBps: number;
+}
+
+interface SystemStatsHistoryResponse {
+  history: SystemStatsHistoryPoint[];
+  latest: SystemStatsPayload | null;
+}
+
 export default function SystemMonitor() {
   const [stats, setStats] = useState<SystemStatsPayload | null>(null);
   const [connection, setConnection] = useState<ConnectionState>(realtimeHub.getState());
@@ -498,16 +512,43 @@ export default function SystemMonitor() {
   const [diskHist, setDiskHist] = useState<number[]>([]);
   const [netHist, setNetHist] = useState<number[]>([]);
 
+  // 组件挂载时拉取历史数据，切换页面后回来能看到趋势图
+  // 用 ref 标记是否已用历史数据初始化过，避免和实时数据冲突
+  const historyInitRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHistory() {
+      try {
+        const res = await api.get<SystemStatsHistoryResponse>('/ovpn/system-stats/history');
+        if (cancelled) return;
+        if (res?.history && res.history.length > 0 && !historyInitRef.current) {
+          historyInitRef.current = true;
+          setCpuHist(res.history.map((p) => clampPercent(p.cpuPercent)));
+          setMemHist(res.history.map((p) => clampPercent(p.memPercent)));
+          setDiskHist(res.history.map((p) => clampPercent(p.diskPercent)));
+          setNetHist(res.history.map((p) => p.netTotalBps || 0));
+        }
+        if (res?.latest) {
+          setStats((prev) => prev || res.latest);
+        }
+      } catch {
+        // 历史数据加载失败不影响实时数据展示
+      }
+    }
+    loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const off = realtimeHub.subscribe<SystemStatsPayload>('system:stats', (payload) => {
       if (payload) {
         setStats(payload);
-        // 把核心指标追加到历史窗口
         const nextCpu = clampPercent(payload.cpuPercent);
         const nextMem = clampPercent(payload.memory.usedPercent);
         const nextDisk =
           payload.disks.length > 0 ? Math.max(...payload.disks.map((d) => d.usedPercent)) : 0;
-        // 网络总速率（bytes/s），不归一化为百分比，原值入栈，Sparkline 内部按窗口最大归一化
         const nextNet = (payload.netTotalRxBps || 0) + (payload.netTotalTxBps || 0);
         setCpuHist((prev) => appendBounded(prev, nextCpu, HISTORY_LIMIT));
         setMemHist((prev) => appendBounded(prev, nextMem, HISTORY_LIMIT));

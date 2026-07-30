@@ -1,37 +1,42 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { BackgroundScene } from '@/components/BackgroundScene';
 import { useAuth } from '@/store/auth';
 
-// 路由 → 必备菜单权限 code 映射
-// 未在此映射中的路径（如 /overview、/profile）不做权限校验
-const pathPermissionMap: { path: string; permission: string }[] = [
-  { path: '/users', permission: 'menu:users' },
-  { path: '/clients', permission: 'menu:clients' },
-  { path: '/firewall', permission: 'menu:firewall' },
-  { path: '/history', permission: 'menu:history' },
-  { path: '/certs', permission: 'menu:certs' },
-  { path: '/audit', permission: 'menu:audit' },
-  { path: '/settings', permission: 'menu:settings' },
-  { path: '/channels', permission: 'menu:channels' },
-  { path: '/notifications', permission: 'menu:notifications' },
-  { path: '/roles', permission: 'menu:roles' },
-];
-
-function getRequiredPermission(pathname: string): string | undefined {
-  // 精确匹配优先，前缀匹配兜底
-  const exact = pathPermissionMap.find((item) => pathname === item.path);
-  if (exact) return exact.permission;
-  const prefix = pathPermissionMap.find((item) => pathname.startsWith(item.path + '/'));
-  return prefix?.permission;
-}
-
 export function Layout() {
-  const { user, isLoading, hasPermission } = useAuth();
+  const { user, isLoading, hasPermission, permissionTree } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // 动态构建 路径 → 菜单权限 code 映射
+  // 遍历 permissionTree 中 type=menu 的节点，构建 { path: node.path, permission: node.code } 映射
+  // 未在此映射中的路径（如 /overview、/profile）不做权限校验
+  const pathPermissionMap = useMemo(() => {
+    const map: { path: string; permission: string }[] = [];
+    function walk(nodes: typeof permissionTree | undefined) {
+      if (!nodes) return;
+      for (const node of nodes) {
+        if (node.type === 'menu' && node.path && node.code !== 'menu:profile') {
+          map.push({ path: node.path, permission: node.code });
+        }
+        if (node.children && node.children.length) {
+          walk(node.children);
+        }
+      }
+    }
+    walk(permissionTree);
+    return map;
+  }, [permissionTree]);
+
+  function getRequiredPermission(pathname: string): string | undefined {
+    // 精确匹配优先，前缀匹配兜底
+    const exact = pathPermissionMap.find((item) => pathname === item.path);
+    if (exact) return exact.permission;
+    const prefix = pathPermissionMap.find((item) => pathname.startsWith(item.path + '/'));
+    return prefix?.permission;
+  }
 
   // 未登录跳转登录页
   useEffect(() => {
@@ -56,7 +61,7 @@ export function Layout() {
       navigate('/profile', { replace: true });
     }
     // 两者都无权限时不跳转，由下方占位页处理
-  }, [user, isLoading, location.pathname, navigate, hasPermission]);
+  }, [user, isLoading, location.pathname, navigate, hasPermission, pathPermissionMap]);
 
   // 加载中或未登录时显示骨架占位，避免页面闪烁
   if (isLoading || !user) {

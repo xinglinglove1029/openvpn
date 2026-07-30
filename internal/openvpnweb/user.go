@@ -137,7 +137,16 @@ func (u *User) Create() error {
 		return fmt.Errorf("用户名与系统账户冲突")
 	}
 
+	if strings.TrimSpace(u.Email) == "" {
+		return fmt.Errorf("邮箱为必填项")
+	}
+
 	result := db.Create(&u)
+	if result.Error != nil {
+		if strings.Contains(result.Error.Error(), "UNIQUE constraint failed") {
+			return fmt.Errorf("用户名 \"%s\" 已存在", u.Username)
+		}
+	}
 	return result.Error
 }
 
@@ -364,4 +373,129 @@ func GetAccessibleUsernames(currentUsername string) ([]string, bool) {
 		return []string{currentUsername}, false
 	}
 	return usernames, false
+}
+
+func GetAccessibleUserIDs(currentUsername string) ([]uint, bool) {
+	if adminUsername != "" && currentUsername == adminUsername {
+		return nil, true
+	}
+
+	currentUser := User{Username: currentUsername}.Info()
+	if currentUser.ID == 0 || currentUser.Gid == 0 {
+		return []uint{currentUser.ID}, false
+	}
+
+	groupIDs := GetSubtreeIDs(currentUser.Gid)
+	if len(groupIDs) == 0 {
+		return []uint{currentUser.ID}, false
+	}
+
+	var userIDs []uint
+	if err := db.WithContext(context.Background()).
+		Model(&User{}).
+		Where("gid IN ?", groupIDs).
+		Pluck("id", &userIDs).Error; err != nil {
+		return []uint{currentUser.ID}, false
+	}
+
+	if len(userIDs) == 0 {
+		return []uint{currentUser.ID}, false
+	}
+	return userIDs, false
+}
+
+func GetUserIDByUsername(username string) uint {
+	if username == "" {
+		return 0
+	}
+	var user User
+	if err := db.WithContext(context.Background()).
+		Where("username = ?", username).
+		Select("id").
+		First(&user).Error; err != nil {
+		return 0
+	}
+	return user.ID
+}
+
+func GetAccessibleClientConfigs(currentUsername string) ([]string, bool) {
+	if adminUsername != "" && currentUsername == adminUsername {
+		return nil, true
+	}
+
+	currentUser := User{Username: currentUsername}.Info()
+	if currentUser.ID == 0 || currentUser.Gid == 0 {
+		configs := make([]string, 0)
+		if currentUser.OvpnConfig != "" {
+			configs = append(configs, currentUser.OvpnConfig)
+		}
+		if currentUser.Username != "" {
+			configs = append(configs, currentUser.Username)
+		}
+		return configs, false
+	}
+
+	groupIDs := GetSubtreeIDs(currentUser.Gid)
+	if len(groupIDs) == 0 {
+		configs := make([]string, 0)
+		if currentUser.OvpnConfig != "" {
+			configs = append(configs, currentUser.OvpnConfig)
+		}
+		if currentUser.Username != "" {
+			configs = append(configs, currentUser.Username)
+		}
+		return configs, false
+	}
+
+	type userConfig struct {
+		Username   string
+		OvpnConfig string
+	}
+	var rows []userConfig
+	if err := db.WithContext(context.Background()).
+		Model(&User{}).
+		Select("username, ovpn_config").
+		Where("gid IN ?", groupIDs).
+		Find(&rows).Error; err != nil {
+		configs := make([]string, 0)
+		if currentUser.OvpnConfig != "" {
+			configs = append(configs, currentUser.OvpnConfig)
+		}
+		if currentUser.Username != "" {
+			configs = append(configs, currentUser.Username)
+		}
+		return configs, false
+	}
+
+	configSet := make(map[string]bool)
+	for _, r := range rows {
+		if r.OvpnConfig != "" {
+			configSet[r.OvpnConfig] = true
+		}
+		if r.Username != "" {
+			configSet[r.Username] = true
+		}
+	}
+
+	configs := make([]string, 0, len(configSet))
+	for k := range configSet {
+		configs = append(configs, k)
+	}
+	return configs, false
+}
+
+func CanAccessClientConfig(currentUsername, clientName string) bool {
+	if adminUsername != "" && currentUsername == adminUsername {
+		return true
+	}
+	configs, skip := GetAccessibleClientConfigs(currentUsername)
+	if skip {
+		return true
+	}
+	for _, name := range configs {
+		if name == clientName {
+			return true
+		}
+	}
+	return false
 }

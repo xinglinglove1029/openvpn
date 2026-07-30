@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import type { ClientUserInfo } from '../types';
+import type { ClientUserInfo, PermissionTreeNode } from '../types';
+import { api } from '../api';
+import { normalizeList } from '../lib/format';
 
 interface LoginResponse {
   message: string;
@@ -19,6 +21,10 @@ interface AuthContextType {
   loginWithCredentials: (username: string, password: string, remember?: boolean) => Promise<LoginResponse>;
   logout: () => Promise<void>;
   updateUser: (user: Partial<ClientUserInfo>) => void;
+  /** 权限树（登录后从 /ovpn/permission/tree 加载，供 Sidebar/Layout 动态渲染） */
+  permissionTree: PermissionTreeNode[];
+  /** 重新拉取权限树（权限管理页面保存后调用） */
+  reloadPermissionTree: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -44,6 +50,7 @@ function readStoredUser(): ClientUserInfo | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ClientUserInfo | null>(() => readStoredUser());
   const [isLoading, setIsLoading] = useState(false);
+  const [permissionTree, setPermissionTree] = useState<PermissionTreeNode[]>([]);
 
   // 监听跨标签页的 localStorage 变化，保持登录态一致
   useEffect(() => {
@@ -119,10 +126,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 忽略网络错误，前端仍继续清理本地状态
     }
     setUser(null);
+    setPermissionTree([]);
     window.localStorage.removeItem(STORAGE_KEY);
     // 强制整页刷新，跳回登录页（避免 SPA 内存中残留 user 状态）
     window.location.href = '/login';
   };
+
+  // 拉取权限树：登录后加载一次，供 Sidebar 动态渲染菜单和 Layout 路由守卫使用
+  // admin 用户虽绕过权限检查，但仍需权限树来渲染菜单
+  // 失败时 fallback 到空数组，Sidebar 显示空菜单
+  const loadPermissionTree = useCallback(async () => {
+    if (!user) {
+      setPermissionTree([]);
+      return;
+    }
+    try {
+      const result = await api.get<unknown>('/ovpn/permission/tree');
+      setPermissionTree(normalizeList<PermissionTreeNode>(result, ['data']));
+    } catch {
+      // 静默失败：权限树加载失败不应阻塞登录流程，Sidebar 会显示空菜单
+      setPermissionTree([]);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      loadPermissionTree();
+    } else {
+      setPermissionTree([]);
+    }
+  }, [user, loadPermissionTree]);
+
+  const reloadPermissionTree = useCallback(async () => {
+    await loadPermissionTree();
+  }, [loadPermissionTree]);
 
   const updateUser = (updates: Partial<ClientUserInfo>) => {
     setUser((current) => {
@@ -153,7 +190,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isLoading, isAdmin, hasPermission, login, loginWithCredentials, logout, updateUser }}
+      value={{
+        user,
+        isLoading,
+        isAdmin,
+        hasPermission,
+        login,
+        loginWithCredentials,
+        logout,
+        updateUser,
+        permissionTree,
+        reloadPermissionTree,
+      }}
     >
       {children}
     </AuthContext.Provider>

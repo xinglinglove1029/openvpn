@@ -89,31 +89,13 @@ export default function ProfilePage() {
         return;
       }
       try {
-        if (!user.id || user.id <= 0) {
-          const settings = await api.get<{ system?: { base?: { admin_name?: string; admin_email?: string } } }>('/ovpn/settings');
-          if (!cancelled) {
-            setProfile({
-              username: user.username,
-              name: settings?.system?.base?.admin_name ?? user?.name ?? '',
-              email: settings?.system?.base?.admin_email ?? user?.email ?? '',
-            });
-            setEditName(settings?.system?.base?.admin_name ?? user?.name ?? '');
-            setEditEmail(settings?.system?.base?.admin_email ?? user?.email ?? '');
-            setProfileErrors({});
-          }
-          return;
-        }
-
-        const path = `/ovpn/user/${user.id}`;
-        const data = await api.get<UserRecord | UserRecord[]>(path);
+        const data = await api.get<UserRecord>('/ovpn/user/me');
         if (!cancelled) {
-          const list = Array.isArray(data) ? data : [data];
-          const record = list.find((item) => item && item.username === user.username) ?? list[0] ?? null;
-          setProfile(record);
-          setEditName(record?.name ?? user?.name ?? '');
-          setEditEmail(record?.email ?? user?.email ?? '');
+          setProfile(data);
+          setEditName(data?.name ?? user?.name ?? '');
+          setEditEmail(data?.email ?? user?.email ?? '');
           setProfileErrors({});
-          setMfaBound(!!record?.mfaSecret || !!record?.mfaEnabled);
+          setMfaBound(!!data?.mfaSecret || !!data?.mfaEnabled);
         }
       } catch (error) {
         if (!cancelled) {
@@ -168,23 +150,8 @@ export default function ProfilePage() {
 
     setSavingProfile(true);
     try {
-      // 系统内置账号（如 admin）无 user.id，保存到配置文件
-      if (!user?.id || user.id <= 0) {
-        const result = await api.postForm<{ message: string }>('/ovpn/settings', {
-          'system.base.admin_name': trimmedName,
-          'system.base.admin_email': trimmedEmail,
-        });
-        updateUser({ name: trimmedName, email: trimmedEmail });
-        setProfile((prev) =>
-          prev
-            ? { ...prev, name: trimmedName, email: trimmedEmail }
-            : { username: user?.username ?? '', name: trimmedName, email: trimmedEmail },
-        );
-        toast.success(result.message || '基本资料已更新');
-        return;
-      }
-      const result = await api.patchForm<{ message: string }>('/ovpn/user', {
-        id: user.id,
+      // 统一调用 PATCH /ovpn/user/profile（不需要 user:update 权限，只改自己的 name/email）
+      const result = await api.patchForm<{ message: string }>('/ovpn/user/profile', {
         name: trimmedName,
         email: trimmedEmail,
       });
