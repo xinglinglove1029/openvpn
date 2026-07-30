@@ -74,6 +74,13 @@ export default function HistoryPage() {
         render: (item) => item.rip || item.rip6 || '-',
       },
       {
+        key: 'ripRegion',
+        header: 'IP 归属地',
+        sortable: true,
+        sortAccessor: (item) => item.ripRegion ?? item.rip6Region ?? '',
+        render: (item) => item.ripRegion || item.rip6Region || '-',
+      },
+      {
         key: 'bytes_received',
         header: '下载',
         sortable: true,

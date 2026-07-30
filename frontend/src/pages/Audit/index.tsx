@@ -139,6 +139,13 @@ export default function AuditPage() {
         render: (item) => item.ip || '-',
       },
       {
+        key: 'ipRegion',
+        header: 'IP 归属地',
+        sortable: true,
+        sortAccessor: (item) => item.ipRegion ?? '',
+        render: (item) => item.ipRegion || '-',
+      },
+      {
         key: 'message',
         header: '说明',
         sortable: true,

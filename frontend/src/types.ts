@@ -108,6 +108,7 @@ export interface UserRecord {
   authUser?: boolean;
   expireDate?: string;
   ipAddr?: string;
+  ipRegion?: string;
   gid?: number;
   password?: string;
   ovpnConfig?: string;
@@ -160,6 +161,8 @@ export interface HistoryRecord {
   vip6?: string;
   rip?: string;
   rip6?: string;
+  ripRegion?: string;
+  rip6Region?: string;
   bytes_received?: number;
   bytes_sent?: number;
   bytesReceived?: number;
@@ -233,6 +236,7 @@ export interface AuditLogRecord {
   success: boolean;
   message: string;
   ip: string;
+  ipRegion?: string;
   createdAt: string;
 }
 

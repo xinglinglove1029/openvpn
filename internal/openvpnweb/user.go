@@ -29,6 +29,7 @@ type User struct {
 	Gid          uint       `gorm:"default:1" json:"gid" form:"gid"`
 	ExpireDate   string     `gorm:"default:NULL" json:"expireDate" form:"expireDate"`
 	IpAddr       string     `gorm:"uniqueIndex;default:NULL" json:"ipAddr" form:"ipAddr"`
+	IpRegion     string     `gorm:"-" json:"ipRegion"` // 非数据库字段，运行时计算
 	OvpnConfig   string     `json:"ovpnConfig" form:"ovpnConfig"`
 	MfaSecret    string     `json:"mfaSecret" form:"mfaSecret"`
 	MfaEnabled   bool       `gorm:"default:false" json:"mfaEnabled" form:"mfaEnabled"`
@@ -116,6 +117,11 @@ func (u *User) All() []User {
 	if result.Error != nil {
 		logger.Error(context.Background(), result.Error.Error())
 		return []User{}
+	}
+
+	// 解析 IP 归属地
+	for i := range users {
+		users[i].IpRegion = GetIPRegion(users[i].IpAddr)
 	}
 
 	return users

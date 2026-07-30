@@ -899,6 +899,13 @@ function UserTablePanel({
       render: (user) => user.ipAddr || '-',
     },
     {
+      key: 'ipRegion',
+      header: 'IP 归属地',
+      sortable: true,
+      sortAccessor: (user) => user.ipRegion ?? '',
+      render: (user) => user.ipRegion || '-',
+    },
+    {
       key: 'ovpnConfig',
       header: '配置文件',
       sortable: true,

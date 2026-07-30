@@ -586,6 +586,11 @@ func Run(info BuildInfo) {
 	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
 	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{})
 
+	// 初始化 IP 归属地解析器
+	if err := InitIPRegion(""); err != nil {
+		logger.Error(context.Background(), "初始化 IP 解析器失败: %v", err)
+	}
+
 	// 初始化权限定义与内置角色（administrator / user）
 	if err := SeedPermissionsAndRoles(db); err != nil {
 		logger.Error(context.Background(), "SeedPermissionsAndRoles 失败: %s", err.Error())

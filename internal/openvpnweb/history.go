@@ -18,6 +18,8 @@ type History struct {
 	Vip6          string    `gorm:"column:vip6;comment:'VPN IPV6'" json:"vip6" form:"vip6"`
 	Rip           string    `gorm:"column:rip;comment:'用户 IP'" json:"rip" form:"rip"`
 	Rip6          string    `gorm:"column:rip6;comment:'用户 IPV6'" json:"rip6" form:"rip6"`
+	RipRegion     string    `gorm:"-" json:"ripRegion"` // 非数据库字段，运行时计算
+	Rip6Region    string    `gorm:"-" json:"rip6Region"` // 非数据库字段，运行时计算
 	CommonName    string    `gorm:"column:common_name;comment:'客户端名称'" json:"common_name" form:"common_name"`
 	Username      string    `gorm:"column:username;comment:'用户名'" json:"username" form:"username"`
 	BytesReceived float64   `gorm:"comment:'下行流量'" form:"bytes_received" json:"bytes_received"`
@@ -159,6 +161,12 @@ func (h History) Query(p Params, accessibleUserIDs []uint, skipFilter bool) Quer
 	if result.Error != nil {
 		logger.Error(context.Background(), result.Error.Error())
 		return QueryData{}
+	}
+
+	// 解析 IP 归属地
+	for i := range itmes {
+		itmes[i].RipRegion = GetIPRegion(itmes[i].Rip)
+		itmes[i].Rip6Region = GetIPRegion(itmes[i].Rip6)
 	}
 
 	qd.Draw = p.Draw

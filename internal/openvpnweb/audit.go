@@ -23,6 +23,7 @@ type AuditLog struct {
 	Success    bool      `json:"success"`
 	Message    string    `json:"message"`
 	IP         string    `json:"ip"`
+	IPRegion   string    `gorm:"-" json:"ipRegion"` // 非数据库字段，运行时计算
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
@@ -252,6 +253,12 @@ func queryAuditLogs(c *gin.Context) ([]AuditLog, int64, error) {
 	if err := query.Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
+
+	// 解析 IP 归属地
+	for i := range logs {
+		logs[i].IPRegion = GetIPRegion(logs[i].IP)
+	}
+
 	return logs, total, nil
 }
 
@@ -274,7 +281,7 @@ func auditExportHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=audit_%s.csv", time.Now().Format("20060102150405")))
 	c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
-	c.Writer.WriteString("ID,Operator,Module,Action,Target,Success,Message,IP,CreatedAt\n")
+	c.Writer.WriteString("ID,Operator,Module,Action,Target,Success,Message,IP,IPRegion,CreatedAt\n")
 	for _, item := range logs {
 		line := []string{
 			strconv.Itoa(int(item.ID)),
@@ -285,6 +292,7 @@ func auditExportHandler(c *gin.Context) {
 			strconv.FormatBool(item.Success),
 			csvCell(item.Message),
 			csvCell(item.IP),
+			csvCell(item.IPRegion),
 			item.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 		c.Writer.WriteString(strings.Join(line, ",") + "\n")
