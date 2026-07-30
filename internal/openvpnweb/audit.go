@@ -26,6 +26,14 @@ type AuditLog struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
+// AdminAuditOperatorID 为系统内置 admin 账户在 audit_logs 中使用的保留 operator_id
+// admin 不在 user 表中，但为了避免 operator_id=0，写入审计日志时使用该保留值
+const AdminAuditOperatorID uint = 0xFFFFFFFF
+
+// SystemAuditOperatorID 为 system 操作人在 audit_logs 中使用的保留 operator_id
+// system 不是真实用户，但为了避免 operator_id=0，写入审计日志时使用该保留值
+const SystemAuditOperatorID uint = 0xFFFFFFFE
+
 var auditTargets = []struct {
 	Method string
 	Re     *regexp.Regexp
@@ -116,6 +124,20 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 	operator := auditOperator(c)
 	operatorID := GetUserIDByUsername(operator)
 
+	// 系统内置 admin 账户不在 user 表中，使用保留 ID 避免 operator_id=0
+	if operatorID == 0 && adminUsername != "" && operator == adminUsername {
+		operatorID = AdminAuditOperatorID
+	}
+
+	// system 操作人不是真实用户，使用保留 ID 避免 operator_id=0
+	if operator == "system" {
+		operatorID = SystemAuditOperatorID
+	}
+
+	if operator != "" && operator != "system" && operatorID == 0 {
+		logger.Error(context.Background(), "[recordAudit] 无法解析操作人ID operator=%q module=%s action=%s target=%s", operator, module, action, target)
+	}
+
 	logItem := AuditLog{
 		OperatorID: operatorID,
 		Operator:   operator,
@@ -128,6 +150,54 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 	}
 	if err := db.WithContext(context.Background()).Create(&logItem).Error; err != nil {
 		logger.Error(context.Background(), "record audit log failed: %s", err)
+	}
+}
+
+// RepairAuditLogOperatorIDs 修复历史 audit_logs 中 operator_id=0 的记录
+// 普通用户根据 operator 反向查找 user.id 回填；admin 使用保留 ID；system 使用保留 ID；空操作人跳过
+func RepairAuditLogOperatorIDs() {
+	if db == nil {
+		return
+	}
+
+	var operators []string
+	if err := db.WithContext(context.Background()).
+		Model(&AuditLog{}).
+		Distinct("operator").
+		Where("operator_id = ? AND operator != ?", 0, "").
+		Pluck("operator", &operators).Error; err != nil {
+		logger.Error(context.Background(), "查询待修复 audit_log operator 失败: %s", err.Error())
+		return
+	}
+
+	var totalFixed int64
+	for _, op := range operators {
+		var userID uint
+		switch {
+		case op == "system":
+			userID = SystemAuditOperatorID
+		case adminUsername != "" && op == adminUsername:
+			userID = AdminAuditOperatorID
+		default:
+			userID = GetUserIDByUsername(op)
+			if userID == 0 {
+				continue
+			}
+		}
+
+		result := db.WithContext(context.Background()).
+			Model(&AuditLog{}).
+			Where("operator_id = ? AND operator = ?", 0, op).
+			Update("operator_id", userID)
+		if result.Error != nil {
+			logger.Error(context.Background(), "修复 operator=%s 的 audit_log 失败: %s", op, result.Error.Error())
+			continue
+		}
+		totalFixed += result.RowsAffected
+	}
+
+	if totalFixed > 0 {
+		logger.Error(context.Background(), "已修复 %d 条 operator_id=0 的审计日志", totalFixed)
 	}
 }
 

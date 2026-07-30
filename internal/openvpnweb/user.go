@@ -412,10 +412,12 @@ func GetUserIDByUsername(username string) uint {
 		return 0
 	}
 	var user User
-	if err := db.WithContext(context.Background()).
+	err := db.WithContext(context.Background()).
 		Where("username = ?", username).
 		Select("id").
-		First(&user).Error; err != nil {
+		First(&user).Error
+	if err != nil {
+		logger.Error(context.Background(), "[GetUserIDByUsername] username=%q err=%v", username, err)
 		return 0
 	}
 	return user.ID

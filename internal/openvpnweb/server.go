@@ -605,6 +605,12 @@ func Run(info BuildInfo) {
 		logger.Error(context.Background(), "未找到普通用户角色，跳过历史用户 role_id 回填")
 	}
 
+	// 修复历史 audit_logs 中 operator_id=0 的记录（根据 operator 反向查找 user.id）
+	RepairAuditLogOperatorIDs()
+
+	// 修复历史 history 中 user_id=0 的记录（根据 username/common_name 反向查找 user.id）
+	RepairHistoryUserIDs()
+
 	// 旧表 channel_type 列数据迁移到新 channel_name 列
 	migrateNotifyLogChannelName()
 

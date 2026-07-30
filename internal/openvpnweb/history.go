@@ -67,12 +67,58 @@ func (h History) All() []History {
 }
 
 func (h History) Create() error {
-	if h.UserID == 0 && h.Username != "" {
-		h.UserID = GetUserIDByUsername(h.Username)
+	if h.UserID == 0 {
+		if h.Username != "" {
+			h.UserID = GetUserIDByUsername(h.Username)
+		} else if h.CommonName != "" {
+			// OpenVPN 推送的断开记录可能只有 common_name（证书名）没有 username
+			h.UserID = GetUserIDByUsername(h.CommonName)
+		}
 	}
 	result := db.Table(h.TableName()).WithContext(context.Background()).Create(&h)
 
 	return result.Error
+}
+
+// RepairHistoryUserIDs 修复历史 history 中 user_id=0 的记录
+// 优先根据 username 查找 user.id，其次根据 common_name 查找
+func RepairHistoryUserIDs() {
+	if db == nil {
+		return
+	}
+
+	var rows []History
+	if err := db.WithContext(context.Background()).
+		Model(&History{}).
+		Where("user_id = ? AND (username != ? OR common_name != ?)", 0, "", "").
+		Find(&rows).Error; err != nil {
+		logger.Error(context.Background(), "查询待修复 history user_id 失败: %s", err.Error())
+		return
+	}
+
+	fixed := int64(0)
+	for _, row := range rows {
+		userID := GetUserIDByUsername(row.Username)
+		if userID == 0 && row.CommonName != "" {
+			userID = GetUserIDByUsername(row.CommonName)
+		}
+		if userID == 0 {
+			continue
+		}
+		result := db.WithContext(context.Background()).
+			Model(&History{}).
+			Where("id = ?", row.ID).
+			Update("user_id", userID)
+		if result.Error != nil {
+			logger.Error(context.Background(), "修复 history id=%d user_id 失败: %s", row.ID, result.Error.Error())
+			continue
+		}
+		fixed += result.RowsAffected
+	}
+
+	if fixed > 0 {
+		logger.Error(context.Background(), "已修复 %d 条 user_id=0 的连接历史", fixed)
+	}
 }
 
 func (h History) Delete(id string) error {
