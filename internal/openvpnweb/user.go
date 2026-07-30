@@ -97,13 +97,16 @@ func (u *User) BeforeSave(tx *gorm.DB) (err error) {
 	return nil
 }
 
-func (u *User) AfterFind(tx *gorm.DB) (err error) {
-	dp, err := aes.AesDecrypt(u.Password, secretKey)
-	if err == nil {
+func (u *User) AfterFind(tx *gorm.DB) error {
+	// Password 为空时（如 Select("id") 只查 id 字段）跳过解密，避免 ciphertext too short 错误
+	if u.Password == "" {
+		return nil
+	}
+	if dp, err := aes.AesDecrypt(u.Password, secretKey); err == nil {
 		u.Password = dp
 	}
-
-	return
+	// 解密失败时保持原值，不阻断查询
+	return nil
 }
 
 func (u *User) All() []User {

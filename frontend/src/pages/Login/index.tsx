@@ -367,19 +367,20 @@ export default function LoginPage() {
               <p className="modal-hint text-[var(--login-label-text)] text-sm">请输入认证器 App 中当前 6 位动态验证码。</p>
               <div className="reference-login-actions">
                 <Button
+                  type="submit"
+                  disabled={saving}
+                  className="w-full h-[44px] border-0 rounded-lg text-white bg-[var(--login-button-bg)] shadow-[0_14px_28px_color-mix(in_srgb,var(--accent)_24%,transparent)] text-[15px] font-extrabold tracking-[8px] hover:brightness-108 hover:-translate-y-px"
+                >
+                  {saving ? '验证中...' : '完成验证'}
+                </Button>
+                <Button
                   type="button"
                   variant="outline"
                   onClick={() => setMode('login')}
-                  className="border-[rgba(255,255,255,0.12)] text-[rgba(255,255,255,0.84)] bg-[rgba(255,255,255,0.06)]"
+                  disabled={saving}
+                  className="mt-1.5 border-[rgba(255,255,255,0.12)] text-[rgba(255,255,255,0.84)] bg-[rgba(255,255,255,0.06)]"
                 >
                   返回登录
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full h-[44px] mt-1.5 border-0 rounded-lg text-white bg-[var(--login-button-bg)] shadow-[0_14px_28px_color-mix(in_srgb,var(--accent)_24%,transparent)] text-[15px] font-extrabold tracking-[8px] hover:brightness-108 hover:-translate-y-px"
-                >
-                  {saving ? '验证中...' : '完成验证'}
                 </Button>
               </div>
             </form>

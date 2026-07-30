@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // UserNotifyRead 记录每个用户对站内信（NotifyLog）的已读进度
@@ -55,26 +54,47 @@ func markUserNotifyRead(username string, lastID uint) (UserNotifyRead, error) {
 		return UserNotifyRead{}, errors.New("user not found")
 	}
 	now := time.Now().Unix()
-	rec := UserNotifyRead{
-		UserID:        userID,
-		Username:      username,
-		Scope:         "default",
-		LastReadID:    lastID,
-		UpdatedAtUnix: now,
-	}
+
+	// 先查询是否存在记录，避免依赖 ON CONFLICT（旧表可能缺唯一索引）
+	// 注意：旧表唯一约束是 (username, scope)，用 username 查询以匹配约束
+	var existing UserNotifyRead
 	err := db.WithContext(context.Background()).
-		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "user_id"}, {Name: "scope"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"last_read_id":    gorm.Expr("MAX(last_read_id, ?)", lastID),
-				"updated_at_unix": now,
-				"username":        username,
-			}),
-		}).
-		Create(&rec).Error
-	if err != nil {
+		Where("username = ? AND scope = ?", username, "default").
+		First(&existing).Error
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return UserNotifyRead{}, err
 	}
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// 插入新记录
+		rec := UserNotifyRead{
+			UserID:        userID,
+			Username:      username,
+			Scope:         "default",
+			LastReadID:    lastID,
+			UpdatedAtUnix: now,
+		}
+		if err := db.WithContext(context.Background()).Create(&rec).Error; err != nil {
+			return UserNotifyRead{}, err
+		}
+	} else {
+		// 更新已有记录，取较大的 lastReadID
+		newLastReadID := lastID
+		if existing.LastReadID > newLastReadID {
+			newLastReadID = existing.LastReadID
+		}
+		if err := db.WithContext(context.Background()).
+			Model(&existing).
+			Updates(map[string]interface{}{
+				"last_read_id":    newLastReadID,
+				"updated_at_unix": now,
+				"username":        username,
+			}).Error; err != nil {
+			return UserNotifyRead{}, err
+		}
+	}
+
 	return getUserNotifyRead(username), nil
 }
 
