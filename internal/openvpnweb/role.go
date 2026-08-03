@@ -21,11 +21,11 @@ var roleCodeRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*$`)
 
 // Role 角色模型
 type Role struct {
-	ID          uint      `gorm:"primarykey" json:"id"`
-	Name        string    `gorm:"column:name;size:64;not null" json:"name" form:"name"`
-	Code        string    `gorm:"column:code;size:64;uniqueIndex;not null" json:"code" form:"code"`
-	Description string    `gorm:"column:description;size:255" json:"description" form:"description"`
-	IsBuiltin   bool      `gorm:"column:is_builtin;default:false" json:"isBuiltin" form:"isBuiltin"`
+	ID          uint   `gorm:"primarykey" json:"id"`
+	Name        string `gorm:"column:name;size:64;not null" json:"name" form:"name"`
+	Code        string `gorm:"column:code;size:64;uniqueIndex;not null" json:"code" form:"code"`
+	Description string `gorm:"column:description;size:255" json:"description" form:"description"`
+	IsBuiltin   bool   `gorm:"column:is_builtin;default:false" json:"isBuiltin" form:"isBuiltin"`
 	// IsEnable 使用 *bool 指针：避免 GORM default:true 与 bool 零值冲突
 	// 创建时若前端未传 isEnable（nil），GORM 用 default:true 兜底；前端显式传 false 时保留 false
 	IsEnable  *bool     `gorm:"column:is_enable;default:true" json:"isEnable" form:"isEnable"`
@@ -98,17 +98,17 @@ type permissionSeedItem struct {
 var menuPermissions = []permissionSeedItem{
 	{"", "menu:overview", "概览", "menu", "/overview", "LayoutDashboard", 1},
 	{"", "menu:users", "账号管理", "menu", "/users", "Users", 2},
-	{"", "menu:clients", "客户端", "menu", "/clients", "Smartphone", 3},
-	{"", "menu:firewall", "防火墙", "menu", "/firewall", "Shield", 4},
-	{"", "menu:history", "连接历史", "menu", "/history", "History", 5},
-	{"", "menu:certs", "证书", "menu", "/certs", "FileKey", 6},
-	{"", "menu:audit", "操作审计", "menu", "/audit", "FileText", 7},
-	{"", "menu:settings", "系统设置", "menu", "/settings", "Settings", 8},
-	{"", "menu:channels", "通知渠道", "menu", "/channels", "BellRing", 9},
-	{"", "menu:notifications", "站内信", "menu", "/notifications", "Bell", 10},
-	{"", "menu:roles", "角色管理", "menu", "/roles", "ShieldCheck", 11},
-	{"", "menu:profile", "个人中心", "menu", "/profile", "User", 12},
-	{"", "menu:permissions", "权限管理", "menu", "/permissions", "KeyRound", 13},
+	{"", "menu:roles", "角色管理", "menu", "/roles", "ShieldCheck", 3},
+	{"", "menu:permissions", "权限管理", "menu", "/permissions", "KeyRound", 4},
+	{"", "menu:clients", "客户端", "menu", "/clients", "Smartphone", 5},
+	{"", "menu:firewall", "防火墙", "menu", "/firewall", "Shield", 6},
+	{"", "menu:history", "连接历史", "menu", "/history", "History", 7},
+	{"", "menu:certs", "证书", "menu", "/certs", "FileKey", 8},
+	{"", "menu:audit", "操作审计", "menu", "/audit", "FileText", 9},
+	{"", "menu:channels", "通知渠道", "menu", "/channels", "BellRing", 10},
+	{"", "menu:notifications", "站内信", "menu", "/notifications", "Bell", 11},
+	{"", "menu:settings", "系统设置", "menu", "/settings", "Settings", 12},
+	{"", "menu:profile", "个人中心", "menu", "/profile", "User", 13},
 }
 
 // 按钮权限（按资源分组）
@@ -192,7 +192,8 @@ var buttonPermissions = []permissionSeedItem{
 
 // 普通用户角色默认权限（菜单 + 按钮）
 // 说明：系统设置（menu:settings / settings:*）默认不授予普通用户
-//       管理员可在"角色管理"页面按需为普通用户分配设置类权限
+//
+//	管理员可在"角色管理"页面按需为普通用户分配设置类权限
 var defaultUserRoleCodes = []string{
 	"menu:overview",
 	"menu:clients",
