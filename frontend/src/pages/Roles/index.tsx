@@ -1556,18 +1556,9 @@ export default function RolesPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                className={cn('h-7 px-2', item.isBuiltin && item.code === 'administrator' && 'opacity-40 cursor-not-allowed')}
-                disabled={item.isBuiltin && item.code === 'administrator'}
-                onClick={() => {
-                  if (!(item.isBuiltin && item.code === 'administrator')) {
-                    openUserAssign(item);
-                  }
-                }}
-                title={
-                  item.isBuiltin && item.code === 'administrator'
-                    ? '内置超管角色不支持分配用户'
-                    : '分配用户'
-                }
+                className="h-7 px-2"
+                onClick={() => openUserAssign(item)}
+                title="分配用户"
               >
                 <Users className="h-3.5 w-3.5 mr-1" />
                 分配用户
@@ -1577,18 +1568,9 @@ export default function RolesPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                className={cn('h-7 px-2', item.isBuiltin && item.code === 'administrator' && 'opacity-40 cursor-not-allowed')}
-                disabled={item.isBuiltin && item.code === 'administrator'}
-                onClick={() => {
-                  if (!(item.isBuiltin && item.code === 'administrator')) {
-                    openGroupAssign(item);
-                  }
-                }}
-                title={
-                  item.isBuiltin && item.code === 'administrator'
-                    ? '内置超管角色不支持分配用户组'
-                    : '分配用户组'
-                }
+                className="h-7 px-2"
+                onClick={() => openGroupAssign(item)}
+                title="分配用户组"
               >
                 <Network className="h-3.5 w-3.5 mr-1" />
                 分配用户组

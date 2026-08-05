@@ -1473,13 +1473,6 @@ func roleAssignUsersHandler(c *gin.Context) {
 		return
 	}
 
-	// 内置 administrator 角色拒绝分配用户
-	if role.IsBuiltin && role.Code == BuiltinRoleAdministrator {
-		recordAudit(c, "role", "assign_users", role.Name, false, "内置超管角色不支持分配用户")
-		c.JSON(http.StatusBadRequest, gin.H{"message": "内置超管角色不支持分配用户"})
-		return
-	}
-
 	// 已禁用角色拒绝分配（避免"分配成功但用户无法登录"的困惑）
 	if role.IsEnable != nil && !*role.IsEnable {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "角色已被禁用，无法分配"})
@@ -1674,13 +1667,6 @@ func roleAssignGroupsHandler(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-		return
-	}
-
-	// 内置 administrator 角色拒绝分配用户组（与 assign_users 一致，防止权限提升）
-	if role.IsBuiltin && role.Code == BuiltinRoleAdministrator {
-		recordAudit(c, "role", "assign_groups", role.Name, false, "内置超管角色不支持分配用户组")
-		c.JSON(http.StatusBadRequest, gin.H{"message": "内置超管角色不支持分配用户组"})
 		return
 	}
 
