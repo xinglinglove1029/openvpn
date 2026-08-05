@@ -21,6 +21,7 @@ const ChannelProvidersPage = lazy(() => import('./pages/ChannelProviders'));
 const ProfilePage = lazy(() => import('./pages/Profile'));
 const RolesPage = lazy(() => import('./pages/Roles'));
 const PermissionsPage = lazy(() => import('./pages/Permissions'));
+const DownloadPage = lazy(() => import('./pages/Download'));
 
 // 加载指示器
 function LoadingSpinner() {
@@ -46,6 +47,12 @@ function App() {
               <Route
                 path="/login"
                 element={<SuspenseWrap><LoginPage /></SuspenseWrap>}
+              />
+
+              {/* 公开落地页 - 无需认证 */}
+              <Route
+                path="/download"
+                element={<SuspenseWrap><DownloadPage /></SuspenseWrap>}
               />
 
               {/* 主应用 - 需要布局 */}

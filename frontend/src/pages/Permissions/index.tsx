@@ -374,22 +374,10 @@ export default function PermissionsPage() {
   // 搜索与筛选
   const [searchText, setSearchText] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'menu' | 'button'>('all');
-  // 展开节点集合：默认展开所有 menu 节点
-  const [expanded, setExpanded] = useState<Set<number>>(() => {
-    const set = new Set<number>();
-    function walk(nodes: PermissionTreeNode[]) {
-      for (const n of nodes) {
-        if (n.type === 'menu' && n.children && n.children.length) {
-          set.add(n.id);
-          walk(n.children);
-        }
-      }
-    }
-    walk(permissionTree);
-    return set;
-  });
-  // 全部展开/折叠切换状态：默认展开（与 expanded 初始一致）
-  const [isAllExpanded, setIsAllExpanded] = useState(true);
+  // 展开节点集合：默认折叠（空 Set），用户点击 chevron 或搜索命中祖先链时才展开
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
+  // 全部展开/折叠切换状态：默认折叠
+  const [isAllExpanded, setIsAllExpanded] = useState(false);
 
   // 重新拉取权限树（保存/删除后刷新）
   const reload = () => {
@@ -403,23 +391,13 @@ export default function PermissionsPage() {
     }
   }, [reloadKey, reloadPermissionTree]);
 
-  // 首次加载权限树后默认展开所有 menu 节点
-  // 使用 ref 避免折叠后（expanded 为空 Set）又被重新展开
+  // 首次加载权限树：默认保持折叠状态（不自动展开）
+  // 使用 ref 避免初始化逻辑重复覆盖用户手动展开的节点
   const initializedRef = useRef(false);
   useEffect(() => {
     if (permissionTree.length && !initializedRef.current) {
       initializedRef.current = true;
-      const set = new Set<number>();
-      function walk(nodes: PermissionTreeNode[]) {
-        for (const n of nodes) {
-          if (n.type === 'menu' && n.children && n.children.length) {
-            set.add(n.id);
-            walk(n.children);
-          }
-        }
-      }
-      walk(permissionTree);
-      setExpanded(set);
+      // 默认折叠：不做任何 expanded 修改（保留初始空 Set）
     }
   }, [permissionTree]);
 

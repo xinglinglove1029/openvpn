@@ -97,5 +97,6 @@ export const api = {
     upload: (formData: FormData) => request<any>('/ovpn/client-packages', { method: 'POST', body: formData }),
     remove: (id: number) => request<any>(`/ovpn/client-packages/${id}`, { method: 'DELETE' }),
     enable: (id: number) => request<any>(`/ovpn/client-packages/${id}/enable`, { method: 'POST' }),
+    publicList: () => request<any[]>('/ovpn/public/packages'),
   },
 };

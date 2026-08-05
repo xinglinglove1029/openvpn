@@ -67,7 +67,7 @@ func sendExpireReminderEmail(u User, daysLeft int) {
 			Name:          u.Name,
 			Username:      u.Username,
 			Password:      "",
-			SiteUrl:       viper.GetString("system.base.site_url"),
+			SiteUrl:       siteDownloadLandingURL(),
 			ExpireDate:    u.ExpireDate,
 			DaysLeft:      daysLeft,
 			LocalPackages: nil,

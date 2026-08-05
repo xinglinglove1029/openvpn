@@ -261,6 +261,7 @@ export default function SettingsPage() {
   const [originals, setOriginals] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('');
 
   // 检查 Tab 权限
   const canViewBase = hasPermission('settings:base');
@@ -276,7 +277,7 @@ export default function SettingsPage() {
   // service.auth_user 的保存需要 server:manage 权限
   const canSaveServiceAuth = hasPermission('server:manage');
   // SaveBar 仅在用户拥有至少一个 Tab 的保存权限时显示
-  const canShowSaveBar = canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth;
+  const canShowSaveBar = !activeTab.startsWith('packages') && (canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth);
 
   // 检查是否至少有一个 Tab 权限，否则重定向到概览页
   const hasAnyTabPermission = canViewBase || canViewLdap || canViewOpenvpn || canViewService || canViewPackages;
@@ -456,7 +457,12 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader eyebrow="Control" title="系统设置" description="配置系统参数、LDAP认证和OpenVPN参数" />
 
-      <Tabs defaultValue={defaultTab} className="w-full">
+      <Tabs
+        value={activeTab || defaultTab}
+        onValueChange={setActiveTab}
+        defaultValue={defaultTab}
+        className="w-full"
+      >
         <TabsList>
           {canViewBase && (
             <TabsTrigger value="base" className="gap-1.5">
@@ -1031,12 +1037,12 @@ interface ClientPackageItem {
   downloadUrl: string;
 }
 
-const PLATFORM_LABELS: Record<string, { label: string; color: string }> = {
-  windows: { label: 'Windows', color: 'bg-blue-100 text-blue-700' },
-  macos: { label: 'macOS', color: 'bg-gray-100 text-gray-700' },
-  linux: { label: 'Linux', color: 'bg-green-100 text-green-700' },
-  android: { label: 'Android', color: 'bg-orange-100 text-orange-700' },
-  ios: { label: 'iOS', color: 'bg-purple-100 text-purple-700' },
+const PLATFORM_LABELS: Record<string, { label: string; className: string }> = {
+  windows: { label: 'Windows', className: 'bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] text-[var(--accent)] border-[color-mix(in_srgb,var(--accent)_25%,transparent)]' },
+  macos: { label: 'macOS', className: 'bg-[color-mix(in_srgb,var(--muted)_80%,transparent)] text-[color-mix(in_srgb,var(--text)_70%,transparent)] border-border' },
+  linux: { label: 'Linux', className: 'bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] text-[color-mix(in_srgb,var(--accent)_90%,transparent)] border-[color-mix(in_srgb,var(--accent)_20%,transparent)]' },
+  android: { label: 'Android', className: 'bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] text-[var(--accent)] border-[color-mix(in_srgb,var(--accent)_22%,transparent)]' },
+  ios: { label: 'iOS', className: 'bg-[color-mix(in_srgb,var(--muted)_75%,transparent)] text-[color-mix(in_srgb,var(--text)_65%,transparent)] border-border' },
 };
 
 function formatFileSize(bytes: number): string {
@@ -1170,7 +1176,7 @@ function ClientPackagesTab() {
                 return (
                   <div key={platform}>
                     <div className="flex items-center gap-2 mb-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${info.color}`}>{info.label}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${info.className}`}>{info.label}</span>
                       <span className="text-xs text-muted-foreground">{pkgs.length} 个版本</span>
                     </div>
                     <div className="space-y-2">
@@ -1179,13 +1185,15 @@ function ClientPackagesTab() {
                           key={pkg.id}
                           className={cn(
                             'flex items-center justify-between rounded-lg border p-3 transition-colors',
-                            pkg.isActive ? 'border-emerald-200 bg-emerald-50/50' : 'border-border'
+                            pkg.isActive
+                              ? 'border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)]'
+                              : 'border-border'
                           )}
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <div className="flex-shrink-0">
                               {pkg.isActive ? (
-                                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                                <CheckCircle2 className="h-5 w-5 text-[var(--accent)]" />
                               ) : (
                                 <Package className="h-5 w-5 text-muted-foreground" />
                               )}
@@ -1194,7 +1202,7 @@ function ClientPackagesTab() {
                               <div className="flex items-center gap-2">
                                 <span className="font-medium text-sm">{pkg.filename}</span>
                                 {pkg.isActive && (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium border bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] text-[var(--accent)] border-[color-mix(in_srgb,var(--accent)_25%,transparent)]">
                                     已启用
                                   </span>
                                 )}

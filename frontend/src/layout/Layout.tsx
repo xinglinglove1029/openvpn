@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
@@ -9,6 +9,13 @@ export function Layout() {
   const { user, isLoading, hasPermission, permissionTree } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  // 移动端 Sidebar 抽屉开关
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 路由切换时自动关闭抽屉
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
 
   // 动态构建 路径 → 菜单权限 code 映射
   // 遍历 permissionTree 中 type=menu 的节点，构建 { path: node.path, permission: node.code } 映射
@@ -93,16 +100,66 @@ export function Layout() {
     <div className="flex h-screen bg-background overflow-hidden relative">
       {/* 全屏 three.js 背景层（z-0） */}
       <BackgroundScene />
+      {/* CSS 动态光晕层 - 呼吸+漂浮效果，与全站风格统一
+          移动端：减小尺寸/降低透明度，提升性能并避免视觉过载 */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
+        {/* 主光晕 - 右上，呼吸动画 */}
+        <div
+          className="absolute -top-32 -right-32 w-[28rem] h-[28rem] sm:w-[40rem] sm:h-[40rem] lg:w-[50rem] lg:h-[50rem] rounded-full blur-3xl opacity-20 dark:opacity-15 sm:opacity-25 sm:dark:opacity-20 lg:opacity-30 lg:dark:opacity-20 animate-pulse"
+          style={{
+            background:
+              'radial-gradient(circle, color-mix(in srgb, var(--accent) 35%, transparent) 0%, transparent 70%)',
+          }}
+        />
+        {/* 次光晕 - 左下，漂浮动画 */}
+        <div
+          className="absolute bottom-0 -left-32 w-[24rem] h-[24rem] sm:w-[32rem] sm:h-[32rem] lg:w-[40rem] lg:h-[40rem] rounded-full blur-3xl opacity-15 dark:opacity-10 sm:opacity-18 sm:dark:opacity-13 lg:opacity-20 lg:dark:opacity-15"
+          style={{
+            background:
+              'radial-gradient(circle, color-mix(in srgb, var(--accent-2, var(--accent)) 30%, transparent) 0%, transparent 70%)',
+            animation: 'float 14s ease-in-out infinite',
+          }}
+        />
+        {/* 微光斑 - 中部偏右，缓慢漂浮（移动端隐藏以节省性能） */}
+        <div
+          className="hidden sm:block absolute top-1/4 right-1/4 w-72 h-72 rounded-full blur-3xl opacity-15"
+          style={{
+            background:
+              'radial-gradient(circle, color-mix(in srgb, var(--accent-3, var(--accent)) 35%, transparent) 0%, transparent 70%)',
+            animation: 'float 18s ease-in-out infinite reverse',
+          }}
+        />
+      </div>
       {/* 遮罩让背景不抢戏（z-5） */}
       <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />
-      {/* Sidebar 必须置于顶层（z-20），不被背景/遮罩盖住 */}
-      <div className="relative z-20">
+
+      {/* 移动端 Sidebar 抽屉遮罩 */}
+      {sidebarOpen && (
+        <div
+          aria-hidden
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden animate-in fade-in duration-200"
+        />
+      )}
+
+      {/* Sidebar 容器：
+          - lg+ 桌面端常驻显示
+          - 移动端为抽屉，由 sidebarOpen 控制滑入/滑出 */}
+      <div
+        className={`relative z-40 lg:z-20 lg:!translate-x-0 lg:!block ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        } transition-transform duration-300 ease-out lg:transition-none fixed lg:static inset-y-0 left-0 lg:!flex lg:flex`}
+      >
         <Sidebar />
       </div>
+
       <div className="flex-1 flex flex-col overflow-hidden relative z-10">
-        <TopBar />
-        <main className="flex-1 overflow-auto p-6">
-          <Outlet />
+        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
+        <main className="flex-1 overflow-auto p-4 sm:p-6">
+          {/* key 绑定路由路径，切换页面时重新触发 panel-enter 入场动画 */}
+          <div key={location.pathname} className="panel-enter">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

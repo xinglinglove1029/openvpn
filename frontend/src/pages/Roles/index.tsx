@@ -12,6 +12,10 @@ import {
   Search,
   ChevronsDownUp,
   ChevronsUpDown,
+  Users,
+  Network,
+  ArrowRight,
+  ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/ui/button';
@@ -21,6 +25,7 @@ import { Badge } from '@/ui/badge';
 import { Switch } from '@/ui/switch';
 import { Textarea } from '@/ui/textarea';
 import { Checkbox } from '@/ui/checkbox';
+import { Card } from '@/ui/card';
 import {
   Select,
   SelectContent,
@@ -44,9 +49,9 @@ import { HasPermission } from '@/components/HasPermission';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { api } from '@/api';
-import { messageOf, normalizeList } from '@/lib/format';
+import { messageOf, normalizeList, buildTree } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { Role, PermissionTreeNode } from '@/types';
+import type { Role, PermissionTreeNode, GroupRecord } from '@/types';
 
 /* ───────── 工具：收集权限树所有 code ───────── */
 
@@ -662,6 +667,654 @@ function PermissionAssignDialog({
   );
 }
 
+/* ───────── 用户分配穿梭框 ───────── */
+
+interface RoleAssignUser {
+  id: number;
+  username: string;
+  name?: string;
+  gid?: number;
+  groupName?: string;
+  roleId?: number | null;
+  roleName?: string;
+}
+
+interface RoleAssignUsersResponse {
+  allUsers: RoleAssignUser[];
+  assignedUserIds: number[];
+}
+
+function UserAssignDialog({
+  open,
+  role,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean;
+  role: Role | null;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [allUsers, setAllUsers] = useState<RoleAssignUser[]>([]);
+  // 已选用户 ID 集合（即右侧列表）
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // 左侧列表选中（用于穿梭按钮）
+  const [leftChecked, setLeftChecked] = useState<Set<number>>(new Set());
+  // 右侧列表选中
+  const [rightChecked, setRightChecked] = useState<Set<number>>(new Set());
+  // 左右两侧搜索框
+  const [leftSearch, setLeftSearch] = useState('');
+  const [rightSearch, setRightSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // 加载失败标记：失败时禁用保存按钮，避免空列表提交导致清空所有绑定
+  const [loadError, setLoadError] = useState(false);
+
+  // 打开时加载数据
+  useEffect(() => {
+    if (!open || !role) return;
+    setLoading(true);
+    setLoadError(false);
+    api
+      .get<RoleAssignUsersResponse>(`/ovpn/role/${role.id}/users`)
+      .then((res) => {
+        const data = res ?? { allUsers: [], assignedUserIds: [] };
+        setAllUsers(data.allUsers ?? []);
+        setSelectedIds(new Set(data.assignedUserIds ?? []));
+        setLeftChecked(new Set());
+        setRightChecked(new Set());
+        setLeftSearch('');
+        setRightSearch('');
+      })
+      .catch((e) => {
+        toast.error(`加载用户列表失败：${messageOf(e)}`);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
+  }, [open, role]);
+
+  // 左侧可选用户 = 未在 selectedIds 中的用户，按搜索词过滤
+  const leftList = useMemo(() => {
+    const kw = leftSearch.trim().toLowerCase();
+    return allUsers
+      .filter((u) => !selectedIds.has(u.id))
+      .filter((u) => {
+        if (!kw) return true;
+        return (
+          u.username.toLowerCase().includes(kw) ||
+          (u.name ?? '').toLowerCase().includes(kw)
+        );
+      });
+  }, [allUsers, selectedIds, leftSearch]);
+
+  // 右侧已选用户
+  const rightList = useMemo(() => {
+    const kw = rightSearch.trim().toLowerCase();
+    return allUsers
+      .filter((u) => selectedIds.has(u.id))
+      .filter((u) => {
+        if (!kw) return true;
+        return (
+          u.username.toLowerCase().includes(kw) ||
+          (u.name ?? '').toLowerCase().includes(kw)
+        );
+      });
+  }, [allUsers, selectedIds, rightSearch]);
+
+  function toggleLeftChecked(id: number) {
+    setLeftChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleRightChecked(id: number) {
+    setRightChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // 把左侧选中的用户移到右侧
+  function moveToRight() {
+    if (leftChecked.size === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      leftChecked.forEach((id) => next.add(id));
+      return next;
+    });
+    setLeftChecked(new Set());
+  }
+  // 把右侧选中的用户移回左侧
+  function moveToLeft() {
+    if (rightChecked.size === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      rightChecked.forEach((id) => next.delete(id));
+      return next;
+    });
+    setRightChecked(new Set());
+  }
+
+  async function handleSubmit() {
+    if (!role) return;
+    setSaving(true);
+    try {
+      await api.putJson<{ message: string }>(`/ovpn/role/${role.id}/users`, {
+        userIds: Array.from(selectedIds),
+      });
+      toast.success('用户已分配');
+      onOpenChange(false);
+      onSaved();
+    } catch (e) {
+      toast.error(`保存失败：${messageOf(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
+      <DialogContent
+        className="max-w-[860px]"
+        onPointerDownOutside={(e) => { if (saving) e.preventDefault(); }}
+        onEscapeKeyDown={(e) => { if (saving) e.preventDefault(); }}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5 text-[var(--accent)]" />
+            分配用户：{role?.name}
+          </DialogTitle>
+          <DialogDescription>
+            左侧勾选用户后点击"→"加入右侧；右侧为该角色已绑定用户，保存后立即生效
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">正在加载...</div>
+        ) : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-[1fr_auto_1fr] gap-3 items-stretch">
+              {/* 左栏：可选用户 */}
+              <Card className="p-2">
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    可选用户（{leftList.length}）
+                  </span>
+                </div>
+                <Input
+                  value={leftSearch}
+                  onChange={(e) => setLeftSearch(e.target.value)}
+                  placeholder="搜索用户名"
+                  className="h-8 text-xs mb-2"
+                />
+                <div className="max-h-[360px] min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
+                  {leftList.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground">
+                      {leftSearch ? '没有匹配的用户' : '暂无可选用户'}
+                    </div>
+                  ) : (
+                    leftList.map((u) => {
+                      const checked = leftChecked.has(u.id);
+                      const isAssignedToOtherRole =
+                        u.roleId != null && u.roleId !== role?.id && u.roleName;
+                      return (
+                        <label
+                          key={u.id}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors',
+                            checked && 'bg-[var(--accent)]/10',
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleLeftChecked(u.id)}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm leading-tight">{u.username}</div>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              {u.groupName && (
+                                <span className="text-[11px] text-muted-foreground truncate">
+                                  {u.groupName}
+                                </span>
+                              )}
+                              {isAssignedToOtherRole && (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0 shrink-0"
+                                >
+                                  将从「{u.roleName}」转移
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </Card>
+
+              {/* 中间穿梭按钮 */}
+              <div className="flex flex-col items-center justify-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 w-8 p-0"
+                  onClick={moveToRight}
+                  disabled={leftChecked.size === 0 || saving}
+                  title="加入右侧"
+                >
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 w-8 p-0"
+                  onClick={moveToLeft}
+                  disabled={rightChecked.size === 0 || saving}
+                  title="移回左侧"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+
+              {/* 右栏：已选用户 */}
+              <Card className="p-2">
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    已选用户（{rightList.length}）
+                  </span>
+                </div>
+                <Input
+                  value={rightSearch}
+                  onChange={(e) => setRightSearch(e.target.value)}
+                  placeholder="搜索用户名"
+                  className="h-8 text-xs mb-2"
+                />
+                <div className="max-h-[360px] min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
+                  {rightList.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground">
+                      {rightSearch ? '没有匹配的用户' : '暂未选择用户'}
+                    </div>
+                  ) : (
+                    rightList.map((u) => {
+                      const checked = rightChecked.has(u.id);
+                      const isAssignedToOtherRole =
+                        u.roleId != null && u.roleId !== role?.id && u.roleName;
+                      const isAssignedToCurrentRole = u.roleId === role?.id;
+                      return (
+                        <label
+                          key={u.id}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors',
+                            checked && 'bg-[var(--accent)]/10',
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleRightChecked(u.id)}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm leading-tight">{u.username}</div>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              {u.groupName && (
+                                <span className="text-[11px] text-muted-foreground truncate">
+                                  {u.groupName}
+                                </span>
+                              )}
+                              {isAssignedToCurrentRole && u.roleName && (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)] text-[10px] px-1.5 py-0 shrink-0"
+                                >
+                                  {u.roleName}
+                                </Badge>
+                              )}
+                              {isAssignedToOtherRole && (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0 shrink-0"
+                                >
+                                  将从「{u.roleName}」转移
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </Card>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+              <span>
+                已选 <span className="font-medium text-foreground">{selectedIds.size}</span> / 共{' '}
+                {allUsers.length} 人
+              </span>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            取消
+          </Button>
+          <Button onClick={handleSubmit} disabled={saving || loading || loadError}>
+            {saving ? '保存中...' : '保存用户'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ───────── 用户组分配树形对话框 ───────── */
+
+interface RoleAssignGroup {
+  id: number;
+  name: string;
+  parentId?: number | null;
+  roleId?: number | null;
+  roleName?: string;
+}
+
+interface RoleAssignGroupsResponse {
+  allGroups: RoleAssignGroup[];
+  assignedGroupIds: number[];
+}
+
+function GroupAssignDialog({
+  open,
+  role,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean;
+  role: Role | null;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [allGroups, setAllGroups] = useState<RoleAssignGroup[]>([]);
+  // 已勾选的组 ID 集合（包含父子节点）
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
+  // 展开节点集合
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // 加载失败标记：失败时禁用保存按钮，避免空列表提交导致清空所有绑定
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    if (!open || !role) return;
+    setLoading(true);
+    setLoadError(false);
+    api
+      .get<RoleAssignGroupsResponse>(`/ovpn/role/${role.id}/groups`)
+      .then((res) => {
+        const data = res ?? { allGroups: [], assignedGroupIds: [] };
+        setAllGroups(data.allGroups ?? []);
+        setCheckedIds(new Set(data.assignedGroupIds ?? []));
+        // 默认展开所有有子节点的组
+        const expSet = new Set<number>();
+        (data.allGroups ?? []).forEach((g) => {
+          if ((data.allGroups ?? []).some((c) => c.parentId === g.id)) {
+            expSet.add(g.id);
+          }
+        });
+        setExpanded(expSet);
+      })
+      .catch((e) => {
+        toast.error(`加载用户组失败：${messageOf(e)}`);
+        setLoadError(true);
+      })
+      .finally(() => setLoading(false));
+  }, [open, role]);
+
+  // 收集指定节点的整个子树 ID（含自身，用于点击父节点时整体勾选/取消）
+  function collectSubtreeIds(groupId: number): number[] {
+    const result: number[] = [groupId];
+    const visit = (pid: number) => {
+      const children = allGroups.filter((g) => g.parentId === pid);
+      children.forEach((c) => {
+        result.push(c.id);
+        visit(c.id);
+      });
+    };
+    visit(groupId);
+    return result;
+  }
+
+  // 收集指定节点的所有叶子节点 ID（用于 UI 半选状态计算）
+  function collectLeafIds(groupId: number): number[] {
+    const result: number[] = [];
+    const visit = (pid: number) => {
+      const children = allGroups.filter((g) => g.parentId === pid);
+      if (children.length === 0) {
+        result.push(pid);
+      } else {
+        children.forEach((c) => visit(c.id));
+      }
+    };
+    visit(groupId);
+    return result;
+  }
+
+  function toggleExpand(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleGroupCheck(group: RoleAssignGroup) {
+    // Default 组（ID=1）拒绝勾选
+    if (group.id === 1) return;
+    // 判断点击节点当前是否已勾选（基于节点本身是否在 checkedIds 中）
+    const isChecked = checkedIds.has(group.id);
+    // 收集整个子树 ID（含中间节点），确保勾选/取消时整棵子树一致
+    const subtreeIds = collectSubtreeIds(group.id);
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (isChecked) {
+        // 取消整个子树
+        subtreeIds.forEach((id) => next.delete(id));
+      } else {
+        // 选中整个子树
+        subtreeIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }
+
+  // 提交时发送所有勾选的非 Default 组 ID（含父子节点）
+  // checkedIds 存储用户明确勾选的节点，UI 显示与提交数据完全一致
+  function getSubmitIds(): number[] {
+    return Array.from(checkedIds).filter((id) => id !== 1);
+  }
+
+  async function handleSubmit() {
+    if (!role) return;
+    setSaving(true);
+    try {
+      await api.putJson<{ message: string }>(`/ovpn/role/${role.id}/groups`, {
+        groupIds: getSubmitIds(),
+      });
+      toast.success('用户组已分配');
+      onOpenChange(false);
+      onSaved();
+    } catch (e) {
+      toast.error(`保存失败：${messageOf(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // 构建树形展示：使用 buildTree 把扁平数组按 depth 排序
+  const displayList = useMemo(() => {
+    // buildTree 接收 GroupRecord[]，我们转换一下
+    const groups: GroupRecord[] = allGroups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      parent_id: g.parentId,
+    }));
+    return buildTree(groups);
+  }, [allGroups]);
+
+  function renderGroupNode(item: GroupRecord & { depth: number }): React.ReactNode {
+    const original = allGroups.find((g) => g.id === item.id);
+    if (!original) return null;
+    const isDefault = item.id === 1;
+    const hasChildren = allGroups.some((g) => g.parentId === item.id);
+    const isExpanded = expanded.has(item.id);
+    // 选中状态：基于节点本身是否在 checkedIds 中（与提交数据一致）
+    const checked = checkedIds.has(item.id);
+    // 半选状态：自身未选中但有后代节点被选中（仅用于 UI 提示）
+    const subtreeIds = collectSubtreeIds(item.id);
+    const descendantCheckedCount = subtreeIds.filter(
+      (id) => id !== item.id && checkedIds.has(id),
+    ).length;
+    const indeterminate = !checked && descendantCheckedCount > 0;
+    // 当前角色 ID，用于判断"将从原角色转移"
+    const currentRoleId = role?.id;
+    const isAssignedToOtherRole =
+      original.roleId != null &&
+      original.roleId !== currentRoleId &&
+      !isDefault;
+    const isAssignedToCurrentRole = original.roleId === currentRoleId;
+
+    return (
+      <div key={item.id} className="select-none">
+        <div
+          className={cn(
+            'flex items-center gap-2 rounded-md py-1.5 pr-2 transition-colors',
+            isDefault ? 'opacity-70' : 'hover:bg-muted/50',
+          )}
+          style={{ paddingLeft: item.depth * 20 + 4 }}
+        >
+          {hasChildren ? (
+            <button
+              type="button"
+              onClick={() => toggleExpand(item.id)}
+              className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+              aria-label={isExpanded ? '收起' : '展开'}
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+            </button>
+          ) : (
+            <span className="inline-block h-4 w-4 shrink-0" />
+          )}
+          <Checkbox
+            checked={indeterminate ? 'indeterminate' : checked}
+            onCheckedChange={() => toggleGroupCheck(original)}
+            disabled={isDefault}
+            title={isDefault ? '默认组不支持绑定角色' : undefined}
+          />
+          <span className={cn('text-sm', 'font-medium')}>{item.name}</span>
+          {/* Default 组 Badge */}
+          {isDefault && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              默认组
+            </Badge>
+          )}
+          {/* 当前角色 Badge */}
+          {!isDefault && isAssignedToCurrentRole && original.roleName && (
+            <Badge
+              variant="outline"
+              className="bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)] text-[10px] px-1.5 py-0"
+            >
+              {original.roleName}
+            </Badge>
+          )}
+          {/* 已绑定其他角色：橙色提示 */}
+          {!isDefault && isAssignedToOtherRole && original.roleName && (
+            <Badge
+              variant="outline"
+              className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0"
+            >
+              将从「{original.roleName}」转移
+            </Badge>
+          )}
+          {/* Default 组提示已通过 Checkbox title + Badge 展示，避免冗余 */}
+          {hasChildren && (
+            <span className="ml-auto text-[10px] text-muted-foreground">
+              {descendantCheckedCount}/{subtreeIds.length - 1}
+            </span>
+          )}
+        </div>
+        {hasChildren && isExpanded && (
+          <div className="space-y-0.5">
+            {displayList
+              .filter((c) => c.parent_id === item.id)
+              .map((c) => renderGroupNode(c))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
+      <DialogContent
+        className="max-w-[680px]"
+        onPointerDownOutside={(e) => { if (saving) e.preventDefault(); }}
+        onEscapeKeyDown={(e) => { if (saving) e.preventDefault(); }}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Network className="h-5 w-5 text-[var(--accent)]" />
+            分配用户组：{role?.name}
+          </DialogTitle>
+          <DialogDescription>
+            勾选用户组后保存，该组将成为角色的默认组；新建用户未指定角色时自动继承所在组角色
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">正在加载...</div>
+        ) : (
+          <div className="space-y-2">
+            <div className="max-h-[480px] overflow-y-auto rounded-lg border bg-muted/20 p-2">
+              {displayList.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">暂无用户组</div>
+              ) : (
+                displayList
+                  .filter((n) => n.parent_id === null || !displayList.some((p) => p.id === n.parent_id))
+                  .map((n) => renderGroupNode(n))
+              )}
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+              <span>
+                已选 <span className="font-medium text-foreground">{getSubmitIds().length}</span> 个用户组
+              </span>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            取消
+          </Button>
+          <Button onClick={handleSubmit} disabled={saving || loading || loadError}>
+            {saving ? '保存中...' : '保存用户组'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ───────── 主页面 ───────── */
 
 export default function RolesPage() {
@@ -670,6 +1323,12 @@ export default function RolesPage() {
   const [permOpen, setPermOpen] = useState(false);
   const [permRole, setPermRole] = useState<Role | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // 用户分配对话框状态
+  const [userAssignOpen, setUserAssignOpen] = useState(false);
+  const [userAssignRole, setUserAssignRole] = useState<Role | null>(null);
+  // 用户组分配对话框状态
+  const [groupAssignOpen, setGroupAssignOpen] = useState(false);
+  const [groupAssignRole, setGroupAssignRole] = useState<Role | null>(null);
   // 搜索与筛选
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
@@ -725,6 +1384,16 @@ export default function RolesPage() {
   function openAssign(role: Role) {
     setPermRole(role);
     setPermOpen(true);
+  }
+
+  function openUserAssign(role: Role) {
+    setUserAssignRole(role);
+    setUserAssignOpen(true);
+  }
+
+  function openGroupAssign(role: Role) {
+    setGroupAssignRole(role);
+    setGroupAssignOpen(true);
   }
 
   function askDelete(role: Role) {
@@ -829,6 +1498,26 @@ export default function RolesPage() {
         ),
       },
       {
+        key: 'userCount',
+        header: '用户数',
+        className: 'text-center',
+        render: (item) => (
+          <Badge variant="outline" className="font-mono">
+            {item.userCount ?? 0}
+          </Badge>
+        ),
+      },
+      {
+        key: 'groupCount',
+        header: '用户组数',
+        className: 'text-center',
+        render: (item) => (
+          <Badge variant="outline" className="font-mono">
+            {item.groupCount ?? 0}
+          </Badge>
+        ),
+      },
+      {
         key: 'isEnable',
         header: '状态',
         className: 'text-center',
@@ -861,6 +1550,48 @@ export default function RolesPage() {
               >
                 <KeyRound className="h-3.5 w-3.5 mr-1" />
                 分配权限
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:assign_users">
+              <Button
+                size="sm"
+                variant="ghost"
+                className={cn('h-7 px-2', item.isBuiltin && item.code === 'administrator' && 'opacity-40 cursor-not-allowed')}
+                disabled={item.isBuiltin && item.code === 'administrator'}
+                onClick={() => {
+                  if (!(item.isBuiltin && item.code === 'administrator')) {
+                    openUserAssign(item);
+                  }
+                }}
+                title={
+                  item.isBuiltin && item.code === 'administrator'
+                    ? '内置超管角色不支持分配用户'
+                    : '分配用户'
+                }
+              >
+                <Users className="h-3.5 w-3.5 mr-1" />
+                分配用户
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:assign_groups">
+              <Button
+                size="sm"
+                variant="ghost"
+                className={cn('h-7 px-2', item.isBuiltin && item.code === 'administrator' && 'opacity-40 cursor-not-allowed')}
+                disabled={item.isBuiltin && item.code === 'administrator'}
+                onClick={() => {
+                  if (!(item.isBuiltin && item.code === 'administrator')) {
+                    openGroupAssign(item);
+                  }
+                }}
+                title={
+                  item.isBuiltin && item.code === 'administrator'
+                    ? '内置超管角色不支持分配用户组'
+                    : '分配用户组'
+                }
+              >
+                <Network className="h-3.5 w-3.5 mr-1" />
+                分配用户组
               </Button>
             </HasPermission>
             <HasPermission code="role:update">
@@ -988,6 +1719,20 @@ export default function RolesPage() {
         role={permRole}
         tree={tree}
         onOpenChange={setPermOpen}
+        onSaved={reload}
+      />
+
+      <UserAssignDialog
+        open={userAssignOpen}
+        role={userAssignRole}
+        onOpenChange={setUserAssignOpen}
+        onSaved={reload}
+      />
+
+      <GroupAssignDialog
+        open={groupAssignOpen}
+        role={groupAssignRole}
+        onOpenChange={setGroupAssignOpen}
         onSaved={reload}
       />
 

@@ -282,7 +282,7 @@ class RealtimeHub {
     }, delay);
   }
 
-  /** 拉取未读数快照并广播 */
+  /** 拉取未读数快照并广播；若存在未读且 latestNotification 为空，顺带拉最近一条做 fallback 显示 */
   async refreshUnread(): Promise<UnreadSnapshot | null> {
     try {
       const data = await api.get<UnreadSnapshot>('/ovpn/notify/unread-count');
@@ -292,10 +292,32 @@ class RealtimeHub {
         maxId: Number(data?.maxId ?? 0),
       };
       this.setUnread(snapshot);
+
+      // 未读数 > 0 但本地无最新通知（WebSocket 未收到过）时，从历史列表兜底取一条
+      if (snapshot.unread > 0 && !this.latestNotification) {
+        void this.refreshLatest();
+      }
       return snapshot;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[realtimeHub] fetch unread-count failed', err);
+      return null;
+    }
+  }
+
+  /** 从历史列表兜底取最近一条通知，填充 latestNotification（WebSocket 未收到新消息时用） */
+  async refreshLatest(): Promise<IncomingNotification | null> {
+    try {
+      const result = await api.get<{ data: IncomingNotification[] }>('/ovpn/notify/logs?limit=1');
+      if (Array.isArray(result?.data) && result.data.length > 0) {
+        const item = result.data[0];
+        this.setLatestNotification(item as IncomingNotification);
+        return item as IncomingNotification;
+      }
+      return null;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[realtimeHub] fetch latest notify failed', err);
       return null;
     }
   }

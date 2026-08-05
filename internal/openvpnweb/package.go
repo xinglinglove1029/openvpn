@@ -27,6 +27,22 @@ type ClientPackage struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
+var platformLabelMap = map[string]string{
+	"windows": "Windows",
+	"macos":   "macOS",
+	"linux":   "Linux",
+	"android": "Android",
+	"ios":     "iOS",
+}
+
+// PlatformLabel 返回平台的友好中文/英文展示名，未知平台返回原值
+func PlatformLabel(platform string) string {
+	if v, ok := platformLabelMap[platform]; ok {
+		return v
+	}
+	return platform
+}
+
 func (ClientPackage) TableName() string { return "client_packages" }
 
 func (p *ClientPackage) BeforeSave(tx *gorm.DB) error {
@@ -66,6 +82,15 @@ func (p *ClientPackage) FullPath() string {
 }
 
 func (p *ClientPackage) PublicDownloadURL() string {
+	siteURL := viper.GetString("system.base.site_url")
+	if siteURL == "" {
+		return ""
+	}
+	return strings.TrimRight(siteURL, "/") + "/ovpn/public/packages/" + fmt.Sprintf("%d", p.ID) + "/download"
+}
+
+// AdminDownloadURL 管理员后台使用的需要鉴权的下载地址（保留以兼容现有下载按钮）
+func (p *ClientPackage) AdminDownloadURL() string {
 	siteURL := viper.GetString("system.base.site_url")
 	if siteURL == "" {
 		return ""

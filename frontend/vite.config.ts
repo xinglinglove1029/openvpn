@@ -52,6 +52,11 @@ export default defineConfig(({ command }) => ({
       '/logout': {
         target: 'http://127.0.0.1:8888',
       },
+      // /download：公开落地页，GET HTML 走 SPA，API 调用 /ovpn/public/* 已被 /ovpn 代理覆盖
+      '/download': {
+        target: 'http://127.0.0.1:8888',
+        bypass: (req) => (req.method === 'GET' && isHtmlRequest(req) ? '/index.html' : undefined),
+      },
       // /mfa/* 全部走后端
       '/mfa': {
         target: 'http://127.0.0.1:8888',

@@ -84,9 +84,24 @@ export function Sidebar() {
     });
 
   return (
-    <nav className="w-64 min-h-screen border-r bg-card/80 backdrop-blur flex flex-col">
-      <div className="p-6 border-b border-border">
-        <h1 className="text-xl font-bold text-foreground">OpenVPN</h1>
+    <nav className="w-64 min-h-screen border-r border-border/40 bg-card/50 backdrop-blur-xl flex flex-col">
+      <div className="p-6 border-b border-border/40">
+        <div className="flex items-center gap-2.5">
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-lg shadow-lg"
+            style={{
+              background:
+                'linear-gradient(135deg, color-mix(in srgb, var(--accent) 85%, white) 0%, var(--accent) 100%)',
+              boxShadow:
+                '0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255,255,255,0.2)',
+            }}
+          >
+            <ShieldCheck className="h-4 w-4 text-white" strokeWidth={2.5} />
+          </div>
+          <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--text)] to-[color-mix(in_srgb,var(--text)_60%,var(--accent))]">
+            OpenVPN
+          </h1>
+        </div>
       </div>
 
       <div className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
@@ -152,7 +167,7 @@ export function Sidebar() {
         })}
       </div>
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border/40">
         <p className="text-xs text-muted-foreground text-center">
           © 2024 OpenVPN Admin
         </p>

@@ -137,6 +137,10 @@ export interface GroupRecord {
   config?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** 该组绑定的默认角色 ID（null 表示未绑定） */
+  roleId?: number | null;
+  /** 该组绑定的默认角色名（仅展示用） */
+  roleName?: string;
 }
 
 export interface FirewallRecord {
@@ -420,6 +424,10 @@ export interface Role {
   updatedAt?: string;
   /** 角色已分配的权限 code 列表 */
   permissions?: string[];
+  /** 角色下用户数 */
+  userCount?: number;
+  /** 角色下用户组数 */
+  groupCount?: number;
 }
 
 /** RBAC：权限定义 */

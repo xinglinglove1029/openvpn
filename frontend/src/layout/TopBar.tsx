@@ -1,4 +1,4 @@
-import { Palette, User } from 'lucide-react';
+import { Palette, User, Menu } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -23,7 +23,12 @@ import { defaultAvatarUrl, parseAvatarValue } from '../components/AvatarPicker';
 import { NotificationBell } from '../components/NotificationBell';
 import { ManagementStatus } from '../components/ManagementStatus';
 
-export function TopBar() {
+interface TopBarProps {
+  /** 移动端汉堡菜单点击回调，用于切换 Sidebar 抽屉 */
+  onMenuClick?: () => void;
+}
+
+export function TopBar({ onMenuClick }: TopBarProps) {
   const { theme, setTheme } = useTheme();
   const { user, logout } = useAuth();
 
@@ -33,36 +38,45 @@ export function TopBar() {
   const avatarSrc = parsedAvatar.kind === 'none' ? defaultAvatarUrl(avatarSeed) : parsedAvatar.url;
 
   return (
-    <header className="h-16 border-b bg-card flex items-center px-6 sticky top-0 z-10 relative">
-      {/* 左侧占位，保持主题切换 / 通知 / 头像靠右 */}
-      <div className="flex items-center gap-3 min-w-[120px]">
-        {/* 当前没有左侧导航；保留占位方便未来扩展 */}
+    <header className="h-14 sm:h-16 border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-3 sm:px-6 sticky top-0 z-10 relative gap-2">
+      {/* 左侧：移动端汉堡菜单按钮（<lg 显示） */}
+      <div className="flex items-center gap-2 min-w-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="lg:hidden h-9 w-9 shrink-0"
+          aria-label="打开菜单"
+          onClick={onMenuClick}
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
       </div>
 
       {/* 顶部呼吸灯：OpenVPN Management 异常时实时提醒，居中显示更醒目 */}
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center min-w-0">
         <ManagementStatus />
       </div>
 
-      <div className="flex items-center gap-4 min-w-[120px] justify-end">
-        {/* GitHub 仓库入口 */}
+      <div className="flex items-center gap-2 sm:gap-4 justify-end shrink-0">
+        {/* GitHub 仓库入口（移动端隐藏文字仅留图标） */}
         <a
           href="https://github.com/xinglinglove1029/openvpn"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-muted-foreground hover:text-foreground transition-colors"
+          className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline-flex"
           title="GitHub 仓库"
+          aria-label="GitHub 仓库"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
           </svg>
         </a>
 
-        {/* 主题切换：下拉选择，支持 6 个主题 */}
-        <div className="flex items-center gap-2">
-          <Palette className="w-4 h-4 text-muted-foreground" />
+        {/* 主题切换：下拉选择，支持 6 个主题（移动端紧凑） */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <Palette className="w-4 h-4 text-muted-foreground hidden sm:block" />
           <Select value={theme} onValueChange={(v) => setTheme(v as ThemeKey)}>
-            <SelectTrigger className="w-[130px] h-9" aria-label="切换主题">
+            <SelectTrigger className="w-[110px] sm:w-[130px] h-9" aria-label="切换主题">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -78,7 +92,7 @@ export function TopBar() {
         {/* 通知按钮（真实未读数 + WebSocket 实时推送） */}
         <NotificationBell />
 
-        {/* 用户菜单 */}
+        {/* 用户菜单（移动端只显示头像，隐藏用户名） */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="flex items-center gap-2 px-2">
@@ -88,7 +102,7 @@ export function TopBar() {
                   {user?.name?.[0] || user?.username?.[0] || 'U'}
                 </AvatarFallback>
               </Avatar>
-              <span className="text-sm font-medium">
+              <span className="text-sm font-medium hidden sm:inline">
                 {user?.name || user?.username || '用户'}
               </span>
             </Button>

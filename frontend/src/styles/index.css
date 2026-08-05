@@ -3052,6 +3052,76 @@ tbody tr:hover {
   .setting-actions {
     grid-template-columns: 1fr;
   }
+
+  /* 移动端表格紧凑化：减小单元格 padding 与字号 */
+  th,
+  td {
+    padding: 12px 10px;
+    font-size: 13px;
+  }
+
+  /* 移动端卡片紧凑化：圆角与 padding 收缩 */
+  .table-card,
+  .settings-card,
+  .design-card,
+  .compact-card,
+  .tree-panel {
+    padding: 16px;
+    border-radius: 22px;
+  }
+
+  /* 移动端 Modal 全屏化，避免内容溢出 */
+  .modal-panel {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    border-radius: 20px;
+  }
+
+  .modal-heading {
+    min-height: 64px;
+    padding: 16px 18px 12px;
+  }
+
+  .modal-heading h2 {
+    font-size: 18px;
+  }
+
+  .modal-body {
+    padding: 16px 18px 20px;
+  }
+
+  /* 移动端 Toast 居中底部，避免遮挡侧栏 */
+  .toast,
+  .save-toast {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
+    max-width: none;
+    border-radius: 16px;
+  }
+
+  /* 移动端表单字段圆角收缩 */
+  .field-line,
+  .switch-line {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  /* 移动端 Hero/Section 标题字号收缩 */
+  .section-heading h2,
+  .design-card h2 {
+    font-size: 22px;
+  }
+
+  /* 移动端 stat-card 数字字号收缩 */
+  .stat-card strong {
+    font-size: 28px;
+  }
+
+  /* 移动端 brand 标题字号收缩 */
+  .brand strong {
+    font-size: 16px;
+  }
 }
 
 /* ---- Keyframes ---- */
@@ -3059,6 +3129,11 @@ tbody tr:hover {
 @keyframes aurora-drift {
   0% { transform: translate3d(0, 0, 0) scale(1); }
   100% { transform: translate3d(44px, -28px, 0) scale(1.12); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(30px, -20px, 0); }
 }
 
 @keyframes grid-drift {

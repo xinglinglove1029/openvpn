@@ -132,6 +132,16 @@ var (
 	conf   config
 )
 
+// siteDownloadLandingURL 返回配置中 site_url 拼接落地页 /download 后的完整地址（供邮件按钮跳转）
+// 空配置时返回空字符串，确保没有尾斜杠后拼接
+func siteDownloadLandingURL() string {
+	s := strings.TrimRight(viper.GetString("system.base.site_url"), "/")
+	if s == "" {
+		return ""
+	}
+	return s + "/download"
+}
+
 func (ov *ovpn) sendCommand(command string) (string, error) {
 	var data string
 	var sb strings.Builder
@@ -616,6 +626,9 @@ func Run(info BuildInfo) {
 	// 修复历史 history 中 user_id=0 的记录（根据 username/common_name 反向查找 user.id）
 	RepairHistoryUserIDs()
 
+	// 修复历史 user_notify_read 中 user_id=0 的记录（admin/system 内置账号改用保留 ID）
+	RepairNotifyReadUserIDs()
+
 	// 旧表 channel_type 列数据迁移到新 channel_name 列
 	migrateNotifyLogChannelName()
 
@@ -873,6 +886,56 @@ func Run(info BuildInfo) {
 		c.Redirect(302, "/login")
 	})
 
+	// 公开客户端下载落地页：未登录可访问
+	r.GET("/download", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "index.html", reactRuntime("client", conf.Client.ClientUrl))
+	})
+
+	// 公开客户端安装包相关 API（未登录可访问，仅返回 is_active=true 的包）
+	public := r.Group("/ovpn/public")
+	{
+		// 公开列表：返回当前所有已启用的客户端安装包
+		public.GET("/packages", func(c *gin.Context) {
+			pkg := ClientPackage{}
+			actives := pkg.ActivesByPlatforms()
+			result := make([]gin.H, 0, len(actives))
+			for _, p := range actives {
+				result = append(result, gin.H{
+					"id":            p.ID,
+					"platform":      p.Platform,
+					"platformLabel": PlatformLabel(p.Platform),
+					"version":       p.Version,
+					"filename":      p.Filename,
+					"fileSize":      p.FileSize,
+					"downloadUrl":   p.PublicDownloadURL(),
+				})
+			}
+			c.JSON(http.StatusOK, result)
+		})
+
+		// 公开下载路由：只允许下载 is_active=true 的包，其余 404
+		public.GET("/packages/:id/download", func(c *gin.Context) {
+			idStr := c.Param("id")
+			id, err := strconv.ParseUint(idStr, 10, 64)
+			if err != nil || id == 0 {
+				c.JSON(http.StatusNotFound, gin.H{"message": "安装包不存在或已停用"})
+				return
+			}
+			var p ClientPackage
+			if err := db.Where("id = ? AND is_active = ?", id, true).First(&p).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"message": "安装包不存在或已停用"})
+				return
+			}
+			fullPath := p.FullPath()
+			if _, statErr := os.Stat(fullPath); statErr != nil {
+				logger.Error(context.Background(), "公开下载包磁盘文件缺失: id="+idStr+" err="+statErr.Error())
+				c.JSON(http.StatusNotFound, gin.H{"message": "安装包文件不存在"})
+				return
+			}
+			c.FileAttachment(fullPath, p.Filename)
+		})
+	}
+
 	r.Use(AuthMiddleWare())
 
 	r.GET("/", func(c *gin.Context) {
@@ -1113,7 +1176,7 @@ func Run(info BuildInfo) {
 			result := make([]PackageWithURL, 0, len(packages))
 			for _, p := range packages {
 				pw := PackageWithURL{ClientPackage: p}
-				pw.DownloadURL = p.PublicDownloadURL()
+				pw.DownloadURL = p.AdminDownloadURL()
 				result = append(result, pw)
 			}
 			c.JSON(http.StatusOK, result)
@@ -1217,20 +1280,14 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			if !result.IsActive {
-				c.JSON(http.StatusNotFound, gin.H{"message": "该安装包未启用"})
-				return
-			}
-
+			// 管理员接口允许下载已停用的包（停用也可以用来下载验证或调试）
 			filePath := result.FullPath()
-			if _, err := os.Stat(filePath); os.IsNotExist(err) {
-				c.JSON(http.StatusNotFound, gin.H{"message": "文件不存在"})
+			if _, statErr := os.Stat(filePath); statErr != nil {
+				logger.Error(context.Background(), "管理员下载包磁盘文件缺失: id="+c.Param("id")+" err="+statErr.Error())
+				c.JSON(http.StatusNotFound, gin.H{"message": "安装包文件不存在"})
 				return
 			}
-
-			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", result.Filename))
-			c.Header("Content-Type", "application/octet-stream")
-			c.File(filePath)
+			c.FileAttachment(filePath, result.Filename)
 		})
 
 		ovpn.POST("/server", func(c *gin.Context) {
@@ -1792,43 +1849,52 @@ func Run(info BuildInfo) {
 					return
 				}
 
-				// 导入用户默认绑定普通用户角色
-				importDefaultRoleID := GetDefaultRoleID(db)
+				// 导入用户：角色继承优先级与单用户创建一致
+			// 优先继承所在组的 RoleID（校验存在且启用），否则回退到普通用户默认角色
+			importDefaultRoleID := GetDefaultRoleID(db)
+			var importGroup Group
+			if err := db.Where("id = ?", gid).First(&importGroup).Error; err != nil {
+				// 组不存在时使用默认角色兜底
+				importGroup.RoleID = nil
+			}
 
-				for {
-					record, err := reader.Read()
-					if err == io.EOF {
-						break
-					}
-
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-						return
-					}
-
-					enable := record[4] == "1"
-					gid64, err := strconv.ParseUint(gid, 10, 64)
-					newUser := User{
-						Username:   record[0],
-						Password:   record[1],
-						Name:       record[2],
-						Email:      record[3],
-						IsEnable:   &enable,
-						ExpireDate: strings.Replace(record[5], "/", " ", 1),
-						IpAddr:     record[6],
-						OvpnConfig: record[7],
-						Gid:        uint(gid64),
-					}
-					if importDefaultRoleID > 0 {
-						newUser.RoleID = &importDefaultRoleID
-					}
-
-					err = newUser.Create()
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-						return
-					}
+			for {
+				record, err := reader.Read()
+				if err == io.EOF {
+					break
 				}
+
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+
+				enable := record[4] == "1"
+				gid64, err := strconv.ParseUint(gid, 10, 64)
+				newUser := User{
+					Username:   record[0],
+					Password:   record[1],
+					Name:       record[2],
+					Email:      record[3],
+					IsEnable:   &enable,
+					ExpireDate: strings.Replace(record[5], "/", " ", 1),
+					IpAddr:     record[6],
+					OvpnConfig: record[7],
+					Gid:        uint(gid64),
+				}
+				// 角色继承：组角色 > 默认角色（与单用户创建逻辑一致）
+				if importGroup.RoleID != nil && *importGroup.RoleID > 0 && validateRoleID(db, importGroup.RoleID) == nil {
+					newUser.RoleID = importGroup.RoleID
+				} else if importDefaultRoleID > 0 {
+					newUser.RoleID = &importDefaultRoleID
+				}
+
+				err = newUser.Create()
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+			}
 
 				c.JSON(http.StatusOK, gin.H{"message": "导入用户成功"})
 				return
@@ -1843,9 +1909,20 @@ func Run(info BuildInfo) {
 				u.MfaEnabled = mfaEnabled[0] == "true"
 			}
 
-			// 未指定角色时默认绑定普通用户角色
+			// 未指定角色时：优先继承所在组的角色，否则回退到普通用户默认角色
 			if u.RoleID == nil {
-				if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+				// 优先继承所在组的角色（校验角色存在且启用，否则回退到默认角色）
+				var group Group
+				if err := db.Where("id = ?", u.Gid).First(&group).Error; err == nil && group.RoleID != nil && *group.RoleID > 0 {
+					if validateRoleID(db, group.RoleID) == nil {
+						u.RoleID = group.RoleID
+					} else {
+						// 组绑定的角色已禁用或不存在，回退到默认角色
+						if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+							u.RoleID = &defaultRoleID
+						}
+					}
+				} else if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
 					u.RoleID = &defaultRoleID
 				}
 			}
@@ -1882,16 +1959,9 @@ func Run(info BuildInfo) {
 						activePackages := GetActivePackagesByPlatform()
 						var localPackages []LocalPackageInfo
 						for platform, pkg := range activePackages {
-							labels := map[string]string{
-								"windows": "Windows",
-								"macos":   "macOS",
-								"linux":   "Linux",
-								"android": "Android",
-								"ios":     "iOS",
-							}
 							localPackages = append(localPackages, LocalPackageInfo{
 								Platform:      platform,
-								PlatformLabel: labels[platform],
+								PlatformLabel: PlatformLabel(platform),
 								Version:       pkg.Version,
 								DownloadURL:   pkg.PublicDownloadURL(),
 							})
@@ -1911,7 +1981,7 @@ func Run(info BuildInfo) {
 								Name:          u.Name,
 								Username:      u.Username,
 								Password:      c.PostForm("password"),
-								SiteUrl:       viper.GetString("system.base.site_url"),
+								SiteUrl:       siteDownloadLandingURL(),
 								LocalPackages: localPackages,
 							})
 						}
@@ -2033,7 +2103,7 @@ func Run(info BuildInfo) {
 								Name:          cu.Name,
 								Username:      cu.Username,
 								Password:      password,
-								SiteUrl:       viper.GetString("system.base.site_url"),
+								SiteUrl:       siteDownloadLandingURL(),
 								LocalPackages: nil,
 							})
 						}
@@ -2688,6 +2758,10 @@ func Run(info BuildInfo) {
 		ovpn.PATCH("/role/:id", RequirePermission("role:update"), roleUpdateHandler)
 		ovpn.DELETE("/role/:id", RequirePermission("role:delete"), roleDeleteHandler)
 		ovpn.PUT("/role/:id/permissions", RequirePermission("role:assign_permissions"), roleAssignPermissionsHandler)
+		ovpn.GET("/role/:id/users", RequirePermission("role:assign_users"), roleUsersHandler)
+		ovpn.PUT("/role/:id/users", RequirePermission("role:assign_users"), roleAssignUsersHandler)
+		ovpn.GET("/role/:id/groups", RequirePermission("role:assign_groups"), roleGroupsHandler)
+		ovpn.PUT("/role/:id/groups", RequirePermission("role:assign_groups"), roleAssignGroupsHandler)
 
 		// 权限定义查询：返回权限树供 Sidebar 动态渲染菜单和角色编辑页使用
 		// 所有已登录用户均可访问（菜单渲染是基本功能，不涉及敏感操作）
@@ -3095,7 +3169,7 @@ func Run(info BuildInfo) {
 						Type:     "mfaEnabled",
 						Name:     cu.Name,
 						Username: cu.Username,
-						SiteUrl:  viper.GetString("system.base.site_url"),
+						SiteUrl:  siteDownloadLandingURL(),
 					})
 					if err != nil {
 						logger.Error(context.Background(), "渲染邮件模板失败: %s", err.Error())
@@ -3163,7 +3237,7 @@ func Run(info BuildInfo) {
 							Name:          targetUser.Name,
 							Username:      targetUser.Username,
 							Password:      "",
-							SiteUrl:       viper.GetString("system.base.site_url"),
+							SiteUrl:       siteDownloadLandingURL(),
 							LocalPackages: nil,
 						})
 					}

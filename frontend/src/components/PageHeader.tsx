@@ -14,7 +14,7 @@ export function PageHeader({ eyebrow, title, description, children }: PageHeader
             {eyebrow}
           </span>
         )}
-        <h2 className="text-2xl font-bold tracking-tight">{title}</h2>
+        <h2 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--text)] to-[color-mix(in_srgb,var(--text)_60%,var(--accent))]">{title}</h2>
         {description && (
           <p className="text-sm text-muted-foreground mt-1">{description}</p>
         )}

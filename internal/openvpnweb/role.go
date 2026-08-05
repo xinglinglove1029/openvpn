@@ -184,6 +184,9 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:roles", "role:assign_permissions", "分配权限", "button", "", "", 5},
 	// 权限查询（1）
 	{"menu:roles", "permission:view", "查看权限树", "button", "", "", 6},
+	// 角色分配用户与用户组（2）
+	{"menu:roles", "role:assign_users", "分配用户", "button", "", "", 7},
+	{"menu:roles", "role:assign_groups", "分配用户组", "button", "", "", 8},
 	// 历史记录（1）
 	{"menu:history", "history:view", "查看连接历史", "button", "", "", 1},
 	// 权限管理（1）：CRUD + 排序权限
@@ -279,13 +282,21 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 	// 2. 创建内置 administrator 角色（全权限）
 	adminEnable := true
 	var adminRole Role
-	if err := db.Where("code = ?", BuiltinRoleAdministrator).FirstOrCreate(&adminRole, Role{
-		Name: "系统超管", Code: BuiltinRoleAdministrator, Description: "拥有全部权限的内置超级管理员",
-		IsBuiltin: true, IsEnable: &adminEnable, Sort: 0,
-	}).Error; err != nil {
-		return err
+	// 不使用 FirstOrCreate：SQLite 下并发/钩子场景下可能误触发 INSERT 导致 UNIQUE 冲突
+	// 改为显式先查，不存在再创建，存在则同步元数据
+	if err := db.WithContext(context.Background()).Where("code = ?", BuiltinRoleAdministrator).First(&adminRole).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		adminRole = Role{
+			Name: "系统超管", Code: BuiltinRoleAdministrator, Description: "拥有全部权限的内置超级管理员",
+			IsBuiltin: true, IsEnable: &adminEnable, Sort: 0,
+		}
+		if err := db.WithContext(context.Background()).Create(&adminRole).Error; err != nil {
+			return err
+		}
 	}
-	// 同步元数据
+	// 同步元数据（即使已存在也确保内置字段正确）
 	db.Model(&adminRole).Where("id = ?", adminRole.ID).Updates(map[string]interface{}{
 		"name": "系统超管", "description": "拥有全部权限的内置超级管理员", "is_builtin": true, "is_enable": true, "sort": 0,
 	})
@@ -293,11 +304,17 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 	// 3. 创建内置 user 角色（普通用户权限）
 	userEnable := true
 	var userRole Role
-	if err := db.Where("code = ?", BuiltinRoleUser).FirstOrCreate(&userRole, Role{
-		Name: "普通用户", Code: BuiltinRoleUser, Description: "仅可访问概览/客户端/历史/站内信/个人中心",
-		IsBuiltin: true, IsEnable: &userEnable, Sort: 1,
-	}).Error; err != nil {
-		return err
+	if err := db.WithContext(context.Background()).Where("code = ?", BuiltinRoleUser).First(&userRole).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		userRole = Role{
+			Name: "普通用户", Code: BuiltinRoleUser, Description: "仅可访问概览/客户端/历史/站内信/个人中心",
+			IsBuiltin: true, IsEnable: &userEnable, Sort: 1,
+		}
+		if err := db.WithContext(context.Background()).Create(&userRole).Error; err != nil {
+			return err
+		}
 	}
 	db.Model(&userRole).Where("id = ?", userRole.ID).Updates(map[string]interface{}{
 		"name": "普通用户", "description": "仅可访问概览/客户端/历史/站内信/个人中心", "is_builtin": true, "is_enable": true, "sort": 1,
@@ -931,9 +948,40 @@ func roleListHandler(c *gin.Context) {
 		permsByRole[p.RoleID] = append(permsByRole[p.RoleID], p.Code)
 	}
 
+	// 批量查询每个角色的用户数与用户组数，避免 N+1
+	type roleCount struct {
+		RoleID uint
+		Count  int64
+	}
+	var userCounts []roleCount
+	userCountQuery := db.Model(&User{}).
+		Select("role_id, COUNT(*) as count").
+		Where("role_id IS NOT NULL")
+	if adminUsername != "" {
+		userCountQuery = userCountQuery.Where("username != ?", adminUsername)
+	}
+	userCountQuery.Group("role_id").Scan(&userCounts)
+	userCountMap := make(map[uint]int64, len(userCounts))
+	for _, uc := range userCounts {
+		userCountMap[uc.RoleID] = uc.Count
+	}
+
+	var groupCounts []roleCount
+	db.Model(&Group{}).
+		Select("role_id, COUNT(*) as count").
+		Where("role_id IS NOT NULL").
+		Group("role_id").
+		Scan(&groupCounts)
+	groupCountMap := make(map[uint]int64, len(groupCounts))
+	for _, gc := range groupCounts {
+		groupCountMap[gc.RoleID] = gc.Count
+	}
+
 	type RoleWithPerms struct {
 		Role
 		Permissions []string `json:"permissions"`
+		UserCount   int64    `json:"userCount"`
+		GroupCount  int64    `json:"groupCount"`
 	}
 
 	result := make([]RoleWithPerms, 0, len(roles))
@@ -942,7 +990,12 @@ func roleListHandler(c *gin.Context) {
 		if codes == nil {
 			codes = []string{}
 		}
-		result = append(result, RoleWithPerms{Role: r, Permissions: codes})
+		result = append(result, RoleWithPerms{
+			Role:        r,
+			Permissions: codes,
+			UserCount:   userCountMap[r.ID],
+			GroupCount:  groupCountMap[r.ID],
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
@@ -1168,16 +1221,26 @@ func roleDeleteHandler(c *gin.Context) {
 		return
 	}
 
-	// 事务：用户数检查 + 删除关联权限 + 删除角色
+	// 事务：用户数/用户组数检查 + 删除关联权限 + 删除角色
 	// 把 count 检查与 delete 放在同一事务，避免检查后到删除前有新用户绑定该角色
+	// 注意：SQLite 默认串行化事务可防止 TOCTOU；MySQL/PostgreSQL 下 Count 不加写锁，
+	// 极端并发时序下仍可能产生孤儿 role_id，如需严格防护可改用 SELECT ... FOR UPDATE。
 	err := db.Transaction(func(tx *gorm.DB) error {
-		// 在事务内重新检查用户关联（加锁避免并发绑定）
+		// 在事务内重新检查用户关联
 		var userCount int64
 		if err := tx.Model(&User{}).Where("role_id = ?", role.ID).Count(&userCount).Error; err != nil {
 			return err
 		}
 		if userCount > 0 {
-			return fmt.Errorf("角色下存在用户，不允许删除")
+			return fmt.Errorf("角色下存在用户或用户组，不允许删除")
+		}
+		// 检查用户组关联
+		var groupCount int64
+		if err := tx.Model(&Group{}).Where("role_id = ?", role.ID).Count(&groupCount).Error; err != nil {
+			return err
+		}
+		if groupCount > 0 {
+			return fmt.Errorf("角色下存在用户或用户组，不允许删除")
 		}
 		if err := tx.Where("role_id = ?", role.ID).Delete(&RolePermission{}).Error; err != nil {
 			return err
@@ -1188,8 +1251,8 @@ func roleDeleteHandler(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		// 区分"存在用户"和其他错误
-		if err.Error() == "角色下存在用户，不允许删除" {
+		// 区分"存在用户/用户组"和其他错误
+		if err.Error() == "角色下存在用户或用户组，不允许删除" {
 			recordAudit(c, "role", "delete", role.Name, false, err.Error())
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
@@ -1277,4 +1340,442 @@ func roleAssignPermissionsHandler(c *gin.Context) {
 
 	recordAudit(c, "role", "assign_permissions", role.Name, true, "分配角色权限: "+role.Name)
 	c.JSON(http.StatusOK, gin.H{"message": "权限已更新"})
+}
+
+// roleUserInfo 角色分配用户对话框中展示的单个用户信息
+type roleUserInfo struct {
+	ID        uint   `json:"id"`
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	Gid       uint   `json:"gid"`
+	GroupName string `json:"groupName"`
+	RoleID    *uint  `json:"roleId"`
+	RoleName  string `json:"roleName"`
+}
+
+// roleUsersHandler GET /ovpn/role/:id/users
+// 返回所有非 admin 用户 + 当前角色已绑定用户 ID 列表
+func roleUsersHandler(c *gin.Context) {
+	id, ok := parseRoleIDParam(c)
+	if !ok {
+		return
+	}
+	var role Role
+	if err := db.Where("id = ?", id).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "角色不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 查询所有非 admin 用户（admin 用户绕过权限检查，不需要角色绑定）
+	query := db.Model(&User{}).Select("id, username, name, gid, role_id")
+	if adminUsername != "" {
+		query = query.Where("username != ?", adminUsername)
+	}
+	var users []User
+	if err := query.Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 批量查组名（按 gid 查 Group.Name）
+	gidSet := make(map[uint]bool)
+	for _, u := range users {
+		if u.Gid != 0 {
+			gidSet[u.Gid] = true
+		}
+	}
+	groupNameMap := make(map[uint]string)
+	if len(gidSet) > 0 {
+		gids := make([]uint, 0, len(gidSet))
+		for gid := range gidSet {
+			gids = append(gids, gid)
+		}
+		var groups []Group
+		if err := db.Where("id IN ?", gids).Find(&groups).Error; err != nil {
+			logger.Error(context.Background(), "roleUsersHandler 批量查询组名失败: %s", err.Error())
+		} else {
+			for _, g := range groups {
+				groupNameMap[g.ID] = g.Name
+			}
+		}
+	}
+
+	// 批量查角色名（按 role_id 查 Role.Name）
+	roleIDSet := make(map[uint]bool)
+	for _, u := range users {
+		if u.RoleID != nil && *u.RoleID != 0 {
+			roleIDSet[*u.RoleID] = true
+		}
+	}
+	roleNameMap := make(map[uint]string)
+	if len(roleIDSet) > 0 {
+		roleIDs := make([]uint, 0, len(roleIDSet))
+		for rid := range roleIDSet {
+			roleIDs = append(roleIDs, rid)
+		}
+		var roles []Role
+		if err := db.Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			logger.Error(context.Background(), "roleUsersHandler 批量查询角色名失败: %s", err.Error())
+		} else {
+			for _, r := range roles {
+				roleNameMap[r.ID] = r.Name
+			}
+		}
+	}
+
+	// 拼装返回结果
+	allUsers := make([]roleUserInfo, 0, len(users))
+	assignedUserIDs := make([]uint, 0)
+	for _, u := range users {
+		info := roleUserInfo{
+			ID:        u.ID,
+			Username:  u.Username,
+			Name:      u.Name,
+			Gid:       u.Gid,
+			GroupName: groupNameMap[u.Gid],
+			RoleID:    u.RoleID,
+		}
+		if u.RoleID != nil && *u.RoleID != 0 {
+			info.RoleName = roleNameMap[*u.RoleID]
+			if *u.RoleID == role.ID {
+				assignedUserIDs = append(assignedUserIDs, u.ID)
+			}
+		}
+		allUsers = append(allUsers, info)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"allUsers":        allUsers,
+		"assignedUserIds": assignedUserIDs,
+	})
+}
+
+// roleAssignUsersHandler PUT /ovpn/role/:id/users
+// 全量替换该角色下的用户：把 userIds 中的用户 role_id 设为该角色，
+// 把原来在该角色但不在 userIds 中的用户 role_id 设为 NULL
+// 内置 administrator 角色拒绝（400）
+func roleAssignUsersHandler(c *gin.Context) {
+	id, ok := parseRoleIDParam(c)
+	if !ok {
+		return
+	}
+	var role Role
+	if err := db.Where("id = ?", id).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "角色不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 内置 administrator 角色拒绝分配用户
+	if role.IsBuiltin && role.Code == BuiltinRoleAdministrator {
+		recordAudit(c, "role", "assign_users", role.Name, false, "内置超管角色不支持分配用户")
+		c.JSON(http.StatusBadRequest, gin.H{"message": "内置超管角色不支持分配用户"})
+		return
+	}
+
+	// 已禁用角色拒绝分配（避免"分配成功但用户无法登录"的困惑）
+	if role.IsEnable != nil && !*role.IsEnable {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "角色已被禁用，无法分配"})
+		return
+	}
+
+	var body struct {
+		UserIDs []uint `json:"userIds"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 去重前端传入的 userIds
+	seen := make(map[uint]bool, len(body.UserIDs))
+	dedupedIDs := make([]uint, 0, len(body.UserIDs))
+	for _, uid := range body.UserIDs {
+		if uid != 0 && !seen[uid] {
+			seen[uid] = true
+			dedupedIDs = append(dedupedIDs, uid)
+		}
+	}
+
+	// 事务：先移除不在 userIds 中的用户，再分配 userIds 中的用户
+	// 排除 admin 用户（admin 绕过权限检查，不参与角色绑定）
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// 事务内重新检查角色是否存在，避免 TOCTOU（角色在事务外查询后被并发删除）
+		var txRole Role
+		if err := tx.Where("id = ?", role.ID).First(&txRole).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("角色不存在")
+			}
+			return err
+		}
+
+		// 校验 userIds 中实际存在的用户，记录不存在的 ID（spec 要求"用户不存在跳过并记日志"）
+		if len(dedupedIDs) > 0 {
+			var existingIDs []uint
+			existQuery := tx.Model(&User{}).Where("id IN ?", dedupedIDs)
+			if adminUsername != "" {
+				existQuery = existQuery.Where("username != ?", adminUsername)
+			}
+			if err := existQuery.Pluck("id", &existingIDs).Error; err != nil {
+				return err
+			}
+			existingSet := make(map[uint]bool, len(existingIDs))
+			for _, eid := range existingIDs {
+				existingSet[eid] = true
+			}
+			for _, uid := range dedupedIDs {
+				if !existingSet[uid] {
+					logger.Error(context.Background(), "roleAssignUsersHandler: 用户 ID %d 不存在或为 admin 用户，已跳过", uid)
+				}
+			}
+		}
+
+		// 1. 把该角色下不在 userIds 中的用户 role_id 设为 NULL（排除 admin 用户）
+		if len(dedupedIDs) > 0 {
+			q := tx.Model(&User{}).Where("role_id = ? AND id NOT IN ?", role.ID, dedupedIDs)
+			if adminUsername != "" {
+				q = q.Where("username != ?", adminUsername)
+			}
+			if err := q.Update("role_id", nil).Error; err != nil {
+				return err
+			}
+		} else {
+			q := tx.Model(&User{}).Where("role_id = ?", role.ID)
+			if adminUsername != "" {
+				q = q.Where("username != ?", adminUsername)
+			}
+			if err := q.Update("role_id", nil).Error; err != nil {
+				return err
+			}
+		}
+		// 2. 把 userIds 中的用户 role_id 设为该角色（排除 admin 用户）
+		if len(dedupedIDs) > 0 {
+			q := tx.Model(&User{}).Where("id IN ?", dedupedIDs)
+			if adminUsername != "" {
+				q = q.Where("username != ?", adminUsername)
+			}
+			if err := q.Update("role_id", role.ID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		recordAudit(c, "role", "assign_users", role.Name, false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "role", "assign_users", role.Name, true, "分配角色用户: "+role.Name)
+	c.JSON(http.StatusOK, gin.H{"message": "用户已分配"})
+}
+
+// roleGroupInfo 角色分配用户组对话框中展示的单个组信息
+type roleGroupInfo struct {
+	ID       uint   `json:"id"`
+	Name     string `json:"name"`
+	ParentID *uint  `json:"parentId"`
+	RoleID   *uint  `json:"roleId"`
+	RoleName string `json:"roleName"`
+}
+
+// roleGroupsHandler GET /ovpn/role/:id/groups
+// 返回所有组 + 当前角色已绑定组 ID 列表
+func roleGroupsHandler(c *gin.Context) {
+	id, ok := parseRoleIDParam(c)
+	if !ok {
+		return
+	}
+	var role Role
+	if err := db.Where("id = ?", id).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "角色不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	var groups []Group
+	if err := db.Select("id, name, parent_id, role_id").Find(&groups).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 批量查角色名
+	roleIDSet := make(map[uint]bool)
+	for _, g := range groups {
+		if g.RoleID != nil && *g.RoleID != 0 {
+			roleIDSet[*g.RoleID] = true
+		}
+	}
+	roleNameMap := make(map[uint]string)
+	if len(roleIDSet) > 0 {
+		roleIDs := make([]uint, 0, len(roleIDSet))
+		for rid := range roleIDSet {
+			roleIDs = append(roleIDs, rid)
+		}
+		var roles []Role
+		if err := db.Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			logger.Error(context.Background(), "roleGroupsHandler 批量查询角色名失败: %s", err.Error())
+		} else {
+			for _, r := range roles {
+				roleNameMap[r.ID] = r.Name
+			}
+		}
+	}
+
+	// 拼装返回结果
+	allGroups := make([]roleGroupInfo, 0, len(groups))
+	assignedGroupIDs := make([]uint, 0)
+	for _, g := range groups {
+		info := roleGroupInfo{
+			ID:       g.ID,
+			Name:     g.Name,
+			ParentID: g.ParentID,
+			RoleID:   g.RoleID,
+		}
+		if g.RoleID != nil && *g.RoleID != 0 {
+			info.RoleName = roleNameMap[*g.RoleID]
+			if *g.RoleID == role.ID {
+				assignedGroupIDs = append(assignedGroupIDs, g.ID)
+			}
+		}
+		allGroups = append(allGroups, info)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"allGroups":        allGroups,
+		"assignedGroupIds": assignedGroupIDs,
+	})
+}
+
+// roleAssignGroupsHandler PUT /ovpn/role/:id/groups
+// 全量替换该角色下的用户组：把 groupIds 中的组 role_id 设为该角色，
+// 把原来在该角色但不在 groupIds 中的组 role_id 设为 NULL
+// 内置 administrator 角色拒绝（400，与 assign_users 一致，避免新建用户继承超管角色）
+// Default 组（ID=1）拒绝修改 role_id（400）
+func roleAssignGroupsHandler(c *gin.Context) {
+	id, ok := parseRoleIDParam(c)
+	if !ok {
+		return
+	}
+	var role Role
+	if err := db.Where("id = ?", id).First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "角色不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 内置 administrator 角色拒绝分配用户组（与 assign_users 一致，防止权限提升）
+	if role.IsBuiltin && role.Code == BuiltinRoleAdministrator {
+		recordAudit(c, "role", "assign_groups", role.Name, false, "内置超管角色不支持分配用户组")
+		c.JSON(http.StatusBadRequest, gin.H{"message": "内置超管角色不支持分配用户组"})
+		return
+	}
+
+	// 已禁用角色拒绝分配（避免"分配成功但用户无法登录"的困惑）
+	if role.IsEnable != nil && !*role.IsEnable {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "角色已被禁用，无法分配"})
+		return
+	}
+
+	var body struct {
+		GroupIDs []uint `json:"groupIds"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	// 检查 groupIds 是否包含 Default 组（ID=1），若包含返回 400
+	for _, gid := range body.GroupIDs {
+		if gid == 1 {
+			recordAudit(c, "role", "assign_groups", role.Name, false, "默认组不支持绑定角色")
+			c.JSON(http.StatusBadRequest, gin.H{"message": "默认组不支持绑定角色"})
+			return
+		}
+	}
+
+	// 去重前端传入的 groupIds
+	seen := make(map[uint]bool, len(body.GroupIDs))
+	dedupedIDs := make([]uint, 0, len(body.GroupIDs))
+	for _, gid := range body.GroupIDs {
+		if gid != 0 && !seen[gid] {
+			seen[gid] = true
+			dedupedIDs = append(dedupedIDs, gid)
+		}
+	}
+
+	// 事务：先移除不在 groupIds 中的组，再分配 groupIds 中的组
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// 事务内重新检查角色是否存在，避免 TOCTOU
+		var txRole Role
+		if err := tx.Where("id = ?", role.ID).First(&txRole).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("角色不存在")
+			}
+			return err
+		}
+
+		// 校验 groupIds 中实际存在的组，记录不存在的 ID（与用户分配逻辑对齐）
+		if len(dedupedIDs) > 0 {
+			var existingIDs []uint
+			if err := tx.Model(&Group{}).Where("id IN ? AND id != 1", dedupedIDs).Pluck("id", &existingIDs).Error; err != nil {
+				return err
+			}
+			existingSet := make(map[uint]bool, len(existingIDs))
+			for _, eid := range existingIDs {
+				existingSet[eid] = true
+			}
+			for _, gid := range dedupedIDs {
+				if !existingSet[gid] {
+					logger.Error(context.Background(), "roleAssignGroupsHandler: 用户组 ID %d 不存在或为 Default 组，已跳过", gid)
+				}
+			}
+		}
+
+		// 1. 把该角色下不在 groupIds 中的组 role_id 设为 NULL（排除 Default 组 ID=1）
+		if len(dedupedIDs) > 0 {
+			if err := tx.Model(&Group{}).
+				Where("role_id = ? AND id NOT IN ? AND id != 1", role.ID, dedupedIDs).
+				Update("role_id", nil).Error; err != nil {
+				return err
+			}
+		} else {
+			// 全部移除：把该角色下所有组 role_id 设为 NULL（排除 Default 组）
+			if err := tx.Model(&Group{}).
+				Where("role_id = ? AND id != 1", role.ID).
+				Update("role_id", nil).Error; err != nil {
+				return err
+			}
+		}
+		// 2. 把 groupIds 中的组 role_id 设为该角色
+		if len(dedupedIDs) > 0 {
+			if err := tx.Model(&Group{}).
+				Where("id IN ? AND id != 1", dedupedIDs).
+				Update("role_id", role.ID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		recordAudit(c, "role", "assign_groups", role.Name, false, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+
+	recordAudit(c, "role", "assign_groups", role.Name, true, "分配角色用户组: "+role.Name)
+	c.JSON(http.StatusOK, gin.H{"message": "用户组已分配"})
 }

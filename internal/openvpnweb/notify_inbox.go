@@ -23,12 +23,33 @@ func (UserNotifyRead) TableName() string {
 	return "user_notify_read"
 }
 
+// resolveNotifyUserID 根据 username 解析 user_notify_read 表中使用的 user_id
+// - 普通用户：查 users 表获取真实 ID
+// - 内置 admin 账号（不在 users 表）：使用保留 ID AdminAuditOperatorID，与 audit_logs 保持一致
+// - system 操作人：使用保留 ID SystemAuditOperatorID
+// 这样避免 user_id=0 与其他内置账号冲突，也避免依赖 username 字段查询的旧表索引差异
+func resolveNotifyUserID(username string) uint {
+	if username == "" {
+		return 0
+	}
+	// 内置 admin 账号：使用保留 ID，不查 users 表
+	if adminUsername != "" && username == adminUsername {
+		return AdminAuditOperatorID
+	}
+	// system 操作人：使用保留 ID
+	if username == "system" {
+		return SystemAuditOperatorID
+	}
+	// 普通用户：查 users 表
+	return GetUserIDByUsername(username)
+}
+
 // getUserNotifyRead 获取用户已读进度；不存在时返回零值
 func getUserNotifyRead(username string) UserNotifyRead {
 	if username == "" {
 		return UserNotifyRead{}
 	}
-	userID := GetUserIDByUsername(username)
+	userID := resolveNotifyUserID(username)
 	if userID == 0 {
 		return UserNotifyRead{}
 	}
@@ -45,28 +66,28 @@ func getUserNotifyRead(username string) UserNotifyRead {
 }
 
 // markUserNotifyRead 将用户已读进度推进到指定 id（取较大值）
+// 兼容内置账号（admin/system）通过保留 ID 写入
 func markUserNotifyRead(username string, lastID uint) (UserNotifyRead, error) {
 	if username == "" {
 		return UserNotifyRead{}, errors.New("username is empty")
 	}
-	userID := GetUserIDByUsername(username)
+	userID := resolveNotifyUserID(username)
 	if userID == 0 {
 		return UserNotifyRead{}, errors.New("user not found")
 	}
 	now := time.Now().Unix()
 
-	// 先查询是否存在记录，避免依赖 ON CONFLICT（旧表可能缺唯一索引）
-	// 注意：旧表唯一约束是 (username, scope)，用 username 查询以匹配约束
+	// 先查询是否存在记录
 	var existing UserNotifyRead
-	err := db.WithContext(context.Background()).
-		Where("username = ? AND scope = ?", username, "default").
+	findErr := db.WithContext(context.Background()).
+		Where("user_id = ? AND scope = ?", userID, "default").
 		First(&existing).Error
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return UserNotifyRead{}, err
+	if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return UserNotifyRead{}, findErr
 	}
 
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(findErr, gorm.ErrRecordNotFound) {
 		// 插入新记录
 		rec := UserNotifyRead{
 			UserID:        userID,
@@ -147,4 +168,37 @@ func maxNotifyLogID(currentUsername string, isAdmin bool) uint {
 		return 0
 	}
 	return *maxID
+}
+
+// RepairNotifyReadUserIDs 修复历史 user_notify_read 表中 user_id=0 的记录
+// 旧版代码对内置 admin 账号无法写入 user_id（GetUserIDByUsername 返回 0 导致直接失败），
+// 现版改用保留 ID AdminAuditOperatorID，此函数将历史 user_id=0 且 username=admin 的记录迁移到保留 ID
+func RepairNotifyReadUserIDs() {
+	if db == nil {
+		return
+	}
+
+	// 修复 admin 记录：user_id=0 且 username=admin → user_id=AdminAuditOperatorID
+	if adminUsername != "" {
+		result := db.WithContext(context.Background()).
+			Model(&UserNotifyRead{}).
+			Where("user_id = ? AND username = ?", 0, adminUsername).
+			Update("user_id", AdminAuditOperatorID)
+		if result.Error != nil {
+			logger.Error(context.Background(), "修复 admin user_notify_read user_id 失败: %s", result.Error.Error())
+		} else if result.RowsAffected > 0 {
+			logger.Error(context.Background(), "已修复 %d 条 admin user_notify_read 记录的 user_id → %d", result.RowsAffected, AdminAuditOperatorID)
+		}
+	}
+
+	// 修复 system 记录：user_id=0 且 username=system → user_id=SystemAuditOperatorID
+	result := db.WithContext(context.Background()).
+		Model(&UserNotifyRead{}).
+		Where("user_id = ? AND username = ?", 0, "system").
+		Update("user_id", SystemAuditOperatorID)
+	if result.Error != nil {
+		logger.Error(context.Background(), "修复 system user_notify_read user_id 失败: %s", result.Error.Error())
+	} else if result.RowsAffected > 0 {
+		logger.Error(context.Background(), "已修复 %d 条 system user_notify_read 记录的 user_id → %d", result.RowsAffected, SystemAuditOperatorID)
+	}
 }
