@@ -273,6 +273,7 @@ export default function ClientsPage() {
         onOpenChange={setAddOpen}
         notify={notify}
         reload={reload}
+        settings={settings ?? null}
       />
 
       {/* Config/CCD editor dialog */}
@@ -306,11 +307,13 @@ function AddClientDialog({
   onOpenChange,
   notify,
   reload,
+  settings,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   notify: (type: 'success' | 'error' | 'info', message: string) => void;
   reload: () => void;
+  settings: SettingsResponse | null;
 }) {
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
@@ -320,14 +323,26 @@ function AddClientDialog({
   const [clientConfig, setClientConfig] = useState('');
   const [errors, setErrors] = useState<FieldErrors>({});
 
+  // 从系统设置中取默认 VPN 服务器地址和端口
+  const defaultAddr = settings?.system?.base?.server_addr ?? '';
+  const defaultPort = settings?.openvpn?.ovpn_port ?? '';
+
   function resetForm() {
     setName('');
-    setServerAddr('');
-    setServerPort('');
+    setServerAddr(String(defaultAddr ?? ''));
+    setServerPort(String(defaultPort ?? ''));
     setCcdConfig('');
     setClientConfig('');
     setErrors({});
   }
+
+  // 当对话框打开时，用 settings 中的默认值初始化 serverAddr/serverPort
+  useEffect(() => {
+    if (open) {
+      setServerAddr(String(defaultAddr ?? ''));
+      setServerPort(String(defaultPort ?? ''));
+    }
+  }, [open, defaultAddr, defaultPort]);
 
   function clearError(key: string) {
     setErrors((prev) => {

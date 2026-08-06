@@ -205,7 +205,6 @@ var defaultUserRoleCodes = []string{
 	"menu:profile",
 	"client:view",
 	"client:download",
-	"client:delete",
 	"client:regenerate",
 	"client:view_online",
 	"history:view",
