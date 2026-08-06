@@ -22,14 +22,14 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Install pnpm
+        run: npm install -g pnpm@11.17.0
+
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install pnpm
-        run: npm install -g pnpm@11.17.0
 
       - name: Build React admin
         working-directory: frontend
