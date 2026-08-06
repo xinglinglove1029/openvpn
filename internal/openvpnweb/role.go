@@ -977,9 +977,6 @@ func roleListHandler(c *gin.Context) {
 	userCountQuery := db.Table("user_role").
 		Select("user_role.role_id AS role_id, COUNT(*) as count").
 		Joins("INNER JOIN user ON user.id = user_role.user_id")
-	if adminUsername != "" {
-		userCountQuery = userCountQuery.Where("user.username != ?", adminUsername)
-	}
 	userCountQuery.Group("user_role.role_id").Scan(&userCounts)
 	userCountMap := make(map[uint]int64, len(userCounts))
 	for _, uc := range userCounts {
@@ -1254,9 +1251,9 @@ func roleDeleteHandler(c *gin.Context) {
 		if userCount > 0 {
 			return fmt.Errorf("角色下存在用户或用户组，不允许删除")
 		}
-		// 检查用户组关联
+		// 检查用户组关联（从 group_role 多对多关联表查询）
 		var groupCount int64
-		if err := tx.Model(&Group{}).Where("role_id = ?", role.ID).Count(&groupCount).Error; err != nil {
+		if err := tx.Table("group_role").Where("role_id = ?", role.ID).Count(&groupCount).Error; err != nil {
 			return err
 		}
 		if groupCount > 0 {
@@ -1390,11 +1387,8 @@ func roleUsersHandler(c *gin.Context) {
 		return
 	}
 
-	// 查询所有非 admin 用户（admin 用户绕过权限检查，不需要角色绑定）
+	// 查询所有用户（含 admin，admin 已纳入 user 表并绑定 administrator 角色）
 	query := db.Model(&User{}).Select("id, username, name, gid")
-	if adminUsername != "" {
-		query = query.Where("username != ?", adminUsername)
-	}
 	var users []User
 	if err := query.Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -1495,7 +1489,6 @@ func roleUsersHandler(c *gin.Context) {
 // roleAssignUsersHandler PUT /ovpn/role/:id/users
 // 全量替换该角色下的用户：把 userIds 中的用户绑定到该角色（user_role 表 INSERT），
 // 把原来在该角色但不在 userIds 中的用户解绑（user_role 表 DELETE）
-// 排除 admin 用户（admin 绕过权限检查，不参与角色绑定）
 func roleAssignUsersHandler(c *gin.Context) {
 	id, ok := parseRoleIDParam(c)
 	if !ok {
@@ -1536,7 +1529,6 @@ func roleAssignUsersHandler(c *gin.Context) {
 	}
 
 	// 事务：操作 user_role 表（DELETE 旧绑定 + INSERT 新绑定）
-	// 排除 admin 用户（admin 绕过权限检查，不参与角色绑定）
 	err := db.Transaction(func(tx *gorm.DB) error {
 		// 事务内重新检查角色是否存在，避免 TOCTOU（角色在事务外查询后被并发删除）
 		var txRole Role
@@ -1552,9 +1544,6 @@ func roleAssignUsersHandler(c *gin.Context) {
 		if len(dedupedIDs) > 0 {
 			var existingIDs []uint
 			existQuery := tx.Model(&User{}).Where("id IN ?", dedupedIDs)
-			if adminUsername != "" {
-				existQuery = existQuery.Where("username != ?", adminUsername)
-			}
 			if err := existQuery.Pluck("id", &existingIDs).Error; err != nil {
 				return err
 			}
@@ -1566,18 +1555,13 @@ func roleAssignUsersHandler(c *gin.Context) {
 				if existingSet[uid] {
 					validIDs = append(validIDs, uid)
 				} else {
-					logger.Error(context.Background(), "roleAssignUsersHandler: 用户 ID %d 不存在或为 admin 用户，已跳过", uid)
+					logger.Error(context.Background(), "roleAssignUsersHandler: 用户 ID %d 不存在，已跳过", uid)
 				}
 			}
 		}
 
-		// 1. 删除该角色下不在 userIds 中的用户绑定（排除 admin 用户）
-		//    通过子查询排除 admin 用户，避免误删 admin 的（理论上的）绑定
+		// 1. 删除该角色下不在 userIds 中的用户绑定
 		delQuery := tx.Table("user_role").Where("role_id = ?", role.ID)
-		if adminUsername != "" {
-			delQuery = delQuery.Where("user_id NOT IN (?)",
-				tx.Model(&User{}).Select("id").Where("username = ?", adminUsername))
-		}
 		if len(validIDs) > 0 {
 			delQuery = delQuery.Where("user_id NOT IN ?", validIDs)
 		}
@@ -1609,12 +1593,10 @@ type roleGroupInfo struct {
 	ID       uint   `json:"id"`
 	Name     string `json:"name"`
 	ParentID *uint  `json:"parentId"`
-	RoleID   *uint  `json:"roleId"`
-	RoleName string `json:"roleName"`
 }
 
 // roleGroupsHandler GET /ovpn/role/:id/groups
-// 返回所有组 + 当前角色已绑定组 ID 列表
+// 返回所有组 + 当前角色已绑定组 ID 列表（从 group_role 多对多关联表查询）
 func roleGroupsHandler(c *gin.Context) {
 	id, ok := parseRoleIDParam(c)
 	if !ok {
@@ -1631,51 +1613,26 @@ func roleGroupsHandler(c *gin.Context) {
 	}
 
 	var groups []Group
-	if err := db.Select("id, name, parent_id, role_id").Find(&groups).Error; err != nil {
+	if err := db.Select("id, name, parent_id").Find(&groups).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 		return
 	}
 
-	// 批量查角色名
-	roleIDSet := make(map[uint]bool)
-	for _, g := range groups {
-		if g.RoleID != nil && *g.RoleID != 0 {
-			roleIDSet[*g.RoleID] = true
-		}
-	}
-	roleNameMap := make(map[uint]string)
-	if len(roleIDSet) > 0 {
-		roleIDs := make([]uint, 0, len(roleIDSet))
-		for rid := range roleIDSet {
-			roleIDs = append(roleIDs, rid)
-		}
-		var roles []Role
-		if err := db.Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
-			logger.Error(context.Background(), "roleGroupsHandler 批量查询角色名失败: %s", err.Error())
-		} else {
-			for _, r := range roles {
-				roleNameMap[r.ID] = r.Name
-			}
-		}
+	// 从 group_role 表查当前角色已绑定的组 ID 列表
+	var assignedGroupIDs []uint
+	if err := db.Table("group_role").Where("role_id = ?", role.ID).Pluck("group_id", &assignedGroupIDs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
 	}
 
 	// 拼装返回结果
 	allGroups := make([]roleGroupInfo, 0, len(groups))
-	assignedGroupIDs := make([]uint, 0)
 	for _, g := range groups {
-		info := roleGroupInfo{
+		allGroups = append(allGroups, roleGroupInfo{
 			ID:       g.ID,
 			Name:     g.Name,
 			ParentID: g.ParentID,
-			RoleID:   g.RoleID,
-		}
-		if g.RoleID != nil && *g.RoleID != 0 {
-			info.RoleName = roleNameMap[*g.RoleID]
-			if *g.RoleID == role.ID {
-				assignedGroupIDs = append(assignedGroupIDs, g.ID)
-			}
-		}
-		allGroups = append(allGroups, info)
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1685,10 +1642,11 @@ func roleGroupsHandler(c *gin.Context) {
 }
 
 // roleAssignGroupsHandler PUT /ovpn/role/:id/groups
-// 全量替换该角色下的用户组：把 groupIds 中的组 role_id 设为该角色，
-// 把原来在该角色但不在 groupIds 中的组 role_id 设为 NULL
-// 内置 administrator 角色拒绝（400，与 assign_users 一致，避免新建用户继承超管角色）
-// Default 组（ID=1）拒绝修改 role_id（400）
+// 全量替换该角色绑定的用户组（操作 group_role 多对多关联表）：
+//   - 删除该角色下不在 groupIds 中的 group_role 记录
+//   - 为 groupIds 中的组创建 group_role 记录（已存在则跳过）
+//
+// Default 组（ID=1）拒绝绑定（400）
 func roleAssignGroupsHandler(c *gin.Context) {
 	id, ok := parseRoleIDParam(c)
 	if !ok {
@@ -1737,7 +1695,7 @@ func roleAssignGroupsHandler(c *gin.Context) {
 		}
 	}
 
-	// 事务：先移除不在 groupIds 中的组，再分配 groupIds 中的组
+	// 事务：全量替换 group_role 关联记录
 	err := db.Transaction(func(tx *gorm.DB) error {
 		// 事务内重新检查角色是否存在，避免 TOCTOU
 		var txRole Role
@@ -1765,26 +1723,23 @@ func roleAssignGroupsHandler(c *gin.Context) {
 			}
 		}
 
-		// 1. 把该角色下不在 groupIds 中的组 role_id 设为 NULL（排除 Default 组 ID=1）
+		// 1. 删除该角色下不在 groupIds 中的 group_role 记录
 		if len(dedupedIDs) > 0 {
-			if err := tx.Model(&Group{}).
-				Where("role_id = ? AND id NOT IN ? AND id != 1", role.ID, dedupedIDs).
-				Update("role_id", nil).Error; err != nil {
+			if err := tx.Where("role_id = ? AND group_id NOT IN ?", role.ID, dedupedIDs).
+				Delete(&GroupRole{}).Error; err != nil {
 				return err
 			}
 		} else {
-			// 全部移除：把该角色下所有组 role_id 设为 NULL（排除 Default 组）
-			if err := tx.Model(&Group{}).
-				Where("role_id = ? AND id != 1", role.ID).
-				Update("role_id", nil).Error; err != nil {
+			// 全部移除：删除该角色所有 group_role 记录
+			if err := tx.Where("role_id = ?", role.ID).Delete(&GroupRole{}).Error; err != nil {
 				return err
 			}
 		}
-		// 2. 把 groupIds 中的组 role_id 设为该角色
-		if len(dedupedIDs) > 0 {
-			if err := tx.Model(&Group{}).
-				Where("id IN ? AND id != 1", dedupedIDs).
-				Update("role_id", role.ID).Error; err != nil {
+
+		// 2. 为 groupIds 中的组创建 group_role 记录（FirstOrCreate 避免重复）
+		for _, gid := range dedupedIDs {
+			if err := tx.Where(GroupRole{GroupID: gid, RoleID: role.ID}).
+				FirstOrCreate(&GroupRole{GroupID: gid, RoleID: role.ID}).Error; err != nil {
 				return err
 			}
 		}

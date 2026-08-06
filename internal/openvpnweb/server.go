@@ -473,6 +473,110 @@ func reactRuntime(page string, clientUrls ClientUrlConfig) gin.H {
 	}
 }
 
+// initBuiltinUsers 启动时初始化内置 admin 用户到 user 表
+//   - admin：FirstOrCreate，username 来自 config.json admin_username，密码来自 admin_password（bcrypt 哈希），
+//     name/email 来自 config.json admin_name/admin_email，isEnable=true，绑定 administrator 角色
+//   - admin 已存在：检查 config.json admin_password/name/email 是否变化，变化则同步到 user 表
+//
+// 密码同步策略：config.json admin_password 是 bcrypt 哈希，直接写入 user.Password（BeforeSave 钩子会 AES 加密入库，
+// AfterFind 解密回 bcrypt 哈希，登录时用 bcrypt.CompareHashAndPassword 校验）
+func initBuiltinUsers(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+
+	// 清理历史遗留的 system 账号（只保留 admin）
+	systemUsername := viper.GetString("system.base.system_username")
+	if systemUsername == "" {
+		systemUsername = "system"
+	}
+	// 找到 system 用户并删除（先删 user_role 关联，再删 user）
+	var systemUser User
+	if err := db.Where("username = ?", systemUsername).First(&systemUser).Error; err == nil && systemUser.ID > 0 {
+		if e := db.Where("user_id = ?", systemUser.ID).Delete(&UserRole{}).Error; e != nil {
+			logger.Error(context.Background(), "initBuiltinUsers 删除 system 用户 user_role 关联失败: %s", e.Error())
+		}
+		if e := db.Delete(&systemUser).Error; e != nil {
+			logger.Error(context.Background(), "initBuiltinUsers 删除 system 用户失败: %s", e.Error())
+		} else {
+			logger.Error(context.Background(), "initBuiltinUsers 已删除历史遗留的 system 用户 (id=%d)", systemUser.ID)
+		}
+	}
+
+	// admin 用户
+	if adminUsername != "" {
+		var admin User
+		err := db.Where("username = ?", adminUsername).First(&admin).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 全新部署：创建 admin 用户
+			enable := true
+			notFirst := false
+			name := viper.GetString("system.base.admin_name")
+			if name == "" {
+				name = "超级管理员"
+			}
+			admin = User{
+				Username:     adminUsername,
+				Name:         name,
+				Email:        viper.GetString("system.base.admin_email"),
+				IsEnable:     &enable,
+				IsFirstLogin: &notFirst,
+				Password:     adminPassword, // bcrypt 哈希，BeforeSave 会 AES 加密入库
+			}
+			if err := db.Create(&admin).Error; err != nil {
+				logger.Error(context.Background(), "initBuiltinUsers 创建 admin 用户失败: %s", err.Error())
+			} else {
+				// 绑定 administrator 角色
+				var adminRole Role
+				if e := db.Where("code = ?", BuiltinRoleAdministrator).First(&adminRole).Error; e == nil && adminRole.ID > 0 {
+					if e := db.Create(&UserRole{UserID: admin.ID, RoleID: adminRole.ID}).Error; e != nil {
+						logger.Error(context.Background(), "initBuiltinUsers 绑定 administrator 角色失败: %s", e.Error())
+					}
+				} else {
+					logger.Error(context.Background(), "initBuiltinUsers 未找到 administrator 角色，跳过角色绑定")
+				}
+				logger.Error(context.Background(), "initBuiltinUsers 已创建 admin 用户 (id=%d) 并绑定 administrator 角色", admin.ID)
+			}
+		} else if err != nil {
+			logger.Error(context.Background(), "initBuiltinUsers 查询 admin 用户失败: %s", err.Error())
+		} else {
+			// admin 已存在：检查 config.json 密码/name/email 是否变化并同步
+			syncAdminFromConfig(db, &admin)
+		}
+	}
+}
+
+// syncAdminFromConfig 检查 config.json 中 admin 的密码/name/email 是否变化，变化则同步到 user 表
+//   - 密码：adminPassword 全局变量来自 config.json（bcrypt 哈希），与 user 表解密后的值比对；
+//     用 struct Updates 触发 BeforeSave 钩子（AES 加密），与 Create 路径保持一致
+//   - name/email：config.json 值与 user 表值比对，用 map Updates 避免 struct 零值忽略
+func syncAdminFromConfig(db *gorm.DB, admin *User) {
+	// 密码同步：admin.Password 经 AfterFind 解密后为 bcrypt 哈希，与 adminPassword 比对
+	if adminPassword != "" && admin.Password != adminPassword {
+		if err := db.Model(&User{}).Where("id = ?", admin.ID).Updates(User{Password: adminPassword}).Error; err != nil {
+			logger.Error(context.Background(), "syncAdminFromConfig 同步 admin 密码到 user 表失败: %s", err.Error())
+		} else {
+			logger.Error(context.Background(), "syncAdminFromConfig 已同步 admin 密码变更到 user 表")
+		}
+	}
+
+	// name/email 同步
+	updates := map[string]interface{}{}
+	if name := viper.GetString("system.base.admin_name"); name != "" && name != admin.Name {
+		updates["name"] = name
+	}
+	if email := viper.GetString("system.base.admin_email"); email != "" && email != admin.Email {
+		updates["email"] = email
+	}
+	if len(updates) > 0 {
+		if err := db.Model(&User{}).Where("id = ?", admin.ID).Updates(updates).Error; err != nil {
+			logger.Error(context.Background(), "syncAdminFromConfig 同步 admin name/email 到 user 表失败: %s", err.Error())
+		} else {
+			logger.Error(context.Background(), "syncAdminFromConfig 已同步 admin name/email 变更到 user 表: %v", updates)
+		}
+	}
+}
+
 func AuthMiddleWare() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
@@ -496,16 +600,11 @@ func AuthMiddleWare() gin.HandlerFunc {
 		if username, ok := user.(string); ok {
 			c.Set("user", username)
 
-			// admin 用户直接放行，不查权限表
-			// 仅当 adminUsername 非空时才判超管，避免配置缺失导致空用户名被误判为 admin
-			if adminUsername != "" && username == adminUsername {
-				c.Set("permissions", []string{"*"})
-				c.Set("isAdmin", true)
-				c.Next()
-				return
-			}
+			// admin 用户已纳入 user 表，走标准 RBAC 加载权限码
+			// 保留 isAdmin 标志用于数据权限旁路（GetAccessible*/queryAuditLogs 等基于 username 判断）
+			isAdmin := adminUsername != "" && username == adminUsername
 
-			// 普通用户：加载权限 code 列表
+			// 统一加载权限 code 列表（admin 走 user_role 加载 administrator 角色权限码）
 			u := User{Username: username}.Info()
 			// 用户已被删除：session 仍有效但 DB 无记录，清除 session 强制登出（与角色禁用处理一致）
 			if u.ID == 0 {
@@ -533,7 +632,7 @@ func AuthMiddleWare() gin.HandlerFunc {
 				return
 			}
 			c.Set("permissions", codes)
-			c.Set("isAdmin", false)
+			c.Set("isAdmin", isAdmin)
 		}
 
 		c.Next()
@@ -593,7 +692,7 @@ func Run(info BuildInfo) {
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
 	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
-	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{})
+	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &GroupRole{})
 
 	// 初始化 IP 归属地解析器
 	if err := InitIPRegion(""); err != nil {
@@ -604,6 +703,11 @@ func Run(info BuildInfo) {
 	if err := SeedPermissionsAndRoles(db); err != nil {
 		logger.Error(context.Background(), "SeedPermissionsAndRoles 失败: %s", err.Error())
 	}
+
+	// 初始化内置 admin 用户到 user 表
+	// admin 绑定 administrator 角色；config.json 配置变更同步到 user 表
+	// 必须在 RepairAuditLogOperatorIDs/RepairNotifyReadUserIDs 之前执行，以便保留 ID 迁移到真实 user.id
+	initBuiltinUsers(db)
 
 	// 历史升级兼容：将 user.role_id（旧模型）数据回填并迁移到 user_role 表
 	// 全新部署时 user 表无 role_id 列，跳过迁移；仅在列存在时执行（避免 SQL 报错）
@@ -631,13 +735,28 @@ func Run(info BuildInfo) {
 		}
 	}
 
+	// 历史升级兼容：将 group.role_id（旧单角色模型）迁移到 group_role 多对多关联表
+	// group.role_id 字段保留但不再使用，新代码通过 group_role 表管理组-角色关联
+	var hasGroupRoleIDColumn bool
+	if err := db.Raw("SELECT COUNT(*) FROM pragma_table_info('group') WHERE name = 'role_id'").Scan(&hasGroupRoleIDColumn).Error; err != nil {
+		logger.Error(context.Background(), "检查 group.role_id 列存在性失败: %s", err.Error())
+	}
+	if hasGroupRoleIDColumn {
+		result := db.Exec("INSERT OR IGNORE INTO group_role (group_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM \"group\" WHERE role_id IS NOT NULL AND role_id > 0")
+		if result.Error != nil {
+			logger.Error(context.Background(), "迁移历史 group.role_id 到 group_role 表失败: %s", result.Error.Error())
+		} else if result.RowsAffected > 0 {
+			logger.Error(context.Background(), "已迁移 %d 条 group.role_id 到 group_role 表", result.RowsAffected)
+		}
+	}
+
 	// 修复历史 audit_logs 中 operator_id=0 的记录（根据 operator 反向查找 user.id）
 	RepairAuditLogOperatorIDs()
 
 	// 修复历史 history 中 user_id=0 的记录（根据 username/common_name 反向查找 user.id）
 	RepairHistoryUserIDs()
 
-	// 修复历史 user_notify_read 中 user_id=0 的记录（admin/system 内置账号改用保留 ID）
+	// 修复历史 user_notify_read 中 user_id=0 的记录（admin 内置账号改用真实 ID，历史 system 记录统一迁到 admin）
 	RepairNotifyReadUserIDs()
 
 	// 旧表 channel_type 列数据迁移到新 channel_name 列
@@ -722,12 +841,22 @@ func Run(info BuildInfo) {
 		c.ShouldBind(&u)
 
 		if u.Username == adminUsername {
-			if dp, err := aes.AesDecrypt(adminPassword, secretKey); err == nil {
+			// admin 登录：bcrypt 校验密码（user 表 admin.Password 解密后为 bcrypt 哈希）
+			adminUser := User{Username: u.Username}.Info()
+			if adminUser.ID == 0 {
+				setLoginFail(cip)
+				c.JSON(401, gin.H{"message": "管理员账户未初始化，请重启服务"})
+				return
+			}
+			// 兼容历史：检测旧的 AES 加密密码格式（config.json 迁移场景）
+			if dp, e := aes.AesDecrypt(adminPassword, secretKey); e == nil {
 				if subtle.ConstantTimeCompare([]byte(dp), []byte(u.Password)) == 1 {
 					passwd, _ := bcrypt.GenerateFromPassword([]byte("admin"), 12)
 					viper.Set("system.base.admin_password", string(passwd))
 					viper.WriteConfig()
-
+					adminPassword = string(passwd)
+					// 同步到 user 表（触发 BeforeSave AES 加密）
+					_ = db.Model(&User{}).Where("id = ?", adminUser.ID).Updates(User{Password: string(passwd)})
 					c.JSON(401, gin.H{"message": "检测到旧的密码加密格式，已重置为默认密码，请使用默认密码 admin 登录后修改"})
 					return
 				}
@@ -738,27 +867,27 @@ func Run(info BuildInfo) {
 				session.Save()
 
 				resetLoginFail(cip)
-				adminUser := User{Username: u.Username}.Info()
-				adminID := adminUser.ID
-				if adminID == 0 {
-					// admin 用户在 user 表中无记录，使用 0 作为占位 ID（前端按 username 查询资料）
-					adminID = 0
+				// 加载 administrator 角色权限码（走标准 RBAC）
+				permCodes, perr := adminUser.LoadPermissionCodes(db)
+				if perr != nil || permCodes == nil {
+					permCodes = []string{}
 				}
+				roleIDs, roleNames := adminUser.LoadRoleIDsAndNames(db)
 				c.JSON(200, gin.H{
-				"message":  "登录成功",
-				"redirect": "/admin",
-				"user": gin.H{
-					"id":           adminID,
-					"username":     adminUser.Username,
-					"name":         adminUser.Name,
-					"email":        adminUser.Email,
-					"isFirstLogin": false,
-					"isAdmin":      true,
-					"permissions":  []string{"*"},
-					"roleIds":      []uint{},
-					"roleNames":    []string{},
-				},
-			})
+					"message":  "登录成功",
+					"redirect": "/admin",
+					"user": gin.H{
+						"id":           adminUser.ID,
+						"username":     adminUser.Username,
+						"name":         adminUser.Name,
+						"email":        adminUser.Email,
+						"isFirstLogin": false,
+						"isAdmin":      true,
+						"permissions":  permCodes,
+						"roleIds":      roleIDs,
+						"roleNames":    roleNames,
+					},
+				})
 				return
 			} else {
 				err = fmt.Errorf("密码错误")
@@ -1121,6 +1250,13 @@ func Run(info BuildInfo) {
 				case "system.base.admin_password":
 					ep, _ := bcrypt.GenerateFromPassword([]byte(val), 12)
 					val = string(ep)
+					// 同步到 user 表 admin 用户的 password（struct Updates 触发 BeforeSave AES 加密）
+					if adminUsername != "" {
+						if e := db.Model(&User{}).Where("username = ?", adminUsername).Updates(User{Password: val}).Error; e != nil {
+							logger.Error(context.Background(), "同步 admin 密码到 user 表失败: %s", e.Error())
+						}
+						adminPassword = val
+					}
 				case "system.email.password":
 					val, _ = aes.AesEncrypt(val, secretKey)
 				case "system.base.max_duplicate_login":
@@ -1683,16 +1819,6 @@ func Run(info BuildInfo) {
 			}
 			u := User{Username: currentUsername}.Info()
 			if u.ID == 0 {
-				// 系统内置账号（admin）处理：从配置文件获取信息
-				if adminUsername != "" && currentUsername == adminUsername {
-					c.JSON(http.StatusOK, gin.H{
-						"id":       0,
-						"username": currentUsername,
-						"name":     viper.GetString("system.base.admin_name"),
-						"email":    viper.GetString("system.base.admin_email"),
-					})
-					return
-				}
 				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
 				return
 			}
@@ -1732,22 +1858,7 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			// 系统内置账号（admin）保存到配置文件
-			if adminUsername != "" && currentUsername == adminUsername {
-				name := c.Request.FormValue("name")
-				email := c.Request.FormValue("email")
-				if name != "" {
-					viper.Set("system.base.admin_name", name)
-				}
-				if email != "" {
-					viper.Set("system.base.admin_email", email)
-				}
-				viper.WriteConfig()
-				c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
-				return
-			}
-
-			// 普通用户：更新数据库中当前用户的 name/email
+			// 统一更新 user 表中当前用户的 name/email（admin 已纳入 user 表）
 			u := User{Username: currentUsername}.Info()
 			if u.ID == 0 {
 				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
@@ -1888,14 +1999,10 @@ func Run(info BuildInfo) {
 					return
 				}
 
-				// 导入用户：角色继承优先级与单用户创建一致
-			// 优先继承所在组的 RoleID（校验存在且启用），否则回退到普通用户默认角色
+				// 导入用户：角色继承与单用户创建一致
+			// 不再自动继承组角色到 user_role，组角色权限在 LoadPermissionCodes 中动态合并
+			// 此处仅设置默认角色，确保用户有基本权限
 			importDefaultRoleID := GetDefaultRoleID(db)
-			var importGroup Group
-			if err := db.Where("id = ?", gid).First(&importGroup).Error; err != nil {
-				// 组不存在时使用默认角色兜底
-				importGroup.RoleID = nil
-			}
 
 			for {
 				record, err := reader.Read()
@@ -1921,10 +2028,8 @@ func Run(info BuildInfo) {
 				OvpnConfig: record[7],
 				Gid:        uint(gid64),
 			}
-			// 角色继承：组角色 > 默认角色（与单用户创建逻辑一致）
-			if importGroup.RoleID != nil && *importGroup.RoleID > 0 && validateRoleID(db, importGroup.RoleID) == nil {
-				newUser.RoleIDs = []uint{*importGroup.RoleID}
-			} else if importDefaultRoleID > 0 {
+			// 角色设置：仅设置默认角色（与单用户创建逻辑一致）
+			if importDefaultRoleID > 0 {
 				newUser.RoleIDs = []uint{importDefaultRoleID}
 			}
 
@@ -1969,20 +2074,11 @@ func Run(info BuildInfo) {
 			}
 		}
 
-		// 未指定角色时：优先继承所在组的角色，否则回退到普通用户默认角色
+		// 未指定角色时：不再自动继承组角色到 user_role
+		// 组角色权限在 LoadPermissionCodes 中动态合并（用户直接角色 ∪ 组角色权限）
+		// 此处仅设置默认角色，确保用户有基本权限
 		if len(u.RoleIDs) == 0 {
-			// 优先继承所在组的角色（校验角色存在且启用，否则回退到默认角色）
-			var group Group
-			if err := db.Where("id = ?", u.Gid).First(&group).Error; err == nil && group.RoleID != nil && *group.RoleID > 0 {
-				if validateRoleID(db, group.RoleID) == nil {
-					u.RoleIDs = []uint{*group.RoleID}
-				} else {
-					// 组绑定的角色已禁用或不存在，回退到默认角色
-					if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
-						u.RoleIDs = []uint{defaultRoleID}
-					}
-				}
-			} else if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+			if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
 				u.RoleIDs = []uint{defaultRoleID}
 			}
 		}
@@ -2203,6 +2299,12 @@ func Run(info BuildInfo) {
 			user := u.Get(id)
 			if user.ID == 0 {
 				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+				return
+			}
+
+			// 内置 admin 用户不允许删除
+			if user.Username == adminUsername {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "内置 admin 用户不允许删除"})
 				return
 			}
 
@@ -2899,23 +3001,6 @@ func Run(info BuildInfo) {
 			return
 		}
 
-		if adminUsername != "" && u.Username == adminUsername {
-			u.Name = viper.GetString("system.base.admin_name")
-			u.Email = viper.GetString("system.base.admin_email")
-			c.JSON(http.StatusOK, gin.H{
-				"id":           u.ID,
-				"username":     u.Username,
-				"name":         u.Name,
-				"email":        u.Email,
-				"isFirstLogin": false,
-				"isAdmin":      true,
-				"permissions":  []string{"*"},
-				"roleIds":      []uint{},
-				"roleNames":    []string{},
-			})
-			return
-		}
-
 		userInfo := u.Info()
 		// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
 		if userInfo.ID == 0 {
@@ -2941,7 +3026,7 @@ func Run(info BuildInfo) {
 			"name":         userInfo.Name,
 			"email":        userInfo.Email,
 			"isFirstLogin": userInfo.IsFirstLogin,
-			"isAdmin":      false,
+			"isAdmin":      adminUsername != "" && userInfo.Username == adminUsername,
 			"permissions":  permCodes,
 			"roleIds":      userRoleIDs,
 			"roleNames":    userRoleNames,
@@ -2955,46 +3040,29 @@ func Run(info BuildInfo) {
 				currentUsername = user
 			}
 
-			// admin 走配置文件分支；普通用户可改自己（cu.ID == u.ID）
-			if currentUsername != adminUsername {
-				cu := User{Username: currentUsername}.Info()
-				// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
-				if cu.ID == 0 {
-					c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
-					return
-				}
-				formID := c.PostForm("id")
-				formIDUint, _ := strconv.ParseUint(formID, 10, 64)
-				if formID == "" || cu.ID != uint(formIDUint) {
-					c.JSON(http.StatusForbidden, gin.H{"message": "仅可修改自己的资料"})
-					return
-				}
-				// 普通用户：更新 user 表的 name/email
-				// 使用 struct Updates 触发 BeforeSave 钩子（bluemonday XSS 净化）
-				name := c.PostForm("name")
-				email := c.PostForm("email")
-				if err := db.Model(&cu).Updates(User{Name: name, Email: email}).Error; err != nil {
-					recordAudit(c, "user", "update_own", cu.Username, false, err.Error())
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-					return
-				}
-				recordAudit(c, "user", "update_own", cu.Username, true, "更新个人资料")
-				c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
+			// 统一走 user 表更新（admin 已纳入 user 表，与普通用户一致）
+			cu := User{Username: currentUsername}.Info()
+			// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+			if cu.ID == 0 {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
 				return
 			}
-
+			formID := c.PostForm("id")
+			formIDUint, _ := strconv.ParseUint(formID, 10, 64)
+			if formID == "" || cu.ID != uint(formIDUint) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "仅可修改自己的资料"})
+				return
+			}
+			// 更新 user 表的 name/email
+			// 使用 struct Updates 触发 BeforeSave 钩子（bluemonday XSS 净化）
 			name := c.PostForm("name")
 			email := c.PostForm("email")
-
-			viper.Set("system.base.admin_name", name)
-			viper.Set("system.base.admin_email", email)
-			err := viper.WriteConfig()
-			if err != nil {
+			if err := db.Model(&cu).Updates(User{Name: name, Email: email}).Error; err != nil {
+				recordAudit(c, "user", "update_own", cu.Username, false, err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
-
-			recordAudit(c, "user", "update_own", adminUsername, true, "更新个人资料")
+			recordAudit(c, "user", "update_own", cu.Username, true, "更新个人资料")
 			c.JSON(http.StatusOK, gin.H{"message": "个人资料已更新"})
 		})
 
@@ -3029,28 +3097,37 @@ func Run(info BuildInfo) {
 			currentPass := c.Request.PostFormValue("currentPass")
 
 			if currentUsername == adminUsername {
-				if currentPass == "" {
-					c.JSON(http.StatusBadRequest, gin.H{"message": "管理员修改密码需要输入当前密码"})
-					return
-				}
-				if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass)) != nil {
-					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
-					return
-				}
-
-				passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-					return
-				}
-
-				viper.Set("system.base.admin_password", string(passwd))
-				viper.WriteConfig()
-				adminPassword = string(passwd)
-
-				c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+			if currentPass == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "管理员修改密码需要输入当前密码"})
 				return
 			}
+			if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass)) != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
+				return
+			}
+
+			passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+
+			// 同步到 user 表 admin 用户的 password（struct Updates 触发 BeforeSave AES 加密）
+			adminUser := User{Username: adminUsername}.Info()
+			if adminUser.ID > 0 {
+				if e := db.Model(&User{}).Where("id = ?", adminUser.ID).Updates(User{Password: string(passwd)}).Error; e != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "同步密码到 user 表失败: " + e.Error()})
+					return
+				}
+			}
+
+			viper.Set("system.base.admin_password", string(passwd))
+			viper.WriteConfig()
+			adminPassword = string(passwd)
+
+			c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+			return
+		}
 
 			if currentPass != "" {
 				if cu.Info().Password != currentPass {

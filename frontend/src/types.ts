@@ -121,6 +121,8 @@ export interface UserRecord {
   roleIds?: number[];
   /** RBAC：角色名称列表（仅用于展示，由后端 join 返回） */
   roleNames?: string[];
+  /** 内置 admin 用户标记（运行时计算，前端用于隐藏删除按钮） */
+  isBuiltin?: boolean;
 }
 
 export interface ClientRecord {

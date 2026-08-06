@@ -27,12 +27,10 @@ type AuditLog struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
-// AdminAuditOperatorID 为系统内置 admin 账户在 audit_logs 中使用的保留 operator_id
-// admin 不在 user 表中，但为了避免 operator_id=0，写入审计日志时使用该保留值
+// AdminAuditOperatorID / SystemAuditOperatorID 为历史版本使用的保留 operator_id
+// admin/system 现已纳入 user 表，新写入的审计日志使用真实 user.id；
+// 这两个常量仅用于 RepairAuditLogOperatorIDs 迁移历史保留 ID 记录
 const AdminAuditOperatorID uint = 0xFFFFFFFF
-
-// SystemAuditOperatorID 为 system 操作人在 audit_logs 中使用的保留 operator_id
-// system 不是真实用户，但为了避免 operator_id=0，写入审计日志时使用该保留值
 const SystemAuditOperatorID uint = 0xFFFFFFFE
 
 var auditTargets = []struct {
@@ -114,7 +112,11 @@ func auditOperator(c *gin.Context) string {
 	if user, ok := sessions.Default(c).Get("user").(string); ok && user != "" {
 		return user
 	}
-	return "system"
+	// 兜底使用 admin（system 账号已移除，只保留 admin）
+	if adminUsername != "" {
+		return adminUsername
+	}
+	return "admin"
 }
 
 func recordAudit(c *gin.Context, module, action, target string, success bool, message string) {
@@ -125,17 +127,9 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 	operator := auditOperator(c)
 	operatorID := GetUserIDByUsername(operator)
 
-	// 系统内置 admin 账户不在 user 表中，使用保留 ID 避免 operator_id=0
-	if operatorID == 0 && adminUsername != "" && operator == adminUsername {
-		operatorID = AdminAuditOperatorID
-	}
-
-	// system 操作人不是真实用户，使用保留 ID 避免 operator_id=0
-	if operator == "system" {
-		operatorID = SystemAuditOperatorID
-	}
-
-	if operator != "" && operator != "system" && operatorID == 0 {
+	// admin/system 已纳入 user 表，统一使用真实 user.id；
+	// 若解析失败（理论上不会发生，除非 user 表未初始化），记录告警
+	if operator != "" && operatorID == 0 {
 		logger.Error(context.Background(), "[recordAudit] 无法解析操作人ID operator=%q module=%s action=%s target=%s", operator, module, action, target)
 	}
 
@@ -154,18 +148,19 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 	}
 }
 
-// RepairAuditLogOperatorIDs 修复历史 audit_logs 中 operator_id=0 的记录
-// 普通用户根据 operator 反向查找 user.id 回填；admin 使用保留 ID；system 使用保留 ID；空操作人跳过
+// RepairAuditLogOperatorIDs 修复历史 audit_logs 中 operator_id=0 或使用保留 ID 的记录
+// admin/system 现已纳入 user 表，统一迁移到真实 user.id
 func RepairAuditLogOperatorIDs() {
 	if db == nil {
 		return
 	}
 
+	// 收集需要修复的 operator 列表（operator_id=0 或为历史保留 ID）
 	var operators []string
 	if err := db.WithContext(context.Background()).
 		Model(&AuditLog{}).
 		Distinct("operator").
-		Where("operator_id = ? AND operator != ?", 0, "").
+		Where("operator != ? AND (operator_id = ? OR operator_id = ? OR operator_id = ?)", "", 0, AdminAuditOperatorID, SystemAuditOperatorID).
 		Pluck("operator", &operators).Error; err != nil {
 		logger.Error(context.Background(), "查询待修复 audit_log operator 失败: %s", err.Error())
 		return
@@ -173,22 +168,15 @@ func RepairAuditLogOperatorIDs() {
 
 	var totalFixed int64
 	for _, op := range operators {
-		var userID uint
-		switch {
-		case op == "system":
-			userID = SystemAuditOperatorID
-		case adminUsername != "" && op == adminUsername:
-			userID = AdminAuditOperatorID
-		default:
-			userID = GetUserIDByUsername(op)
-			if userID == 0 {
-				continue
-			}
+		userID := GetUserIDByUsername(op)
+		if userID == 0 {
+			continue
 		}
 
+		// 修复该 operator 的 operator_id=0 或保留 ID 的记录
 		result := db.WithContext(context.Background()).
 			Model(&AuditLog{}).
-			Where("operator_id = ? AND operator = ?", 0, op).
+			Where("operator = ? AND (operator_id = ? OR operator_id = ? OR operator_id = ?)", op, 0, AdminAuditOperatorID, SystemAuditOperatorID).
 			Update("operator_id", userID)
 		if result.Error != nil {
 			logger.Error(context.Background(), "修复 operator=%s 的 audit_log 失败: %s", op, result.Error.Error())
@@ -198,7 +186,7 @@ func RepairAuditLogOperatorIDs() {
 	}
 
 	if totalFixed > 0 {
-		logger.Error(context.Background(), "已修复 %d 条 operator_id=0 的审计日志", totalFixed)
+		logger.Error(context.Background(), "已修复 %d 条 audit_log 的 operator_id（保留 ID → 真实 user.id）", totalFixed)
 	}
 }
 

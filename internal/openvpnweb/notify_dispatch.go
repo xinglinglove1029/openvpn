@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/viper"
+
 	"openvpn-web/internal/openvpnweb/notify"
 )
 
@@ -48,7 +50,16 @@ func dispatchNotification(event NotifyEvent, title, content string) {
 	}
 	enabled := (&NotificationChannel{}).EnabledChannels()
 	if len(enabled) == 0 {
-		recordNotifyLog(event, "system", "系统", true, content)
+		// 无启用渠道时，操作人使用 admin（system 账号已移除）
+		systemOperator := "admin"
+		if adminUsername != "" {
+			systemOperator = adminUsername
+		}
+		systemName := "超级管理员"
+		if adminName := viper.GetString("system.base.admin_name"); adminName != "" {
+			systemName = adminName
+		}
+		recordNotifyLog(event, systemOperator, systemName, true, content)
 		return
 	}
 

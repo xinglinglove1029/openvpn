@@ -47,6 +47,8 @@ type User struct {
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty" form:"lastLoginAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 	UpdatedAt    time.Time  `json:"updatedAt,omitempty" form:"updatedAt,omitempty"`
+	// 非数据库字段：内置 admin 用户标记，运行时计算，前端用于隐藏删除按钮
+	IsBuiltin bool `gorm:"-" json:"isBuiltin,omitempty"`
 }
 
 // ErrRoleDisabled 角色已禁用错误
@@ -56,32 +58,21 @@ var ErrRoleDisabled = fmt.Errorf("角色已禁用，请联系管理员")
 var ErrRoleNotFound = errors.New("角色不存在或已删除")
 
 // LoadPermissionCodes 加载用户权限 code 列表
-// - admin 用户（用户名等于 adminUsername 且 adminUsername 非空）返回 ["*"]
-// - 普通用户从 user_role 表查所有 role_id，逐角色加载权限码并集去重
-// - 无角色绑定时回退默认角色；默认角色不存在返回空列表
+// 权限合并逻辑（全部取并集去重）：
+//  1. 用户直接绑定的角色权限（user_role 表）
+//  2. 用户所属组（Gid）绑定的角色权限（group_role 表）
+//  3. 若以上均为空，回退默认角色权限
+//
+// admin 用户已纳入 user 表并绑定 administrator 角色，走标准 RBAC 加载
 func (u *User) LoadPermissionCodes(d *gorm.DB) ([]string, error) {
-	// 仅当 adminUsername 非空时才判超管，避免配置缺失导致空用户名被误判为 admin
-	if adminUsername != "" && u.Username == adminUsername {
-		return []string{"*"}, nil
-	}
+	codeSet := make(map[string]bool)
 
-	// 从 user_role 表查所有 role_id
-	var roleIDs []uint
-	if err := d.Table("user_role").Where("user_id = ?", u.ID).Pluck("role_id", &roleIDs).Error; err != nil {
+	// 1. 用户直接绑定的角色权限
+	var userRoleIDs []uint
+	if err := d.Table("user_role").Where("user_id = ?", u.ID).Pluck("role_id", &userRoleIDs).Error; err != nil {
 		return nil, err
 	}
-	if len(roleIDs) == 0 {
-		// 无绑定时回退默认角色
-		defaultRoleID := GetDefaultRoleID(d)
-		if defaultRoleID == 0 {
-			return []string{}, nil
-		}
-		roleIDs = []uint{defaultRoleID}
-	}
-
-	// 逐角色加载权限码，并集去重
-	codeSet := make(map[string]bool)
-	for _, rid := range roleIDs {
+	for _, rid := range userRoleIDs {
 		codes, err := LoadRolePermissionCodes(d, rid)
 		if err != nil {
 			// 禁用/不存在的角色跳过
@@ -91,6 +82,40 @@ func (u *User) LoadPermissionCodes(d *gorm.DB) ([]string, error) {
 			codeSet[c] = true
 		}
 	}
+
+	// 2. 用户所属组绑定的角色权限（并集）
+	if u.Gid > 0 {
+		var groupRoleIDs []uint
+		if err := d.Table("group_role").Where("group_id = ?", u.Gid).Pluck("role_id", &groupRoleIDs).Error; err != nil {
+			logger.Error(context.Background(), "LoadPermissionCodes 查询 group_role 失败: %s", err.Error())
+		} else {
+			for _, rid := range groupRoleIDs {
+				codes, err := LoadRolePermissionCodes(d, rid)
+				if err != nil {
+					continue
+				}
+				for _, c := range codes {
+					codeSet[c] = true
+				}
+			}
+		}
+	}
+
+	// 3. 若用户和组均无角色绑定，回退默认角色
+	if len(userRoleIDs) == 0 && len(codeSet) == 0 {
+		defaultRoleID := GetDefaultRoleID(d)
+		if defaultRoleID == 0 {
+			return []string{}, nil
+		}
+		codes, err := LoadRolePermissionCodes(d, defaultRoleID)
+		if err != nil {
+			return []string{}, nil
+		}
+		for _, c := range codes {
+			codeSet[c] = true
+		}
+	}
+
 	result := make([]string, 0, len(codeSet))
 	for code := range codeSet {
 		result = append(result, code)
@@ -99,7 +124,7 @@ func (u *User) LoadPermissionCodes(d *gorm.DB) ([]string, error) {
 }
 
 // LoadRoleIDsAndNames 加载用户绑定的所有角色 ID 与名称（用于登录响应、/me 接口等）
-// admin 用户返回空切片（admin 绕过权限检查，不参与角色绑定）
+// admin 用户已纳入 user 表并绑定 administrator 角色，走标准 user_role 加载
 // 出错或无绑定时返回两个等长空切片，确保调用方解构后长度始终一致
 func (u *User) LoadRoleIDsAndNames(d *gorm.DB) ([]uint, []string) {
 	var roleIDs []uint
@@ -193,10 +218,8 @@ func (u *User) Create() error {
 		return fmt.Errorf("非法请求")
 	}
 
-	if u.Username == adminUsername {
-		return fmt.Errorf("用户名与系统账户冲突")
-	}
-
+	// admin 用户由 initBuiltinUsers 在启动时创建，此处不再手动拦截同名用户；
+	// 若运行期尝试创建与 admin 同名的用户，由 user 表 username UNIQUE 约束拒绝
 	if strings.TrimSpace(u.Email) == "" {
 		return fmt.Errorf("邮箱为必填项")
 	}

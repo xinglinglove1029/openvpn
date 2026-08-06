@@ -1017,8 +1017,6 @@ interface RoleAssignGroup {
   id: number;
   name: string;
   parentId?: number | null;
-  roleId?: number | null;
-  roleName?: string;
 }
 
 interface RoleAssignGroupsResponse {
@@ -1179,13 +1177,6 @@ function GroupAssignDialog({
       (id) => id !== item.id && checkedIds.has(id),
     ).length;
     const indeterminate = !checked && descendantCheckedCount > 0;
-    // 当前角色 ID，用于判断"将从原角色转移"
-    const currentRoleId = role?.id;
-    const isAssignedToOtherRole =
-      original.roleId != null &&
-      original.roleId !== currentRoleId &&
-      !isDefault;
-    const isAssignedToCurrentRole = original.roleId === currentRoleId;
 
     return (
       <div key={item.id} className="select-none">
@@ -1225,25 +1216,6 @@ function GroupAssignDialog({
               默认组
             </Badge>
           )}
-          {/* 当前角色 Badge */}
-          {!isDefault && isAssignedToCurrentRole && original.roleName && (
-            <Badge
-              variant="outline"
-              className="bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)] text-[10px] px-1.5 py-0"
-            >
-              {original.roleName}
-            </Badge>
-          )}
-          {/* 已绑定其他角色：橙色提示 */}
-          {!isDefault && isAssignedToOtherRole && original.roleName && (
-            <Badge
-              variant="outline"
-              className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0"
-            >
-              将从「{original.roleName}」转移
-            </Badge>
-          )}
-          {/* Default 组提示已通过 Checkbox title + Badge 展示，避免冗余 */}
           {hasChildren && (
             <span className="ml-auto text-[10px] text-muted-foreground">
               {descendantCheckedCount}/{subtreeIds.length - 1}
@@ -1394,10 +1366,6 @@ export default function RolesPage() {
   }
 
   function askDelete(role: Role) {
-    if (role.isBuiltin) {
-      toast.error('内置角色不允许删除');
-      return;
-    }
     setConfirm({
       title: '删除角色',
       message: `确认要删除角色「${role.name}」吗？删除后无法恢复，且若角色下仍有用户将拒绝删除。`,
@@ -1584,35 +1552,19 @@ export default function RolesPage() {
                 编辑
               </Button>
             </HasPermission>
-            <HasPermission
-              code="role:delete"
-              fallback={
+            <HasPermission code="role:delete">
+              {!item.isBuiltin && (
                 <Button
                   size="sm"
                   variant="ghost"
                   className="h-7 px-2 text-destructive hover:text-destructive"
-                  disabled
-                  title={item.isBuiltin ? '内置角色不允许删除' : '无权限'}
+                  onClick={() => askDelete(item)}
+                  title="删除角色"
                 >
                   <Trash2 className="h-3.5 w-3.5 mr-1" />
                   删除
                 </Button>
-              }
-            >
-              <Button
-                size="sm"
-                variant="ghost"
-                className={cn(
-                  'h-7 px-2 text-destructive hover:text-destructive',
-                  item.isBuiltin && 'opacity-40 cursor-not-allowed',
-                )}
-                disabled={item.isBuiltin}
-                onClick={() => !item.isBuiltin && askDelete(item)}
-                title={item.isBuiltin ? '内置角色不允许删除' : '删除角色'}
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1" />
-                删除
-              </Button>
+              )}
             </HasPermission>
           </div>
         ),

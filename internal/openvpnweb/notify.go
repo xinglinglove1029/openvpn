@@ -142,13 +142,34 @@ func migrateNotifyLogChannelName() {
 	if db == nil {
 		return
 	}
+	// 先检查旧表是否存在 channel_type 列（SQLite 下直接 PRAGMA 查询）
+	ctx := context.Background()
+	var hasChannelType bool
+	rows, err := db.WithContext(ctx).Raw("PRAGMA table_info(notify_logs)").Rows()
+	if err == nil && rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dflt_value interface{}
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err == nil {
+				if name == "channel_type" {
+					hasChannelType = true
+					break
+				}
+			}
+		}
+	}
+	if !hasChannelType {
+		// 新版数据库已删除旧 channel_type 列，跳过迁移
+		return
+	}
 	// AutoMigrate 已经把新列加上了，这里做一次性数据迁移
-	// GORM 用 Column 名是 snake_case，所以 SQL 里用 channel_name / channel_type
-	if err := db.WithContext(context.Background()).Exec(
+	if err := db.WithContext(ctx).Exec(
 		"UPDATE notify_logs SET channel_name = channel_type WHERE channel_name IS NULL OR channel_name = ''",
 	).Error; err != nil {
-		// 旧表可能没有 channel_type 列，忽略错误
-		logger.Error(context.Background(), "migrate notify_logs channel_name: %s", err)
+		logger.Error(ctx, "migrate notify_logs channel_name: %s", err)
 	}
 }
 

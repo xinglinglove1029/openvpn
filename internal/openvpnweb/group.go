@@ -9,13 +9,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// GroupRole 用户组-角色多对多关联表
+// 一个用户组可绑定多个角色，组内用户的权限 = 用户直接角色权限 ∪ 组角色权限（并集）
+type GroupRole struct {
+	GroupID   uint      `gorm:"column:group_id;primaryKey" json:"groupId" form:"groupId"`
+	RoleID    uint      `gorm:"column:role_id;primaryKey" json:"roleId" form:"roleId"`
+	CreatedAt time.Time `gorm:"column:created_at" json:"createdAt"`
+}
+
+func (GroupRole) TableName() string { return "group_role" }
+
 type Group struct {
 	ID       uint    `gorm:"primarykey" json:"id" form:"id"`
 	Name     string  `json:"name" form:"name"`
 	ParentID *uint   `json:"parent_id" form:"parent_id"`
 	Config   *string `json:"config" form:"config"`
-	// RoleID 为该组的"默认角色"：新建用户未指定角色时继承所在组的 RoleID
-	// 使用 *uint 指针：nil 表示未绑定；Default 组（ID=1）保持未绑定
+	// RoleID 已废弃：保留字段用于数据迁移兼容，实际多角色关联存储在 group_role 表
+	// 新代码应使用 group_role 表查询组绑定的角色
 	RoleID    *uint     `gorm:"column:role_id;default:NULL" json:"roleId" form:"roleId"`
 	Users     []User    `gorm:"foreignKey:Gid;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 	CreatedAt time.Time `json:"createdAt" form:"createdAt"`
@@ -76,16 +86,8 @@ func (g *Group) Update() error {
 		updates["config"] = g.Config
 	}
 
-	// role_id 仅在显式非 nil 时更新，避免分组编辑表单不传 roleId 时清空已有绑定
-	// role_id 的主要管理入口是 roleAssignGroupsHandler（PUT /ovpn/role/:id/groups）
-	// Default 组（ID=1）拒绝修改 role_id，保持未绑定
-	// 校验角色存在且启用，避免产生孤儿 group.role_id
-	if g.ID != 1 && g.RoleID != nil && *g.RoleID > 0 {
-		if err := validateRoleID(db, g.RoleID); err != nil {
-			return err
-		}
-		updates["role_id"] = *g.RoleID
-	}
+	// role_id 已废弃：组的多角色关联通过 group_role 表管理（roleAssignGroupsHandler）
+	// Group.Update 不再处理 role_id 字段
 
 	if g.ID == 1 {
 		updates["parent_id"] = nil
@@ -191,6 +193,13 @@ func (g *Group) GetUsers(id string) []User {
 	if result.Error != nil {
 		logger.Error(context.Background(), result.Error.Error())
 		return []User{}
+	}
+
+	// 标记内置 admin 用户，前端用于隐藏删除按钮
+	for i := range users {
+		if users[i].Username == adminUsername {
+			users[i].IsBuiltin = true
+		}
 	}
 
 	return users

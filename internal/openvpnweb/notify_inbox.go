@@ -24,23 +24,11 @@ func (UserNotifyRead) TableName() string {
 }
 
 // resolveNotifyUserID 根据 username 解析 user_notify_read 表中使用的 user_id
-// - 普通用户：查 users 表获取真实 ID
-// - 内置 admin 账号（不在 users 表）：使用保留 ID AdminAuditOperatorID，与 audit_logs 保持一致
-// - system 操作人：使用保留 ID SystemAuditOperatorID
-// 这样避免 user_id=0 与其他内置账号冲突，也避免依赖 username 字段查询的旧表索引差异
+// admin/system 已纳入 user 表，统一查 users 表获取真实 ID
 func resolveNotifyUserID(username string) uint {
 	if username == "" {
 		return 0
 	}
-	// 内置 admin 账号：使用保留 ID，不查 users 表
-	if adminUsername != "" && username == adminUsername {
-		return AdminAuditOperatorID
-	}
-	// system 操作人：使用保留 ID
-	if username == "system" {
-		return SystemAuditOperatorID
-	}
-	// 普通用户：查 users 表
 	return GetUserIDByUsername(username)
 }
 
@@ -170,35 +158,60 @@ func maxNotifyLogID(currentUsername string, isAdmin bool) uint {
 	return *maxID
 }
 
-// RepairNotifyReadUserIDs 修复历史 user_notify_read 表中 user_id=0 的记录
-// 旧版代码对内置 admin 账号无法写入 user_id（GetUserIDByUsername 返回 0 导致直接失败），
-// 现版改用保留 ID AdminAuditOperatorID，此函数将历史 user_id=0 且 username=admin 的记录迁移到保留 ID
+// RepairNotifyReadUserIDs 修复历史 user_notify_read 表中 user_id=0 或使用保留 ID 的记录
+// admin 已纳入 user 表，统一迁移到真实 user.id；system 账号已移除，历史 system 记录迁移到 admin
 func RepairNotifyReadUserIDs() {
 	if db == nil {
 		return
 	}
 
-	// 修复 admin 记录：user_id=0 且 username=admin → user_id=AdminAuditOperatorID
+	// 修复 admin 记录：user_id=0 或保留 ID 且 username=admin → admin 真实 ID
+	adminID := uint(0)
 	if adminUsername != "" {
-		result := db.WithContext(context.Background()).
-			Model(&UserNotifyRead{}).
-			Where("user_id = ? AND username = ?", 0, adminUsername).
-			Update("user_id", AdminAuditOperatorID)
-		if result.Error != nil {
-			logger.Error(context.Background(), "修复 admin user_notify_read user_id 失败: %s", result.Error.Error())
-		} else if result.RowsAffected > 0 {
-			logger.Error(context.Background(), "已修复 %d 条 admin user_notify_read 记录的 user_id → %d", result.RowsAffected, AdminAuditOperatorID)
+		adminID = GetUserIDByUsername(adminUsername)
+		if adminID > 0 {
+			result := db.WithContext(context.Background()).
+				Model(&UserNotifyRead{}).
+				Where("username = ? AND (user_id = ? OR user_id = ?)", adminUsername, 0, AdminAuditOperatorID).
+				Update("user_id", adminID)
+			if result.Error != nil {
+				logger.Error(context.Background(), "修复 admin user_notify_read user_id 失败: %s", result.Error.Error())
+			} else if result.RowsAffected > 0 {
+				logger.Error(context.Background(), "已修复 %d 条 admin user_notify_read 记录的 user_id → %d", result.RowsAffected, adminID)
+			}
 		}
 	}
 
-	// 修复 system 记录：user_id=0 且 username=system → user_id=SystemAuditOperatorID
-	result := db.WithContext(context.Background()).
-		Model(&UserNotifyRead{}).
-		Where("user_id = ? AND username = ?", 0, "system").
-		Update("user_id", SystemAuditOperatorID)
-	if result.Error != nil {
-		logger.Error(context.Background(), "修复 system user_notify_read user_id 失败: %s", result.Error.Error())
-	} else if result.RowsAffected > 0 {
-		logger.Error(context.Background(), "已修复 %d 条 system user_notify_read 记录的 user_id → %d", result.RowsAffected, SystemAuditOperatorID)
+	// 历史 system 记录：username=system 或保留 ID=SystemAuditOperatorID → 迁移到 adminID（若存在）
+	// 策略：逐条迁移，对同一 scope 下 admin 已存在的记录（UNIQUE 冲突）直接删除 system 那条（admin 已读优先级更高）
+	if adminID > 0 {
+		// 1. 先尝试把不会冲突的记录迁过去（WHERE admin 同 scope 下不存在）
+		result := db.WithContext(context.Background()).Exec(`
+			UPDATE user_notify_read
+			SET user_id = ?, username = ?
+			WHERE (username = ? OR user_id = ? OR user_id = ?)
+			  AND username != ?
+			  AND NOT EXISTS (
+				SELECT 1 FROM user_notify_read AS t2
+				WHERE t2.username = ? AND t2.scope = user_notify_read.scope
+			  )
+		`, adminID, adminUsername, "system", 0, SystemAuditOperatorID, adminUsername, adminUsername)
+		if result.Error != nil {
+			logger.Error(context.Background(), "修复 system user_notify_read (无冲突迁移) 失败: %s", result.Error.Error())
+		} else if result.RowsAffected > 0 {
+			logger.Error(context.Background(), "已修复 %d 条 system user_notify_read 记录 → admin (id=%d, 无冲突)", result.RowsAffected, adminID)
+		}
+
+		// 2. 剩余冲突记录：system 同 scope 下 admin 已存在 → 直接删除 system 那条（admin 已读状态保留）
+		result = db.WithContext(context.Background()).Exec(`
+			DELETE FROM user_notify_read
+			WHERE (username = ? OR user_id = ? OR user_id = ?)
+			  AND username != ?
+		`, "system", 0, SystemAuditOperatorID, adminUsername)
+		if result.Error != nil {
+			logger.Error(context.Background(), "修复 system user_notify_read (删除冲突剩余) 失败: %s", result.Error.Error())
+		} else if result.RowsAffected > 0 {
+			logger.Error(context.Background(), "已删除 %d 条 system user_notify_read 冲突记录 (admin 同 scope 已存在)", result.RowsAffected)
+		}
 	}
 }

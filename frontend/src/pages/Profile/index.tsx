@@ -301,9 +301,9 @@ export default function ProfilePage() {
   const displayName = profile?.name || user?.name || user?.username || '用户';
   const displayUsername = profile?.username || user?.username || '-';
   const displayEmail = profile?.email || user?.email || '-';
-  const displayUserId = user?.id && user.id > 0 ? String(user.id) : '系统内置';
-  // RBAC：admin 用户由后端下发的 isAdmin 字段决定，兼容历史数据（id<=0）
-  const isAdmin = !!user?.isAdmin || !user?.id || user.id <= 0;
+  const displayUserId = user?.id ? String(user.id) : '-';
+  // RBAC：admin 用户由后端下发的 isAdmin 字段决定
+  const isAdmin = !!user?.isAdmin;
 
   function handleAvatarChange(next: string | undefined) {
     updateUser({ avatar: next });

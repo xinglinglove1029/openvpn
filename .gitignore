@@ -20,5 +20,10 @@ config.json
 /gover.txt
 /check_app.cjs
 
+# BMAD 工件目录
+_bmad-output/
 
+# 编译产物
+*.exe
+*.exe~
 
