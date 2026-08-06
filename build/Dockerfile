@@ -2,13 +2,17 @@ FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /src
 
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
+# 使用 pnpm（与本地开发环境一致），避免 npm/pnpm 的 node_modules 结构差异
+# 导致 Rolldown manualChunks 行为不同，从而引发 React 双实例冲突
+RUN npm install -g pnpm@11.17.0
+
+COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
+RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY frontend ./frontend
 COPY internal/openvpnweb/templates/index.html ./internal/openvpnweb/templates/index.html
 COPY internal/openvpnweb/templates/static/cropped-openvpn-32x32.png ./internal/openvpnweb/templates/static/cropped-openvpn-32x32.png
-RUN cd frontend && npm run build
+RUN cd frontend && pnpm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.25.4-alpine AS backend-builder
 
