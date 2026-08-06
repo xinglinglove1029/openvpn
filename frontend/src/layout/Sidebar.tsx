@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../store/auth';
+import { Tooltip } from '../ui/tooltip';
 
 // 图标名称 → lucide-react 组件映射表
 // 后端 permission.icon 字段（字符串）通过此映射渲染为图标组件
@@ -55,7 +56,12 @@ interface NavItem {
   isSettings?: boolean;
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  /** 桌面端折叠模式：仅显示图标 */
+  collapsed?: boolean;
+}
+
+export function Sidebar({ collapsed = false }: SidebarProps) {
   const location = useLocation();
   const { hasPermission, permissionTree } = useAuth();
 
@@ -84,11 +90,27 @@ export function Sidebar() {
     });
 
   return (
-    <nav className="w-64 min-h-screen border-r border-border/40 bg-card/50 backdrop-blur-xl flex flex-col">
-      <div className="p-6 border-b border-border/40">
-        <div className="flex items-center gap-2.5">
+    <nav
+      className={cn(
+        'min-h-screen border-r border-border/40 bg-card/50 backdrop-blur-xl flex flex-col transition-[width] duration-300 ease-out',
+        collapsed ? 'w-16' : 'w-64',
+      )}
+    >
+      {/* Logo 区域：折叠时只显示盾牌图标并居中 */}
+      <div
+        className={cn(
+          'border-b border-border/40',
+          collapsed ? 'p-4 flex justify-center' : 'p-6',
+        )}
+      >
+        <div
+          className={cn(
+            'flex items-center gap-2.5',
+            collapsed && 'gap-0',
+          )}
+        >
           <div
-            className="flex h-8 w-8 items-center justify-center rounded-lg shadow-lg"
+            className="flex h-8 w-8 items-center justify-center rounded-lg shadow-lg shrink-0"
             style={{
               background:
                 'linear-gradient(135deg, color-mix(in srgb, var(--accent) 85%, white) 0%, var(--accent) 100%)',
@@ -98,27 +120,36 @@ export function Sidebar() {
           >
             <ShieldCheck className="h-4 w-4 text-white" strokeWidth={2.5} />
           </div>
-          <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--text)] to-[color-mix(in_srgb,var(--text)_60%,var(--accent))]">
-            OpenVPN
-          </h1>
+          {!collapsed && (
+            <h1 className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--text)] to-[color-mix(in_srgb,var(--text)_60%,var(--accent))]">
+              OpenVPN
+            </h1>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      {/* 菜单列表：折叠时仅显示图标，hover 显示原生 title tooltip */}
+      <div
+        className={cn(
+          'flex-1 py-4 space-y-1 overflow-y-auto overflow-x-hidden',
+          collapsed ? 'px-2' : 'px-3',
+        )}
+      >
         {navItems.map((item) => {
           const isActive = location.pathname === item.path;
           const Icon = item.icon;
 
-          return (
+          const navLink = (
             <NavLink
               key={item.path}
               to={item.path}
               className={cn(
                 // 默认：完全透明，无任何装饰；只有文字和图标作为基本可见元素。
-                'group/nav relative flex items-center gap-3 overflow-hidden rounded-lg px-3 py-2.5 text-sm font-medium',
+                'group/nav relative flex items-center overflow-hidden rounded-lg text-sm font-medium',
                 'border border-transparent bg-transparent text-foreground/70',
                 'transition-all duration-300 ease-out',
-                // hover 状态：渐变描边 + 主题色光晕 + 顶部光带 + 左侧高亮条 + 文字加亮
+                collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
+                // hover 状态：渐变描边 + 主题色光晕 + 文字加亮
                 'hover:border-[var(--accent)]/45 hover:text-foreground',
                 'hover:bg-[var(--accent)]/8',
                 'hover:shadow-[0_0_22px_-8px_var(--accent),0_8px_24px_-14px_color-mix(in_srgb,var(--accent)_60%,transparent),inset_0_1px_0_color-mix(in_srgb,var(--accent)_22%,transparent)]',
@@ -127,11 +158,13 @@ export function Sidebar() {
                   'border-[var(--accent)]/65 bg-[var(--accent)]/14 text-[var(--accent)] font-semibold shadow-[0_0_24px_-6px_var(--accent),inset_0_1px_0_color-mix(in_srgb,var(--accent)_28%,transparent)]',
               )}
             >
-              {/* 顶部细光带：hover/active 时浮现 */}
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)] to-transparent opacity-0 transition-all duration-300 group-hover/nav:opacity-90 group-hover/nav:scale-x-100 scale-x-50"
-              />
+              {/* 顶部细光带：仅展开状态显示（折叠时宽度太窄不显示） */}
+              {!collapsed && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)] to-transparent opacity-0 transition-all duration-300 group-hover/nav:opacity-90 group-hover/nav:scale-x-100 scale-x-50"
+                />
+              )}
               {/* 渐变描边层（hover 时的二次光） */}
               <span
                 aria-hidden
@@ -161,16 +194,38 @@ export function Sidebar() {
               >
                 <Icon className="h-3.5 w-3.5" />
               </span>
-              <span className="relative z-[1] flex-1">{item.label}</span>
+              {/* 文字：折叠时隐藏 */}
+              {!collapsed && (
+                <span className="relative z-[1] flex-1">{item.label}</span>
+              )}
             </NavLink>
           );
+
+          // 折叠状态下：用 Tooltip 包裹，hover 显示菜单名称（即时显示，无原生 title 延迟）
+          if (collapsed) {
+            return (
+              <Tooltip key={item.path} content={item.label} side="right" delayMs={150}>
+                {navLink}
+              </Tooltip>
+            );
+          }
+
+          return navLink;
         })}
       </div>
 
-      <div className="p-4 border-t border-border/40">
-        <p className="text-xs text-muted-foreground text-center">
-          © 2024 OpenVPN Admin
-        </p>
+      {/* 底部版权：折叠时隐藏文字 */}
+      <div
+        className={cn(
+          'border-t border-border/40',
+          collapsed ? 'p-2' : 'p-4',
+        )}
+      >
+        {!collapsed && (
+          <p className="text-xs text-muted-foreground text-center">
+            © 2024 OpenVPN Admin
+          </p>
+        )}
       </div>
     </nav>
   );

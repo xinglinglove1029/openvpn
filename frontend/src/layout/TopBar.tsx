@@ -1,4 +1,4 @@
-import { Palette, User, Menu } from 'lucide-react';
+import { Palette, User, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -26,9 +26,13 @@ import { ManagementStatus } from '../components/ManagementStatus';
 interface TopBarProps {
   /** 移动端汉堡菜单点击回调，用于切换 Sidebar 抽屉 */
   onMenuClick?: () => void;
+  /** 桌面端 Sidebar 是否折叠（仅图标模式） */
+  sidebarCollapsed?: boolean;
+  /** 桌面端折叠/展开切换回调 */
+  onToggleCollapse?: () => void;
 }
 
-export function TopBar({ onMenuClick }: TopBarProps) {
+export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopBarProps) {
   const { theme, setTheme } = useTheme();
   const { user, logout } = useAuth();
 
@@ -39,7 +43,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
 
   return (
     <header className="h-14 sm:h-16 border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-3 sm:px-6 sticky top-0 z-10 relative gap-2">
-      {/* 左侧：移动端汉堡菜单按钮（<lg 显示） */}
+      {/* 左侧：菜单切换按钮
+          - 移动端（<lg）：汉堡按钮控制抽屉
+          - 桌面端（lg+）：折叠/展开 Sidebar */}
       <div className="flex items-center gap-2 min-w-0">
         <Button
           variant="ghost"
@@ -49,6 +55,20 @@ export function TopBar({ onMenuClick }: TopBarProps) {
           onClick={onMenuClick}
         >
           <Menu className="h-5 w-5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="hidden lg:inline-flex h-9 w-9 shrink-0"
+          aria-label={sidebarCollapsed ? '展开菜单' : '收起菜单'}
+          title={sidebarCollapsed ? '展开菜单' : '收起菜单'}
+          onClick={onToggleCollapse}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen className="h-5 w-5" />
+          ) : (
+            <PanelLeftClose className="h-5 w-5" />
+          )}
         </Button>
       </div>
 

@@ -11,6 +11,23 @@ export function Layout() {
   const location = useLocation();
   // 移动端 Sidebar 抽屉开关
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // 桌面端 Sidebar 折叠状态（仅图标模式），持久化到 localStorage
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('openvpn-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // 折叠状态变更时持久化
+  useEffect(() => {
+    try {
+      localStorage.setItem('openvpn-sidebar-collapsed', String(sidebarCollapsed));
+    } catch {
+      // 忽略 localStorage 不可用的情况
+    }
+  }, [sidebarCollapsed]);
 
   // 路由切换时自动关闭抽屉
   useEffect(() => {
@@ -150,11 +167,15 @@ export function Layout() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         } transition-transform duration-300 ease-out lg:transition-none fixed lg:static inset-y-0 left-0 lg:!flex lg:flex`}
       >
-        <Sidebar />
+        <Sidebar collapsed={sidebarCollapsed} />
       </div>
 
       <div className="flex-1 flex flex-col overflow-hidden relative z-10">
-        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
+        <TopBar
+          onMenuClick={() => setSidebarOpen((v) => !v)}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+        />
         <main className="flex-1 overflow-auto p-4 sm:p-6">
           {/* key 绑定路由路径，切换页面时重新触发 panel-enter 入场动画 */}
           <div key={location.pathname} className="panel-enter">
