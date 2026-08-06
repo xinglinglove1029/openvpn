@@ -57,3 +57,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-role-binding-users-groups.md`
   summary: 5xx 错误直接回显 GORM/DB 原始错误信息，可能泄露 schema
   evidence: c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()}) 将底层 DB 错误原文返回。全代码库通病，非本 diff 独有，但新代码延续了该模式。建议对 5xx 错误统一返回"服务器内部错误"，原文写日志。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-multi-role-per-user.md`
+  summary: user_role 表迁移后 user.role_id 列仍保留为死列，SQLite 无法 DROP COLUMN
+  evidence: SQLite 不支持 DROP COLUMN（除非重建表）。User 结构体已移除 RoleID 字段，GORM 不再读写该列，但历史升级部署的 user 表中 role_id 列仍保留为死列。启动迁移通过 pragma_table_info 检查列存在性后复制数据到 user_role 表，但不会清理原列。属于已知 SQLite 限制，对功能无影响，仅 schema 不整洁。如未来切换到 MySQL/PostgreSQL 可考虑清理。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-multi-role-per-user.md`
+  summary: AuthMiddleWare 每次请求都查 user_role 表加载权限码，无缓存
+  evidence: LoadPermissionCodes 每次请求执行 `SELECT role_id FROM user_role WHERE user_id = ?` 然后逐角色 `LoadRolePermissionCodes`，N+1 查询模式。当前部署规模下影响不大，但高并发场景下可考虑加内存缓存（如用户角色变更时失效）。pre-existing 性能模式，本次改造未恶化。

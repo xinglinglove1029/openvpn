@@ -534,7 +534,6 @@ func AuthMiddleWare() gin.HandlerFunc {
 			}
 			c.Set("permissions", codes)
 			c.Set("isAdmin", false)
-			c.Set("roleId", u.RoleID)
 		}
 
 		c.Next()
@@ -594,7 +593,7 @@ func Run(info BuildInfo) {
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
 	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
-	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{})
+	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{})
 
 	// 初始化 IP 归属地解析器
 	if err := InitIPRegion(""); err != nil {
@@ -606,18 +605,30 @@ func Run(info BuildInfo) {
 		logger.Error(context.Background(), "SeedPermissionsAndRoles 失败: %s", err.Error())
 	}
 
-	// 历史用户 role_id 为 NULL 时回填到普通用户角色 ID
-	// 检查回填错误并记日志，避免静默失败导致历史用户登录时按 ErrRoleNotFound 兜底
+	// 历史升级兼容：将 user.role_id（旧模型）数据回填并迁移到 user_role 表
+	// 全新部署时 user 表无 role_id 列，跳过迁移；仅在列存在时执行（避免 SQL 报错）
 	defaultRoleID := GetDefaultRoleID(db)
-	if defaultRoleID > 0 {
-		result := db.Model(&User{}).Where("role_id IS NULL").Update("role_id", defaultRoleID)
-		if result.Error != nil {
-			logger.Error(context.Background(), "回填历史用户 role_id 失败: %s", result.Error.Error())
-		} else if result.RowsAffected > 0 {
-			logger.Error(context.Background(), "已回填 %d 个历史用户到普通用户角色 (role_id=%d)", result.RowsAffected, defaultRoleID)
+	var hasRoleIDColumn bool
+	if err := db.Raw("SELECT COUNT(*) FROM pragma_table_info('user') WHERE name = 'role_id'").Scan(&hasRoleIDColumn).Error; err != nil {
+		logger.Error(context.Background(), "检查 user.role_id 列存在性失败: %s", err.Error())
+	}
+	if hasRoleIDColumn {
+		// 历史用户 role_id 为 NULL 时回填到普通用户角色 ID
+		if defaultRoleID > 0 {
+			result := db.Exec("UPDATE user SET role_id = ? WHERE role_id IS NULL", defaultRoleID)
+			if result.Error != nil {
+				logger.Error(context.Background(), "回填历史用户 role_id 失败: %s", result.Error.Error())
+			} else if result.RowsAffected > 0 {
+				logger.Error(context.Background(), "已回填 %d 个历史用户到普通用户角色 (role_id=%d)", result.RowsAffected, defaultRoleID)
+			}
+		} else {
+			logger.Error(context.Background(), "未找到普通用户角色，跳过历史用户 role_id 回填")
 		}
-	} else {
-		logger.Error(context.Background(), "未找到普通用户角色，跳过历史用户 role_id 回填")
+
+		// 迁移历史 user.role_id 到 user_role 表
+		if err := db.Exec("INSERT OR IGNORE INTO user_role (user_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM user WHERE role_id IS NOT NULL AND role_id > 0").Error; err != nil {
+			logger.Error(context.Background(), "迁移历史 user.role_id 到 user_role 表失败: %s", err.Error())
+		}
 	}
 
 	// 修复历史 audit_logs 中 operator_id=0 的记录（根据 operator 反向查找 user.id）
@@ -734,19 +745,20 @@ func Run(info BuildInfo) {
 					adminID = 0
 				}
 				c.JSON(200, gin.H{
-					"message":  "登录成功",
-					"redirect": "/admin",
-					"user": gin.H{
-						"id":           adminID,
-						"username":     adminUser.Username,
-						"name":         adminUser.Name,
-						"email":        adminUser.Email,
-						"isFirstLogin": false,
-						"isAdmin":      true,
-						"permissions":  []string{"*"},
-						"roleId":       nil,
-					},
-				})
+				"message":  "登录成功",
+				"redirect": "/admin",
+				"user": gin.H{
+					"id":           adminID,
+					"username":     adminUser.Username,
+					"name":         adminUser.Name,
+					"email":        adminUser.Email,
+					"isFirstLogin": false,
+					"isAdmin":      true,
+					"permissions":  []string{"*"},
+					"roleIds":      []uint{},
+					"roleNames":    []string{},
+				},
+			})
 				return
 			} else {
 				err = fmt.Errorf("密码错误")
@@ -769,6 +781,7 @@ func Run(info BuildInfo) {
 						session.Set("user", u.Username)
 						session.Save()
 						resetLoginFail(cip)
+						userRoleIDs, userRoleNames := userInfo.LoadRoleIDsAndNames(db)
 						c.JSON(200, gin.H{
 							"message":  "登录成功",
 							"redirect": "/",
@@ -780,7 +793,8 @@ func Run(info BuildInfo) {
 								"isFirstLogin": *userInfo.IsFirstLogin,
 								"isAdmin":      false,
 								"permissions":  permCodes,
-								"roleId":       userInfo.RoleID,
+								"roleIds":      userRoleIDs,
+								"roleNames":    userRoleNames,
 							},
 						})
 						return
@@ -806,6 +820,7 @@ func Run(info BuildInfo) {
 							session.Set("user", u.Username)
 							session.Save()
 							resetLoginFail(cip)
+							userRoleIDs, userRoleNames := userInfo.LoadRoleIDsAndNames(db)
 							c.JSON(200, gin.H{
 								"message":  "登录成功",
 								"redirect": "/",
@@ -817,7 +832,8 @@ func Run(info BuildInfo) {
 									"isFirstLogin": *userInfo.IsFirstLogin,
 									"isAdmin":      false,
 									"permissions":  permCodes,
-									"roleId":       userInfo.RoleID,
+									"roleIds":      userRoleIDs,
+									"roleNames":    userRoleNames,
 								},
 							})
 						} else {
@@ -851,26 +867,28 @@ func Run(info BuildInfo) {
 				}
 
 				session.Set("user", u.Username)
-				session.Save()
+			session.Save()
 
-				resetLoginFail(cip)
+			resetLoginFail(cip)
 
-				c.JSON(200, gin.H{
-					"message":  "登录成功",
-					"redirect": "/",
-					"user": gin.H{
-						"id":           user.ID,
-						"username":     user.Username,
-						"name":         user.Name,
-						"email":        user.Email,
-						"isFirstLogin": *user.IsFirstLogin,
-						"isAdmin":      false,
-						"permissions":  permCodes,
-						"roleId":       user.RoleID,
-					},
-				})
-				return
-			}
+			userRoleIDs, userRoleNames := user.LoadRoleIDsAndNames(db)
+			c.JSON(200, gin.H{
+				"message":  "登录成功",
+				"redirect": "/",
+				"user": gin.H{
+					"id":           user.ID,
+					"username":     user.Username,
+					"name":         user.Name,
+					"email":        user.Email,
+					"isFirstLogin": *user.IsFirstLogin,
+					"isAdmin":      false,
+					"permissions":  permCodes,
+					"roleIds":      userRoleIDs,
+					"roleNames":    userRoleNames,
+				},
+			})
+			return
+		}
 		}
 
 		setLoginFail(cip)
@@ -1678,7 +1696,28 @@ func Run(info BuildInfo) {
 				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
 				return
 			}
-			c.JSON(http.StatusOK, u)
+			// 填充 RoleIDs/RoleNames（RoleIDs 为 gorm:"-" 临时字段，需显式加载）
+			roleIDs, roleNames := u.LoadRoleIDsAndNames(db)
+			u.RoleIDs = roleIDs
+			c.JSON(http.StatusOK, gin.H{
+				"id":           u.ID,
+				"username":     u.Username,
+				"name":         u.Name,
+				"email":        u.Email,
+				"gid":          u.Gid,
+				"isEnable":     u.IsEnable,
+				"expireDate":   u.ExpireDate,
+				"ipAddr":       u.IpAddr,
+				"ipRegion":     u.IpRegion,
+				"ovpnConfig":   u.OvpnConfig,
+				"mfaEnabled":   u.MfaEnabled,
+				"isFirstLogin": u.IsFirstLogin,
+				"roleIds":      roleIDs,
+				"roleNames":    roleNames,
+				"lastLoginAt":  u.LastLoginAt,
+				"createdAt":    u.CreatedAt,
+				"updatedAt":    u.UpdatedAt,
+			})
 		})
 
 		// 普通用户更新个人信息（不需要 user:update 权限，只允许改自己的 name/email）
@@ -1870,64 +1909,85 @@ func Run(info BuildInfo) {
 				}
 
 				enable := record[4] == "1"
-				gid64, err := strconv.ParseUint(gid, 10, 64)
-				newUser := User{
-					Username:   record[0],
-					Password:   record[1],
-					Name:       record[2],
-					Email:      record[3],
-					IsEnable:   &enable,
-					ExpireDate: strings.Replace(record[5], "/", " ", 1),
-					IpAddr:     record[6],
-					OvpnConfig: record[7],
-					Gid:        uint(gid64),
-				}
-				// 角色继承：组角色 > 默认角色（与单用户创建逻辑一致）
-				if importGroup.RoleID != nil && *importGroup.RoleID > 0 && validateRoleID(db, importGroup.RoleID) == nil {
-					newUser.RoleID = importGroup.RoleID
-				} else if importDefaultRoleID > 0 {
-					newUser.RoleID = &importDefaultRoleID
-				}
-
-				err = newUser.Create()
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-					return
-				}
+			gid64, err := strconv.ParseUint(gid, 10, 64)
+			newUser := User{
+				Username:   record[0],
+				Password:   record[1],
+				Name:       record[2],
+				Email:      record[3],
+				IsEnable:   &enable,
+				ExpireDate: strings.Replace(record[5], "/", " ", 1),
+				IpAddr:     record[6],
+				OvpnConfig: record[7],
+				Gid:        uint(gid64),
 			}
+			// 角色继承：组角色 > 默认角色（与单用户创建逻辑一致）
+			if importGroup.RoleID != nil && *importGroup.RoleID > 0 && validateRoleID(db, importGroup.RoleID) == nil {
+				newUser.RoleIDs = []uint{*importGroup.RoleID}
+			} else if importDefaultRoleID > 0 {
+				newUser.RoleIDs = []uint{importDefaultRoleID}
+			}
+
+			err = newUser.Create()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+		}
 
 				c.JSON(http.StatusOK, gin.H{"message": "导入用户成功"})
 				return
 			}
 
 			if isFirstLogin, ok := c.Request.PostForm["isFirstLogin"]; ok {
-				val := isFirstLogin[0] == "true"
-				u.IsFirstLogin = &val
-			}
+			val := isFirstLogin[0] == "true"
+			u.IsFirstLogin = &val
+		}
 
-			if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
-				u.MfaEnabled = mfaEnabled[0] == "true"
-			}
+		if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
+			u.MfaEnabled = mfaEnabled[0] == "true"
+		}
 
-			// 未指定角色时：优先继承所在组的角色，否则回退到普通用户默认角色
-			if u.RoleID == nil {
-				// 优先继承所在组的角色（校验角色存在且启用，否则回退到默认角色）
-				var group Group
-				if err := db.Where("id = ?", u.Gid).First(&group).Error; err == nil && group.RoleID != nil && *group.RoleID > 0 {
-					if validateRoleID(db, group.RoleID) == nil {
-						u.RoleID = group.RoleID
-					} else {
-						// 组绑定的角色已禁用或不存在，回退到默认角色
-						if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
-							u.RoleID = &defaultRoleID
-						}
-					}
-				} else if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
-					u.RoleID = &defaultRoleID
+		// 解析 roleIds（前端可显式指定多角色）
+		if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
+			for _, s := range roleIdsStr {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				rid, convErr := strconv.ParseUint(s, 10, 64)
+				if convErr != nil || rid == 0 {
+					continue
+				}
+				u.RoleIDs = append(u.RoleIDs, uint(rid))
+			}
+			if len(u.RoleIDs) > 0 {
+				if err := validateRoleIDs(db, u.RoleIDs); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+					return
 				}
 			}
+		}
 
-			err = u.Create()
+		// 未指定角色时：优先继承所在组的角色，否则回退到普通用户默认角色
+		if len(u.RoleIDs) == 0 {
+			// 优先继承所在组的角色（校验角色存在且启用，否则回退到默认角色）
+			var group Group
+			if err := db.Where("id = ?", u.Gid).First(&group).Error; err == nil && group.RoleID != nil && *group.RoleID > 0 {
+				if validateRoleID(db, group.RoleID) == nil {
+					u.RoleIDs = []uint{*group.RoleID}
+				} else {
+					// 组绑定的角色已禁用或不存在，回退到默认角色
+					if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+						u.RoleIDs = []uint{defaultRoleID}
+					}
+				}
+			} else if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+				u.RoleIDs = []uint{defaultRoleID}
+			}
+		}
+
+		err = u.Create()
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
@@ -2012,49 +2072,62 @@ func Run(info BuildInfo) {
 		})
 
 		ovpn.PATCH("/user", RequirePermission("user:update"), func(c *gin.Context) {
-			c.Request.ParseForm()
+		c.Request.ParseForm()
 
-			var u User
-			c.ShouldBind(&u)
+		var u User
+		c.ShouldBind(&u)
 
-			// 校验 role_id 有效性：复用 role.go 中的 validateRoleID 统一校验逻辑
-			// 避免孤儿 user.role_id（角色不存在或已禁用）
-			if err := validateRoleID(db, u.RoleID); err != nil {
+		// 解析 roleIds（前端可显式指定多角色）
+		// form tag "roleIds" 仅在 PostForm 显式传入时设置；未传入时 u.RoleIDs 保持 nil（不修改）
+		if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
+			for _, s := range roleIdsStr {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				rid, convErr := strconv.ParseUint(s, 10, 64)
+				if convErr != nil || rid == 0 {
+					continue
+				}
+				u.RoleIDs = append(u.RoleIDs, uint(rid))
+			}
+			if err := validateRoleIDs(db, u.RoleIDs); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
+		}
 
-			// 数据权限校验：普通用户修改目标 gid 时，仅允许迁移到自己所在分组及其下级分组
-			// admin 用户跳过此校验
-			session := sessions.Default(c)
-			currentUsername := ""
-			if user, ok := session.Get("user").(string); ok {
-				currentUsername = user
+		// 数据权限校验：普通用户修改目标 gid 时，仅允许迁移到自己所在分组及其下级分组
+		// admin 用户跳过此校验
+		session := sessions.Default(c)
+		currentUsername := ""
+		if user, ok := session.Get("user").(string); ok {
+			currentUsername = user
+		}
+		if adminUsername != "" && currentUsername == adminUsername {
+			// admin 不做数据权限校验
+		} else if currentUsername != "" {
+			currentUser := User{Username: currentUsername}.Info()
+			if currentUser.ID == 0 {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+				return
 			}
-			if adminUsername != "" && currentUsername == adminUsername {
-				// admin 不做数据权限校验
-			} else if currentUsername != "" {
-				currentUser := User{Username: currentUsername}.Info()
-				if currentUser.ID == 0 {
-					c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+			// 目标分组必须为当前用户可访问的分组（自己及其下级）
+			if u.Gid != 0 && u.Gid != currentUser.Gid {
+				accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
+				found := false
+				for _, id := range accessibleGroupIDs {
+					if id == u.Gid {
+						found = true
+						break
+					}
+				}
+				if !found {
+					c.JSON(http.StatusForbidden, gin.H{"message": "无权限将用户迁移到该分组"})
 					return
 				}
-				// 目标分组必须为当前用户可访问的分组（自己及其下级）
-				if u.Gid != 0 && u.Gid != currentUser.Gid {
-					accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
-					found := false
-					for _, id := range accessibleGroupIDs {
-						if id == u.Gid {
-							found = true
-							break
-						}
-					}
-					if !found {
-						c.JSON(http.StatusForbidden, gin.H{"message": "无权限将用户迁移到该分组"})
-						return
-					}
-				}
 			}
+		}
 
 			if ipAddr, ok := c.Request.PostForm["ipAddr"]; ok {
 				if ipAddr[0] == "" {
@@ -2812,63 +2885,67 @@ func Run(info BuildInfo) {
 					permCodes = []string{}
 				}
 				c.JSON(http.StatusOK, gin.H{
-					"id":           0,
-					"username":     lu.Username,
-					"name":         "",
-					"email":        "",
-					"ldapAuth":     true,
-					"isFirstLogin": false,
-					"isAdmin":      adminUsername != "" && u.Username == adminUsername,
-					"permissions":  permCodes,
-					"roleId":       nil,
-				})
-				return
-			}
-
-			if adminUsername != "" && u.Username == adminUsername {
-				u.Name = viper.GetString("system.base.admin_name")
-				u.Email = viper.GetString("system.base.admin_email")
-				c.JSON(http.StatusOK, gin.H{
-					"id":           u.ID,
-					"username":     u.Username,
-					"name":         u.Name,
-					"email":        u.Email,
-					"isFirstLogin": false,
-					"isAdmin":      true,
-					"permissions":  []string{"*"},
-					"roleId":       nil,
-				})
-				return
-			}
-
-			userInfo := u.Info()
-			// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
-			if userInfo.ID == 0 {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
-				return
-			}
-			permCodes, perr := userInfo.LoadPermissionCodes(db)
-			if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
-				c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
-				return
-			}
-			if perr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
-				return
-			}
-			if permCodes == nil {
-				permCodes = []string{}
-			}
-			c.JSON(http.StatusOK, gin.H{
-				"id":           userInfo.ID,
-				"username":     userInfo.Username,
-				"name":         userInfo.Name,
-				"email":        userInfo.Email,
-				"isFirstLogin": userInfo.IsFirstLogin,
-				"isAdmin":      false,
+				"id":           0,
+				"username":     lu.Username,
+				"name":         "",
+				"email":        "",
+				"ldapAuth":     true,
+				"isFirstLogin": false,
+				"isAdmin":      adminUsername != "" && u.Username == adminUsername,
 				"permissions":  permCodes,
-				"roleId":       userInfo.RoleID,
+				"roleIds":      []uint{},
+				"roleNames":    []string{},
 			})
+			return
+		}
+
+		if adminUsername != "" && u.Username == adminUsername {
+			u.Name = viper.GetString("system.base.admin_name")
+			u.Email = viper.GetString("system.base.admin_email")
+			c.JSON(http.StatusOK, gin.H{
+				"id":           u.ID,
+				"username":     u.Username,
+				"name":         u.Name,
+				"email":        u.Email,
+				"isFirstLogin": false,
+				"isAdmin":      true,
+				"permissions":  []string{"*"},
+				"roleIds":      []uint{},
+				"roleNames":    []string{},
+			})
+			return
+		}
+
+		userInfo := u.Info()
+		// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+		if userInfo.ID == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+			return
+		}
+		permCodes, perr := userInfo.LoadPermissionCodes(db)
+		if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+			c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+			return
+		}
+		if perr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
+			return
+		}
+		if permCodes == nil {
+			permCodes = []string{}
+		}
+		userRoleIDs, userRoleNames := userInfo.LoadRoleIDsAndNames(db)
+		c.JSON(http.StatusOK, gin.H{
+			"id":           userInfo.ID,
+			"username":     userInfo.Username,
+			"name":         userInfo.Name,
+			"email":        userInfo.Email,
+			"isFirstLogin": userInfo.IsFirstLogin,
+			"isAdmin":      false,
+			"permissions":  permCodes,
+			"roleIds":      userRoleIDs,
+			"roleNames":    userRoleNames,
+		})
 		})
 
 		client.PUT("/userinfo", func(c *gin.Context) {

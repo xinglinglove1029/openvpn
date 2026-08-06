@@ -19,6 +19,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// UserRole 用户-角色多对多关联表
+type UserRole struct {
+	UserID    uint      `gorm:"column:user_id;primaryKey" json:"userId" form:"userId"`
+	RoleID    uint      `gorm:"column:role_id;primaryKey" json:"roleId" form:"roleId"`
+	CreatedAt time.Time `gorm:"column:created_at" json:"createdAt"`
+}
+
+func (UserRole) TableName() string { return "user_role" }
+
 type User struct {
 	ID           uint       `gorm:"primarykey" json:"id" form:"id" uri:"id"`
 	Username     string     `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
@@ -34,7 +43,7 @@ type User struct {
 	MfaSecret    string     `json:"mfaSecret" form:"mfaSecret"`
 	MfaEnabled   bool       `gorm:"default:false" json:"mfaEnabled" form:"mfaEnabled"`
 	IsFirstLogin *bool      `gorm:"default:true" form:"isFirstLogin" json:"isFirstLogin"`
-	RoleID       *uint      `gorm:"column:role_id;default:NULL" json:"roleId" form:"roleId"`
+	RoleIDs      []uint     `gorm:"-" json:"roleIds" form:"roleIds"`
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty" form:"lastLoginAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt,omitempty" form:"createdAt,omitempty"`
 	UpdatedAt    time.Time  `json:"updatedAt,omitempty" form:"updatedAt,omitempty"`
@@ -48,30 +57,72 @@ var ErrRoleNotFound = errors.New("角色不存在或已删除")
 
 // LoadPermissionCodes 加载用户权限 code 列表
 // - admin 用户（用户名等于 adminUsername 且 adminUsername 非空）返回 ["*"]
-// - 普通用户查询 role（校验 is_enable）→ role_permission → permission.code
-// - 角色被禁用返回 ErrRoleDisabled
-// - 角色不存在返回 ErrRoleNotFound
-// - role_id 为 NULL 时按普通用户角色兜底，默认角色也不存在返回 ErrRoleNotFound
+// - 普通用户从 user_role 表查所有 role_id，逐角色加载权限码并集去重
+// - 无角色绑定时回退默认角色；默认角色不存在返回空列表
 func (u *User) LoadPermissionCodes(d *gorm.DB) ([]string, error) {
 	// 仅当 adminUsername 非空时才判超管，避免配置缺失导致空用户名被误判为 admin
 	if adminUsername != "" && u.Username == adminUsername {
 		return []string{"*"}, nil
 	}
 
-	roleID := uint(0)
-	if u.RoleID != nil {
-		roleID = *u.RoleID
+	// 从 user_role 表查所有 role_id
+	var roleIDs []uint
+	if err := d.Table("user_role").Where("user_id = ?", u.ID).Pluck("role_id", &roleIDs).Error; err != nil {
+		return nil, err
 	}
-	if roleID == 0 {
-		// 未绑定角色时按普通用户角色兜底
-		roleID = GetDefaultRoleID(d)
-		if roleID == 0 {
-			// 默认角色也不存在
-			return nil, ErrRoleNotFound
+	if len(roleIDs) == 0 {
+		// 无绑定时回退默认角色
+		defaultRoleID := GetDefaultRoleID(d)
+		if defaultRoleID == 0 {
+			return []string{}, nil
 		}
+		roleIDs = []uint{defaultRoleID}
 	}
 
-	return LoadRolePermissionCodes(d, roleID)
+	// 逐角色加载权限码，并集去重
+	codeSet := make(map[string]bool)
+	for _, rid := range roleIDs {
+		codes, err := LoadRolePermissionCodes(d, rid)
+		if err != nil {
+			// 禁用/不存在的角色跳过
+			continue
+		}
+		for _, c := range codes {
+			codeSet[c] = true
+		}
+	}
+	result := make([]string, 0, len(codeSet))
+	for code := range codeSet {
+		result = append(result, code)
+	}
+	return result, nil
+}
+
+// LoadRoleIDsAndNames 加载用户绑定的所有角色 ID 与名称（用于登录响应、/me 接口等）
+// admin 用户返回空切片（admin 绕过权限检查，不参与角色绑定）
+// 出错或无绑定时返回两个等长空切片，确保调用方解构后长度始终一致
+func (u *User) LoadRoleIDsAndNames(d *gorm.DB) ([]uint, []string) {
+	var roleIDs []uint
+	if err := d.Table("user_role").Where("user_id = ?", u.ID).Pluck("role_id", &roleIDs).Error; err != nil {
+		return []uint{}, []string{}
+	}
+	if len(roleIDs) == 0 {
+		return []uint{}, []string{}
+	}
+	var roles []Role
+	if err := d.Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+		// 查询角色失败时返回等长空切片，避免 roleIDs/roleNames 长度不一致
+		return []uint{}, []string{}
+	}
+	roleNameMap := make(map[uint]string, len(roles))
+	for _, r := range roles {
+		roleNameMap[r.ID] = r.Name
+	}
+	roleNames := make([]string, 0, len(roleIDs))
+	for _, rid := range roleIDs {
+		roleNames = append(roleNames, roleNameMap[rid])
+	}
+	return roleIDs, roleNames
 }
 
 func (u *User) IsMFAEnabled() bool {
@@ -150,23 +201,66 @@ func (u *User) Create() error {
 		return fmt.Errorf("邮箱为必填项")
 	}
 
-	result := db.Create(&u)
-	if result.Error != nil {
-		if strings.Contains(result.Error.Error(), "UNIQUE constraint failed") {
-			return fmt.Errorf("用户名 \"%s\" 已存在", u.Username)
+	// 使用事务确保用户与角色绑定数据一致性
+	return db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Create(&u)
+		if result.Error != nil {
+			if strings.Contains(result.Error.Error(), "UNIQUE constraint failed") {
+				return fmt.Errorf("用户名 \"%s\" 已存在", u.Username)
+			}
+			return result.Error
 		}
-	}
-	return result.Error
+
+		// 同步用户角色绑定
+		if len(u.RoleIDs) > 0 {
+			userRoles := make([]UserRole, 0, len(u.RoleIDs))
+			for _, rid := range u.RoleIDs {
+				userRoles = append(userRoles, UserRole{UserID: u.ID, RoleID: rid})
+			}
+			if err := tx.Create(&userRoles).Error; err != nil {
+				return fmt.Errorf("绑定用户角色失败: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func (u *User) Update() error {
-	result := db.Model(&u).Updates(&u)
-	return result.Error
+	// 使用事务确保角色绑定更新原子性（先删后插，失败回滚）
+	return db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&u).Updates(&u)
+		if result.Error != nil {
+			return result.Error
+		}
+		// RoleIDs 非 nil 时同步用户角色绑定（nil=不修改，空切片=清空）
+		if u.RoleIDs != nil {
+			if err := tx.Where("user_id = ?", u.ID).Delete(&UserRole{}).Error; err != nil {
+				return fmt.Errorf("清理旧角色绑定失败: %w", err)
+			}
+			if len(u.RoleIDs) > 0 {
+				userRoles := make([]UserRole, 0, len(u.RoleIDs))
+				for _, rid := range u.RoleIDs {
+					userRoles = append(userRoles, UserRole{UserID: u.ID, RoleID: rid})
+				}
+				if err := tx.Create(&userRoles).Error; err != nil {
+					return fmt.Errorf("写入新角色绑定失败: %w", err)
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func (u *User) Delete(id string) error {
-	result := db.Unscoped().Delete(&User{}, id)
-	return result.Error
+	// 使用事务确保清理关联和删除用户原子性
+	return db.Transaction(func(tx *gorm.DB) error {
+		// 先清理 user_role 关联
+		if err := tx.Where("user_id = ?", id).Delete(&UserRole{}).Error; err != nil {
+			return fmt.Errorf("清理用户角色绑定失败: %w", err)
+		}
+		result := tx.Unscoped().Delete(&User{}, id)
+		return result.Error
+	})
 }
 
 func (u *User) UpdatePassword() error {

@@ -675,8 +675,8 @@ interface RoleAssignUser {
   name?: string;
   gid?: number;
   groupName?: string;
-  roleId?: number | null;
-  roleName?: string;
+  roleIds?: number[];
+  roleNames?: string[];
 }
 
 interface RoleAssignUsersResponse {
@@ -859,8 +859,10 @@ function UserAssignDialog({
                   ) : (
                     leftList.map((u) => {
                       const checked = leftChecked.has(u.id);
-                      const isAssignedToOtherRole =
-                        u.roleId != null && u.roleId !== role?.id && u.roleName;
+                      // 多角色模式下：列出用户已有但不在当前角色中的角色名（灰色 Badge）
+                      const otherRoleNames = (u.roleIds ?? [])
+                        .map((rid, idx) => ({ rid, name: u.roleNames?.[idx] }))
+                        .filter((r) => r.rid !== role?.id && r.name);
                       return (
                         <label
                           key={u.id}
@@ -875,20 +877,21 @@ function UserAssignDialog({
                           />
                           <div className="min-w-0 flex-1">
                             <div className="text-sm leading-tight">{u.username}</div>
-                            <div className="flex items-center gap-1 mt-0.5">
+                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                               {u.groupName && (
                                 <span className="text-[11px] text-muted-foreground truncate">
                                   {u.groupName}
                                 </span>
                               )}
-                              {isAssignedToOtherRole && (
+                              {otherRoleNames.map((r) => (
                                 <Badge
+                                  key={r.rid}
                                   variant="outline"
-                                  className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0 shrink-0"
+                                  className="bg-muted/40 border-border text-muted-foreground text-[10px] px-1.5 py-0 shrink-0"
                                 >
-                                  将从「{u.roleName}」转移
+                                  {r.name}
                                 </Badge>
-                              )}
+                              ))}
                             </div>
                           </div>
                         </label>
@@ -943,9 +946,10 @@ function UserAssignDialog({
                   ) : (
                     rightList.map((u) => {
                       const checked = rightChecked.has(u.id);
-                      const isAssignedToOtherRole =
-                        u.roleId != null && u.roleId !== role?.id && u.roleName;
-                      const isAssignedToCurrentRole = u.roleId === role?.id;
+                      // 多角色模式下：列出用户已有但不在当前角色中的角色名（灰色 Badge）
+                      const otherRoleNames = (u.roleIds ?? [])
+                        .map((rid, idx) => ({ rid, name: u.roleNames?.[idx] }))
+                        .filter((r) => r.rid !== role?.id && r.name);
                       return (
                         <label
                           key={u.id}
@@ -960,28 +964,21 @@ function UserAssignDialog({
                           />
                           <div className="min-w-0 flex-1">
                             <div className="text-sm leading-tight">{u.username}</div>
-                            <div className="flex items-center gap-1 mt-0.5">
+                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                               {u.groupName && (
                                 <span className="text-[11px] text-muted-foreground truncate">
                                   {u.groupName}
                                 </span>
                               )}
-                              {isAssignedToCurrentRole && u.roleName && (
+                              {otherRoleNames.map((r) => (
                                 <Badge
+                                  key={r.rid}
                                   variant="outline"
-                                  className="bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)] text-[10px] px-1.5 py-0 shrink-0"
+                                  className="bg-muted/40 border-border text-muted-foreground text-[10px] px-1.5 py-0 shrink-0"
                                 >
-                                  {u.roleName}
+                                  {r.name}
                                 </Badge>
-                              )}
-                              {isAssignedToOtherRole && (
-                                <Badge
-                                  variant="outline"
-                                  className="bg-orange-500/10 border-orange-500/30 text-orange-600 text-[10px] px-1.5 py-0 shrink-0"
-                                >
-                                  将从「{u.roleName}」转移
-                                </Badge>
-                              )}
+                              ))}
                             </div>
                           </div>
                         </label>
@@ -1540,18 +1537,6 @@ export default function RolesPage() {
         header: '操作',
         render: (item) => (
           <div className="flex items-center gap-1">
-            <HasPermission code="role:assign_permissions">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2"
-                onClick={() => openAssign(item)}
-                title={item.isBuiltin ? '内置角色权限由系统管理' : '分配权限'}
-              >
-                <KeyRound className="h-3.5 w-3.5 mr-1" />
-                分配权限
-              </Button>
-            </HasPermission>
             <HasPermission code="role:assign_users">
               <Button
                 size="sm"
@@ -1574,6 +1559,18 @@ export default function RolesPage() {
               >
                 <Network className="h-3.5 w-3.5 mr-1" />
                 分配用户组
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:assign_permissions">
+              <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2"
+                  onClick={() => openAssign(item)}
+                  title={item.isBuiltin ? '内置角色权限由系统管理' : '分配权限'}
+              >
+                <KeyRound className="h-3.5 w-3.5 mr-1" />
+                分配权限
               </Button>
             </HasPermission>
             <HasPermission code="role:update">
@@ -1719,11 +1716,6 @@ export default function RolesPage() {
       />
 
       {confirm && <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />}
-
-      <p className="text-xs text-muted-foreground">
-        提示：内置角色（系统超管 / 普通用户）由系统维护，可查看与分配权限但不允许删除；
-        新建角色后请点击「分配权限」按钮为其配置菜单与按钮权限。
-      </p>
     </div>
   );
 }

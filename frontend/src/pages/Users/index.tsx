@@ -913,6 +913,25 @@ function UserTablePanel({
       render: (user) => user.ovpnConfig || '-',
     },
     {
+      key: 'roles',
+      header: '角色',
+      sortable: true,
+      sortAccessor: (user) => (user.roleNames && user.roleNames.length ? user.roleNames[0] : ''),
+      render: (user) => {
+        const names = user.roleNames ?? [];
+        if (!names.length) return <span className="text-muted-foreground">-</span>;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {names.map((n, idx) => (
+              <Badge key={`${n}-${idx}`} variant="secondary" className="text-[10px]">
+                {n}
+              </Badge>
+            ))}
+          </div>
+        );
+      },
+    },
+    {
       key: 'mfa',
       header: 'MFA',
       sortable: true,
@@ -1234,6 +1253,7 @@ function UserTablePanel({
         user={editingUser}
         clients={clients}
         groups={groups}
+        roles={roles}
         selectedGroupId={selectedGroupId}
         notify={notify}
         reload={reload}
@@ -1260,6 +1280,7 @@ function UserFormDialog({
   user,
   clients,
   groups,
+  roles,
   selectedGroupId,
   notify,
   reload,
@@ -1270,6 +1291,7 @@ function UserFormDialog({
   user?: UserRecord;
   clients: ClientRecord[];
   groups: GroupRecord[];
+  roles: Role[];
   selectedGroupId: number;
   notify: (type: 'success' | 'error' | 'info', message: string) => void;
   reload: () => void;
@@ -1289,6 +1311,8 @@ function UserFormDialog({
   const [errors, setErrors] = useState<FieldErrors>({});
   // 分组选择：编辑模式下可切换用户所属分组
   const [gid, setGid] = useState<string>(String(selectedGroupId));
+  // 多角色选择：编辑模式下用 user.roleIds 预选，新增模式下为空
+  const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>([]);
 
   // 分组树（用于下拉展示层级关系）
   const groupTree = useMemo(() => buildTree(groups), [groups]);
@@ -1308,6 +1332,8 @@ function UserFormDialog({
       setIsFirstLogin(false);
       // 编辑模式下使用用户当前分组，新增模式下使用当前选中的分组
       setGid(mode === 'edit' && user ? String(user.gid ?? selectedGroupId) : String(selectedGroupId));
+      // 编辑模式下用用户当前角色列表预选，新增模式下为空
+      setSelectedRoleIds(mode === 'edit' && user ? user.roleIds ?? [] : []);
       setErrors({});
     }
   }, [open, mode, user, clients, selectedGroupId]);
@@ -1344,6 +1370,7 @@ function UserFormDialog({
           sendNotifyEmail,
           autoCreateClient,
           isFirstLogin,
+          roleIds: selectedRoleIds,
         });
         notify('success', result.message || '用户已创建');
       } else {
@@ -1356,6 +1383,7 @@ function UserFormDialog({
           gid: Number(gid) || user?.gid || selectedGroupId,
           ovpnConfig,
           expireDate,
+          roleIds: selectedRoleIds,
         });
         notify('success', result.message || '用户已保存');
       }
@@ -1466,6 +1494,40 @@ function UserFormDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">角色</Label>
+            <div className="space-y-1.5 min-w-0">
+              {roles.length === 0 ? (
+                <p className="text-xs text-muted-foreground pt-2">暂无可用角色</p>
+              ) : (
+                <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1.5">
+                  {roles.map((r) => {
+                    const checked = selectedRoleIds.includes(r.id);
+                    return (
+                      <label
+                        key={r.id}
+                        className="flex items-center gap-1.5 cursor-pointer text-sm select-none"
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={() => {
+                            setSelectedRoleIds((prev) =>
+                              prev.includes(r.id)
+                                ? prev.filter((id) => id !== r.id)
+                                : [...prev, r.id],
+                            );
+                          }}
+                        />
+                        <span className="text-foreground/80">{r.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">不选择则不绑定任何角色</p>
             </div>
           </div>
 

@@ -117,10 +117,10 @@ export interface UserRecord {
   lastLoginAt?: string;
   createdAt?: string;
   updatedAt?: string;
-  /** RBAC：角色 ID */
-  roleId?: number | null;
-  /** RBAC：角色名称（仅用于展示，由后端 join 返回） */
-  roleName?: string;
+  /** RBAC：角色 ID 列表（一个用户可绑定多个角色） */
+  roleIds?: number[];
+  /** RBAC：角色名称列表（仅用于展示，由后端 join 返回） */
+  roleNames?: string[];
 }
 
 export interface ClientRecord {
@@ -403,8 +403,8 @@ export interface ClientUserInfo {
   isFirstLogin?: boolean;
   /** 自定义头像：data URL（base64）或预设样式标识 */
   avatar?: string;
-  /** RBAC：角色 ID（admin 用户为 null） */
-  roleId?: number | null;
+  /** RBAC：角色 ID 列表（admin 用户为 []） */
+  roleIds?: number[];
   /** RBAC：权限 code 列表（admin 为 ["*"]） */
   permissions?: string[];
   /** RBAC：是否为系统超管（绕过权限检查） */
