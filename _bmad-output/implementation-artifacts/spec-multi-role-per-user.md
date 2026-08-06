@@ -6,7 +6,7 @@ status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: true
 baseline_revision: '4af1a1918311b98309001a04ad628fc1686b1446'
-final_revision: 'de2ff6a9e8d792d3620f96ee53ade0510bed1200'
+final_revision: 'f8f75927623bea0a8480535d73e9b8d80a7c3b80'
 context:
   - '{project-root}/internal/openvpnweb/user.go'
   - '{project-root}/internal/openvpnweb/role.go'

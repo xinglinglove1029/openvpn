@@ -89,16 +89,9 @@ export default defineConfig(({ command }) => ({
     outDir: adminOutDir,
     emptyOutDir: true,
     assetsDir: 'assets',
-    // 强制预构建 React 相关依赖，避免 CJS interop 导致 react-dom/client
-    // 被重复打包到 app.js，与 button.js 中的 react 实例形成双实例冲突
-    commonjsOptions: {
-      transformMixedEsModules: true,
-      strictRequires: ['react', 'react-dom', 'react-dom/client'],
-    },
     rollupOptions: {
-      // 把 React 全家桶强制合并到同一个 chunk，确保 __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
-      // 只存在一份实例，避免 "Cannot read properties of null (reading 'useState')" 错误
       output: {
+        codeSplitting: false,
         entryFileNames: 'assets/app.js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: (assetInfo) => {
@@ -107,19 +100,6 @@ export default defineConfig(({ command }) => ({
           }
 
           return 'assets/[name][extname]';
-        },
-        manualChunks: (id) => {
-          // react / react-dom / react-dom/client / scheduler 必须合并到同一个 chunk
-          // 否则 react-dom/client 会被单独打包到 app.js，导致 React 双实例
-          if (
-            id.includes('node_modules/react/') ||
-            id.includes('node_modules/react-dom/') ||
-            id.includes('node_modules/react-dom/client') ||
-            id.includes('node_modules/scheduler/') ||
-            id.includes('node_modules/react/jsx-runtime')
-          ) {
-            return 'react-vendor';
-          }
         },
       },
     },
