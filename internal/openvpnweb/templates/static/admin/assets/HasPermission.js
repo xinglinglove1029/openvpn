@@ -1,1 +1,1 @@
-import{p as e}from"./button.js";import{Q as t}from"./app.js";var n=e();function r({code:e,children:r,fallback:i=null}){let{hasPermission:a}=t();return a(e)?(0,n.jsx)(n.Fragment,{children:r}):(0,n.jsx)(n.Fragment,{children:i})}export{r as t};
+import{t as e}from"./react-vendor.js";import{Q as t}from"./app.js";var n=e();function r({code:e,children:r,fallback:i=null}){let{hasPermission:a}=t();return a(e)?(0,n.jsx)(n.Fragment,{children:r}):(0,n.jsx)(n.Fragment,{children:i})}export{r as t};
