@@ -124,8 +124,8 @@
 body {
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
-  overflow-x: hidden;
   color: var(--text);
   background: var(--page-bg-layer), var(--page-bg);
   font-family:
@@ -666,14 +666,15 @@ a {
   box-shadow: 0 0 16px var(--scroll-glow);
 }
 
-/* ---- App Shell / Sidebar ---- */
-
+/* ---- Legacy shell (not used by the React application) ---- */
+/* Kept as a single-column compatibility layout so it can never reserve a hidden sidebar gutter. */
 .app-shell {
   position: relative;
   display: grid;
-  grid-template-columns: 286px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 24px;
   isolation: isolate;
 }
@@ -2074,20 +2075,22 @@ button:disabled {
 
 .responsive-table {
   width: 100%;
-  overflow: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
-table {
+.responsive-table table,
+[data-table-scroll] table {
   width: 100%;
   border-collapse: collapse;
 }
 
-th,
-td {
+:is(.responsive-table, [data-table-scroll]) th,
+:is(.responsive-table, [data-table-scroll]) td {
   padding: 16px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   text-align: left;
-  white-space: nowrap;
 }
 
 th {
@@ -3054,8 +3057,8 @@ tbody tr:hover {
   }
 
   /* 移动端表格紧凑化：减小单元格 padding 与字号 */
-  th,
-  td {
+  :is(.responsive-table, [data-table-scroll]) th,
+  :is(.responsive-table, [data-table-scroll]) td {
     padding: 12px 10px;
     font-size: 13px;
   }

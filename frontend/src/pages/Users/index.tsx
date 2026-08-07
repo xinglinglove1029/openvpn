@@ -1495,6 +1495,7 @@ function UserFormDialog({
               <div className="space-y-1.5 min-w-0">
                 <div className="relative">
                   <Input
+                    clearable={false}
                     id="user-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
@@ -1503,14 +1504,13 @@ function UserFormDialog({
                       if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
                     }}
                     placeholder="至少 12 位强密码"
-                    className="pr-9"
+                    className="pr-12"
                   />
                   <button
                     type="button"
-                    tabIndex={-1}
                     aria-label={showPassword ? '隐藏密码' : '显示密码'}
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                    className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -1528,7 +1528,7 @@ function UserFormDialog({
           </div>
 
           {mode === 'add' && (
-            <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2 sm:gap-4">
               <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">自动创建客户端</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={autoCreateClient} onCheckedChange={setAutoCreateClient} />
@@ -1538,7 +1538,7 @@ function UserFormDialog({
           )}
 
           {mode === 'add' && (
-            <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2 sm:gap-4">
               <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">发送通知邮件</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
@@ -1547,7 +1547,7 @@ function UserFormDialog({
           )}
 
           {mode === 'add' && (
-            <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2 sm:gap-4">
               <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">首次登录修改密码</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={isFirstLogin} onCheckedChange={setIsFirstLogin} />
@@ -1643,6 +1643,7 @@ function ResetPasswordDialog({
             </Label>
             <div className="relative">
               <Input
+                clearable={false}
                 id="reset-password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
@@ -1652,14 +1653,13 @@ function ResetPasswordDialog({
                 }}
                 autoFocus
                 placeholder="至少 12 位强密码"
-                className="pr-9"
+                className="pr-12"
               />
               <button
                 type="button"
-                tabIndex={-1}
                 aria-label={showPassword ? '隐藏密码' : '显示密码'}
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>

@@ -325,7 +325,7 @@ function PermissionTree({
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="搜索权限名称或编码"
-            className="pl-8 h-8 text-xs"
+            className="pl-8 h-11 sm:h-8 text-xs"
           />
         </div>
         <div className="flex items-center gap-1.5 flex-none">
@@ -500,8 +500,8 @@ function RoleFormDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 text-left sm:pt-2 sm:text-right text-sm font-medium text-foreground/80">
               角色名称<span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -518,8 +518,8 @@ function RoleFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 text-left sm:pt-2 sm:text-right text-sm font-medium text-foreground/80">
               角色编码<span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -541,8 +541,8 @@ function RoleFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">描述</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 text-left sm:pt-2 sm:text-right text-sm font-medium text-foreground/80">描述</Label>
             <Textarea
               value={state.description}
               onChange={(e) => updateField('description', e.target.value)}
@@ -552,8 +552,8 @@ function RoleFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">排序</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 text-left sm:pt-2 sm:text-right text-sm font-medium text-foreground/80">排序</Label>
             <Input
               type="number"
               value={String(state.sort)}
@@ -562,7 +562,7 @@ function RoleFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-2 sm:gap-4">
             <Label className="text-right text-sm font-medium text-foreground/80">启用状态</Label>
             <div className="flex items-center gap-2">
               <Switch
@@ -837,7 +837,7 @@ function UserAssignDialog({
           <div className="py-10 text-center text-sm text-muted-foreground">正在加载...</div>
         ) : (
           <div className="space-y-2">
-            <div className="grid grid-cols-[1fr_auto_1fr] gap-3 items-stretch">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-stretch">
               {/* 左栏：可选用户 */}
               <Card className="p-2">
                 <div className="flex items-center justify-between mb-2 px-1">
@@ -849,9 +849,9 @@ function UserAssignDialog({
                   value={leftSearch}
                   onChange={(e) => setLeftSearch(e.target.value)}
                   placeholder="搜索用户名"
-                  className="h-8 text-xs mb-2"
+                  className="h-11 sm:h-8 text-xs mb-2"
                 />
-                <div className="max-h-[360px] min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
+                <div className="max-h-[45dvh] min-h-[14rem] lg:max-h-[360px] lg:min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
                   {leftList.length === 0 ? (
                     <div className="py-6 text-center text-xs text-muted-foreground">
                       {leftSearch ? '没有匹配的用户' : '暂无可选用户'}
@@ -906,7 +906,7 @@ function UserAssignDialog({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 w-8 p-0"
+                  className="h-11 w-full p-0 lg:h-8 lg:w-8"
                   onClick={moveToRight}
                   disabled={leftChecked.size === 0 || saving}
                   title="加入右侧"
@@ -916,7 +916,7 @@ function UserAssignDialog({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 w-8 p-0"
+                  className="h-11 w-full p-0 lg:h-8 lg:w-8"
                   onClick={moveToLeft}
                   disabled={rightChecked.size === 0 || saving}
                   title="移回左侧"
@@ -936,9 +936,9 @@ function UserAssignDialog({
                   value={rightSearch}
                   onChange={(e) => setRightSearch(e.target.value)}
                   placeholder="搜索用户名"
-                  className="h-8 text-xs mb-2"
+                  className="h-11 sm:h-8 text-xs mb-2"
                 />
-                <div className="max-h-[360px] min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
+                <div className="max-h-[45dvh] min-h-[14rem] lg:max-h-[360px] lg:min-h-[360px] overflow-y-auto rounded-md border bg-muted/10">
                   {rightList.length === 0 ? (
                     <div className="py-6 text-center text-xs text-muted-foreground">
                       {rightSearch ? '没有匹配的用户' : '暂未选择用户'}
@@ -1570,7 +1570,7 @@ export default function RolesPage() {
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="搜索名称、编码、描述"
-            className="pl-9 h-8"
+            className="pl-9 h-11 sm:h-8"
           />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'enabled' | 'disabled')}>

@@ -235,7 +235,7 @@ export default function NotificationsPage() {
             value={searchUser}
             onChange={(e) => setSearchUser(e.target.value)}
             placeholder="搜索用户名"
-            className="pl-8 h-8"
+            className="pl-8 h-11 sm:h-8"
           />
         </div>
         <div className="relative w-full sm:w-56">
@@ -244,7 +244,7 @@ export default function NotificationsPage() {
             value={searchMessage}
             onChange={(e) => setSearchMessage(e.target.value)}
             placeholder="搜索消息内容"
-            className="pl-8 h-8"
+            className="pl-8 h-11 sm:h-8"
           />
         </div>
         <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>

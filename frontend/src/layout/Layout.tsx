@@ -92,7 +92,7 @@ export function Layout() {
   // 加载中或未登录时显示骨架占位，避免页面闪烁
   if (isLoading || !user) {
     return (
-      <div className="flex h-screen items-center justify-center bg-background">
+      <div className="flex h-screen h-dvh min-h-screen min-h-dvh items-center justify-center bg-background">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent)]" />
       </div>
     );
@@ -105,7 +105,7 @@ export function Layout() {
     // 仅当 overview 与 profile 都无权限时才显示占位页（否则守卫会跳转过去）
     if (!hasPermission('menu:overview') && !hasPermission('menu:profile')) {
       return (
-        <div className="flex h-screen items-center justify-center bg-background">
+        <div className="flex h-screen h-dvh min-h-screen min-h-dvh items-center justify-center bg-background">
           <div className="text-center space-y-3">
             <div className="text-xl font-semibold text-foreground">无访问权限</div>
             <div className="text-sm text-muted-foreground">您当前的角色未分配任何可访问的菜单，请联系管理员</div>
@@ -116,7 +116,7 @@ export function Layout() {
   }
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden relative">
+    <div className="relative flex h-screen h-dvh min-h-screen min-h-dvh min-w-0 overflow-hidden bg-background">
       {/* 全屏 three.js 背景层（z-0） */}
       <BackgroundScene />
       {/* CSS 动态光晕层 - 呼吸+漂浮效果，与全站风格统一
@@ -165,20 +165,21 @@ export function Layout() {
           - lg+ 桌面端常驻显示
           - 移动端为抽屉，由 sidebarOpen 控制滑入/滑出 */}
       <div
-        className={`relative z-40 lg:z-20 lg:!translate-x-0 lg:!block ${
+        data-testid="mobile-sidebar-drawer"
+        className={`fixed z-40 lg:z-20 lg:!translate-x-0 lg:!block ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        } transition-transform duration-300 ease-out lg:transition-none fixed lg:static inset-y-0 left-0 lg:!flex lg:flex`}
+        } transition-transform duration-300 ease-out lg:transition-none lg:static inset-y-0 left-0 lg:!flex lg:flex`}
       >
-        <Sidebar collapsed={sidebarCollapsed} />
+        <Sidebar collapsed={isMobile ? false : sidebarCollapsed} />
       </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden relative z-10">
+      <div className="relative z-10 flex min-w-0 flex-1 basis-0 flex-col overflow-hidden">
         <TopBar
           onMenuClick={() => setSidebarOpen((v) => !v)}
           sidebarCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         />
-        <main className="flex-1 overflow-auto p-4 sm:p-6" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
+        <main data-testid="app-main" className="flex-1 min-w-0 overflow-y-auto overflow-x-clip p-4 sm:p-6" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
           {/* key 绑定路由路径，切换页面时重新触发 panel-enter 入场动画 */}
           <div key={location.pathname} className="panel-enter">
             <Outlet />

@@ -927,7 +927,7 @@ function ProcessTopSection({ cpuList, memList }: ProcessTopSectionProps) {
 
   const tabCls = (active: boolean) =>
     cn(
-      'inline-flex h-6 items-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors',
+      'inline-flex h-11 items-center gap-1 rounded-md px-3 text-sm font-medium transition-colors lg:h-6 lg:px-2.5 lg:text-[11px]',
       active
         ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
         : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',

@@ -924,7 +924,7 @@ function ServiceTab({ store }: { store: DraftStore }) {
           <CardDescription>账号密码认证开关、服务重启与 server.conf 维护</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex items-center justify-between rounded-md border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] px-4 py-3">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between rounded-md border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] px-4 py-3">
             <div>
               <p className="font-medium">账号密码认证</p>
               <p className="text-sm text-muted-foreground">控制 auth-user-pass-verify 认证开关</p>
@@ -1184,7 +1184,7 @@ function ClientPackagesTab() {
                         <div
                           key={pkg.id}
                           className={cn(
-                            'flex items-center justify-between rounded-lg border p-3 transition-colors',
+                            'flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-3 transition-colors',
                             pkg.isActive
                               ? 'border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)]'
                               : 'border-border'

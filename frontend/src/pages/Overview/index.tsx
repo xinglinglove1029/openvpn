@@ -418,7 +418,7 @@ export default function OverviewPage() {
                   {(dashboard.topUsers ?? []).length ? (
                     <div className="space-y-2">
                       {(dashboard.topUsers ?? []).map((user) => (
-                        <div key={user.username} className="flex items-center justify-between text-sm">
+                        <div key={user.username} className="flex flex-wrap items-start justify-between gap-2 text-sm">
                           <span className="truncate">{user.username}</span>
                           <Badge variant="secondary" className="ml-2 shrink-0">{user.text}</Badge>
                         </div>
@@ -672,16 +672,18 @@ function RateLimitModal({
         <form onSubmit={handleSave} className="space-y-4">
           <div className="space-y-2">
             <Label>上传速率</Label>
-            <div className="flex gap-2">
-              <Input
-                value={upload}
-                onChange={(ev) => { setUpload(ev.target.value); clearError('upload'); }}
-                placeholder="速率值"
-                aria-invalid={errors.upload ? 'true' : undefined}
-                className={cn('flex-1', errors.upload && 'border-destructive focus-visible:ring-destructive/40')}
-              />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="min-w-0 flex-1">
+                <Input
+                  value={upload}
+                  onChange={(ev) => { setUpload(ev.target.value); clearError('upload'); }}
+                  placeholder="速率值"
+                  aria-invalid={errors.upload ? 'true' : undefined}
+                  className={cn(errors.upload && 'border-destructive focus-visible:ring-destructive/40')}
+                />
+              </div>
               <Select value={uploadUnit} onValueChange={setUploadUnit}>
-                <SelectTrigger className="w-[100px]">
+                <SelectTrigger className="w-full sm:w-[100px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -693,16 +695,18 @@ function RateLimitModal({
           </div>
           <div className="space-y-2">
             <Label>下载速率</Label>
-            <div className="flex gap-2">
-              <Input
-                value={download}
-                onChange={(ev) => { setDownload(ev.target.value); clearError('download'); }}
-                placeholder="速率值"
-                aria-invalid={errors.download ? 'true' : undefined}
-                className={cn('flex-1', errors.download && 'border-destructive focus-visible:ring-destructive/40')}
-              />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="min-w-0 flex-1">
+                <Input
+                  value={download}
+                  onChange={(ev) => { setDownload(ev.target.value); clearError('download'); }}
+                  placeholder="速率值"
+                  aria-invalid={errors.download ? 'true' : undefined}
+                  className={cn(errors.download && 'border-destructive focus-visible:ring-destructive/40')}
+                />
+              </div>
               <Select value={downloadUnit} onValueChange={setDownloadUnit}>
-                <SelectTrigger className="w-[100px]">
+                <SelectTrigger className="w-full sm:w-[100px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

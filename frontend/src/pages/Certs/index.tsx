@@ -166,7 +166,7 @@ export default function CertsPage() {
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="搜索名称、类型"
-            className="pl-9 h-8"
+            className="pl-9 h-11 sm:h-8"
           />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'normal' | 'expiring' | 'expired')}>

@@ -424,6 +424,7 @@ export default function ProfilePage() {
             <FormField id="profile-currentPass" label="当前密码" required error={passwordErrors.currentPass}>
               <div className="relative">
                 <Input
+                    clearable={false}
                   id="profile-currentPass"
                   type={showCurrentPass ? 'text' : 'password'}
                   value={currentPass}
@@ -456,6 +457,7 @@ export default function ProfilePage() {
             <FormField id="profile-newPassword" label="新密码" required error={passwordErrors.newPassword}>
               <div className="relative">
                 <Input
+                    clearable={false}
                   id="profile-newPassword"
                   type={showNewPassword ? 'text' : 'password'}
                   value={newPassword}
@@ -495,6 +497,7 @@ export default function ProfilePage() {
             >
               <div className="relative">
                 <Input
+                    clearable={false}
                   id="profile-newPasswordAgain"
                   type={showNewPasswordAgain ? 'text' : 'password'}
                   value={newPasswordAgain}
@@ -581,7 +584,7 @@ export default function ProfilePage() {
               <form onSubmit={handleConfirmBindMfa} className="space-y-4">
                 <div className="flex flex-col items-center gap-3 py-2">
                   {qrDataUrl && (
-                    <img src={qrDataUrl} alt="MFA 二维码" className="w-[200px] h-[200px] rounded-lg" />
+                    <img src={qrDataUrl} alt="MFA 二维码" className="h-auto w-full max-w-[200px] rounded-lg" />
                   )}
                   <p className="text-xs text-muted-foreground text-center">
                     请使用 TOTP 认证 App 扫描二维码

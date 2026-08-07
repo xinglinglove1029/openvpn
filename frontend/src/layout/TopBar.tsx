@@ -43,7 +43,7 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
   const avatarSrc = parsedAvatar.kind === 'none' ? defaultAvatarUrl(avatarSeed) : parsedAvatar.url;
 
   return (
-    <header className={`${isMobile ? 'h-12' : 'h-14 sm:h-16'} border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-2 sm:px-6 sticky top-0 z-10 relative gap-1 sm:gap-2`}>
+    <header className={`${isMobile ? 'h-12' : 'h-14 sm:h-16'} min-w-0 border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-2 sm:px-6 sticky top-0 z-10 relative gap-1 sm:gap-2`}>
       {/* 左侧：菜单切换按钮
           - 移动端（<lg）：汉堡按钮控制抽屉
           - 桌面端（lg+）：折叠/展开 Sidebar */}
@@ -53,6 +53,7 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
           size="icon"
           className={`lg:hidden shrink-0 ${isMobile ? 'h-11 w-11' : 'h-9 w-9'}`}
           aria-label="打开菜单"
+          data-testid="mobile-sidebar-toggle"
           onClick={onMenuClick}
         >
           <Menu className={isMobile ? 'h-6 w-6' : 'h-5 w-5'} />
@@ -73,8 +74,8 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
         </Button>
       </div>
 
-      <div className="flex-1 flex items-center justify-center min-w-0">
-        <ManagementStatus />
+      <div className="flex min-w-0 flex-1 items-center justify-center">
+        <ManagementStatus compact={isMobile} />
       </div>
 
       <div className="flex items-center gap-1 sm:gap-4 justify-end shrink-0">
@@ -82,7 +83,7 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
           href="https://github.com/xinglinglove1029/openvpn"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-muted-foreground hover:text-foreground transition-colors hidden sm:inline-flex"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground sm:inline-flex lg:h-9 lg:w-9"
           title="GitHub 仓库"
           aria-label="GitHub 仓库"
         >

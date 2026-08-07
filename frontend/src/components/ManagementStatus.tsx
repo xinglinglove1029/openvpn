@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
  * 设计动机：management 不可用时最关键的信息是"是否在线"，原本放在概览页
  * 的 risk 卡片很容易被忽略；放到顶部任何页面都一眼可见，体验更好。
  */
-export function ManagementStatus() {
+export function ManagementStatus({ compact = false }: { compact?: boolean }) {
   const { status } = useSystemStatus();
   const managementRisk = useMemo(
     () => status.risks.find((r) => r.level === 'danger' && /Management/i.test(r.title)) || null,
@@ -40,9 +40,10 @@ export function ManagementStatus() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="OpenVPN Management 状态"
+          aria-label={title}
           className={cn(
-            'management-pill group inline-flex items-center gap-2.5 h-10 pl-3 pr-4 rounded-full',
+            'management-pill group inline-flex items-center gap-2.5 h-10 rounded-full',
+            compact ? 'h-11 w-11 justify-center p-0' : 'pl-3 pr-4',
             'border border-red-500/50 bg-red-500/12 text-red-500',
             'hover:bg-red-500/20 hover:border-red-500/70 transition-colors',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40',
@@ -58,7 +59,7 @@ export function ManagementStatus() {
             />
           </span>
           <PlugZap className="h-4 w-4 drop-shadow-[0_0_6px_rgba(239,68,68,0.55)]" />
-          <span className="management-label text-sm font-semibold tracking-wide">
+          <span className={cn("management-label text-sm font-semibold tracking-wide", compact && "sr-only")}>
             Management 离线
           </span>
         </button>

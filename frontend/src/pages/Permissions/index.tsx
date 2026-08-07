@@ -20,6 +20,7 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Badge } from '@/ui/badge';
+import { Card, CardContent } from '@/ui/card';
 import {
   Select,
   SelectContent,
@@ -218,8 +219,8 @@ function PermissionFormDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               名称<span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -236,8 +237,8 @@ function PermissionFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               编码<span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -259,8 +260,8 @@ function PermissionFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">类型</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">类型</Label>
             <Select
               value={state.type}
               onValueChange={(v) => updateField('type', v as 'menu' | 'button')}
@@ -276,8 +277,8 @@ function PermissionFormDialog({
             </Select>
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">路径</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">路径</Label>
             <Input
               value={state.path}
               onChange={(e) => updateField('path', e.target.value)}
@@ -286,8 +287,8 @@ function PermissionFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">图标</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">图标</Label>
             <Input
               value={state.icon}
               onChange={(e) => updateField('icon', e.target.value)}
@@ -296,8 +297,8 @@ function PermissionFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">排序</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">排序</Label>
             <Input
               type="number"
               value={String(state.sort)}
@@ -308,8 +309,8 @@ function PermissionFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-[100px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">父节点</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[100px_1fr] items-start gap-2 sm:gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">父节点</Label>
             <Select
               value={String(state.parentId)}
               onValueChange={(v) => updateField('parentId', Number(v))}
@@ -667,23 +668,68 @@ export default function PermissionsPage() {
     });
   }
 
+  function renderMobileCards(nodes: PermissionTreeNode[], depth = 0): React.ReactNode {
+    return [...nodes].sort((a, b) => a.sort - b.sort).map((node) => {
+      const hasChildren = Boolean(node.children?.length);
+      const isExpanded = expanded.has(node.id);
+      const isMenu = node.type === 'menu';
+      return (
+        <div key={node.id} className="space-y-2">
+          <Card data-testid="permissions-mobile-card" className="overflow-hidden" style={{ marginLeft: depth ? `${Math.min(depth, 3) * 12}px` : undefined }}>
+            <CardContent className="space-y-3 p-3 sm:p-4">
+              <div className="flex min-w-0 items-start gap-2">
+                {hasChildren ? (
+                  <Button type="button" size="icon" variant="ghost" className="h-11 w-11 shrink-0" onClick={() => toggleExpand(node.id)} aria-label={isExpanded ? '\u6536\u8d77\u5b50\u6743\u9650' : '\u5c55\u5f00\u5b50\u6743\u9650'} aria-expanded={isExpanded}>
+                    {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  </Button>
+                ) : <span className="h-11 w-11 shrink-0" aria-hidden />}
+                <div className="min-w-0 flex-1 space-y-1 pt-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={cn('min-w-0 break-words text-sm', isMenu && 'font-semibold')}>{node.name}</span>
+                    <Badge variant="outline" className={cn(isMenu ? 'border-blue-500/30 text-blue-600' : 'border-amber-500/30 text-amber-600')}>{isMenu ? '\u83dc\u5355' : '\u6309\u94ae'}</Badge>
+                    {depth > 2 && <Badge variant="outline" className="text-xs">{'\u5c42\u7ea7'} {depth + 1}</Badge>}
+                    {node.isBuiltin && <Badge variant="outline" className="text-xs"><Lock className="mr-1 h-3 w-3" />{'\u5185\u7f6e'}</Badge>}
+                  </div>
+                  <p className="break-all font-mono text-xs text-muted-foreground">{node.code}</p>
+                </div>
+              </div>
+              <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                <dt className="text-muted-foreground">{'\u8def\u5f84'}</dt><dd className="min-w-0 break-words">{node.path || '-'}</dd>
+                <dt className="text-muted-foreground">{'\u56fe\u6807'}</dt><dd className="min-w-0 break-words font-mono">{node.icon || '-'}</dd>
+                <dt className="text-muted-foreground">{'\u6392\u5e8f'}</dt><dd>{node.sort}</dd>
+              </dl>
+              <HasPermission code="permission:manage"><div className="flex flex-wrap gap-2 border-t pt-2">
+                <Button size="sm" variant="outline" className="min-h-11" onClick={() => moveNode(node, 'up')}><ArrowUp className="mr-1 h-4 w-4" /> {'\u4e0a\u79fb'}</Button>
+                <Button size="sm" variant="outline" className="min-h-11" onClick={() => moveNode(node, 'down')}><ArrowDown className="mr-1 h-4 w-4" /> {'\u4e0b\u79fb'}</Button>
+                {isMenu && <Button size="sm" variant="outline" className="min-h-11" onClick={() => openCreate(node)}><FolderPlus className="mr-1 h-4 w-4" /> {'\u65b0\u589e\u5b50\u8282\u70b9'}</Button>}
+                <Button size="sm" variant="outline" className="min-h-11" onClick={() => openEdit(node)}><Edit className="mr-1 h-4 w-4" /> {'\u7f16\u8f91'}</Button>
+                <Button size="sm" variant="outline" className="min-h-11 text-destructive" disabled={node.isBuiltin} onClick={() => !node.isBuiltin && askDelete(node)}><Trash2 className="mr-1 h-4 w-4" /> {'\u5220\u9664'}</Button>
+              </div></HasPermission>
+            </CardContent>
+          </Card>
+          {hasChildren && isExpanded && renderMobileCards(node.children!, depth + 1)}
+        </div>
+      );
+    });
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader eyebrow="Access Control" title="权限管理" description="管理菜单与按钮权限，调整菜单顺序、名称、路径" />
 
       {/* 操作工具栏：搜索、筛选 在左，刷新、新增、展开/折叠切换 在右 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-48">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative w-full sm:w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="搜索名称、编码、路径"
-            className="pl-9 h-8"
+            className="h-11 pl-9 sm:h-8"
           />
         </div>
         <Select value={filterType} onValueChange={(v) => setFilterType(v as 'all' | 'menu' | 'button')}>
-          <SelectTrigger className="w-[110px] h-8">
+          <SelectTrigger className="h-11 w-full sm:h-8 sm:w-[110px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -692,7 +738,7 @@ export default function PermissionsPage() {
             <SelectItem value="button">按钮</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
           <HasPermission code="permission:view">
             <Button size="sm" variant="outline" onClick={reload}>
               <RefreshCw className="h-3.5 w-3.5 mr-1" />
@@ -732,24 +778,19 @@ export default function PermissionsPage() {
           </p>
         </div>
       ) : (
-        <div className="rounded-md border">
+        <>
+          <div data-testid="permissions-mobile-list" className="lg:hidden">{renderMobileCards(filteredTree)}</div>
+          <div data-testid="permissions-desktop-tree" className="hidden rounded-md border lg:block">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="min-w-[200px]">名称</TableHead>
-                <TableHead>编码</TableHead>
-                <TableHead className="text-center">类型</TableHead>
-                <TableHead>路径</TableHead>
-                <TableHead>图标</TableHead>
-                <TableHead className="text-center">排序</TableHead>
-                <TableHead className="min-w-[280px]">操作</TableHead>
+                <TableHead className="min-w-[200px]">名称</TableHead><TableHead>编码</TableHead><TableHead className="text-center">类型</TableHead><TableHead>路径</TableHead><TableHead>图标</TableHead><TableHead className="text-center">排序</TableHead><TableHead className="min-w-[280px]">操作</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {renderRows(filteredTree)}
-            </TableBody>
+            <TableBody>{renderRows(filteredTree)}</TableBody>
           </Table>
-        </div>
+          </div>
+        </>
       )}
 
       <PermissionFormDialog state={form} setForm={setForm} tree={permissionTree} onSaved={reload} />

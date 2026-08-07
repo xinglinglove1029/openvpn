@@ -25,6 +25,12 @@ export interface Column<T> {
   header: React.ReactNode;
   render: (item: T, index: number) => React.ReactNode;
   className?: string;
+  /** Optional class applied only to the mobile key/value row. Desktop width classes never leak into cards. */
+  mobileClassName?: string;
+  /** Optional mobile-specific value renderer. */
+  mobileRender?: (item: T, index: number) => React.ReactNode;
+  /** Excludes an implementation-only desktop column from mobile cards. */
+  hideOnMobile?: boolean;
   /** 是否允许点击表头排序 */
   sortable?: boolean;
   /** 自定义排序取值；不提供时尝试按 render 输出文本排序 */
@@ -154,18 +160,22 @@ export function DataTable<T>({
           {finalData.map((item, index) => (
             <Card
               key={keyFn ? keyFn(item, finalStart + index) : finalStart + index}
+              data-testid="data-table-mobile-card"
             >
               <CardContent className="p-4 space-y-2">
-                {columns.map((col) => (
+                {columns.filter((col) => !col.hideOnMobile).map((col) => (
                   <div
                     key={col.key}
-                    className={`flex items-center justify-between gap-3 ${col.className ?? ''}`}
+                    className={cn(
+                      'grid grid-cols-[minmax(5.5rem,40%)_minmax(0,1fr)] items-start gap-x-3 gap-y-1',
+                      col.mobileClassName,
+                    )}
                   >
-                    <span className="text-xs font-medium text-muted-foreground shrink-0">
+                    <span className="min-w-0 text-xs font-medium leading-5 text-muted-foreground">
                       {col.header}
                     </span>
-                    <span className="text-sm text-right truncate">
-                      {col.render(item, finalStart + index)}
+                    <span className="min-w-0 break-words text-right text-sm leading-5 [&_.row-actions]:justify-end [&_.row-actions]:whitespace-normal [&_.row-actions]:flex-wrap [&_button]:min-h-11 [&_button]:min-w-11">
+                      {col.mobileRender ? col.mobileRender(item, finalStart + index) : col.render(item, finalStart + index)}
                     </span>
                   </div>
                 ))}
@@ -234,19 +244,19 @@ export function DataTable<T>({
             显示 <strong>{finalStart + 1}-{finalEnd}</strong> / 共 {total} 条
           </div>
           <div className="flex items-center justify-center gap-1">
-            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1} onClick={() => onPageChange(1)}>
+            <Button variant="outline" size="icon" className="h-11 w-11" aria-label="First page" disabled={page <= 1} onClick={() => onPageChange(1)}>
               «
             </Button>
-            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+            <Button variant="outline" size="icon" className="h-11 w-11" aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="px-2 font-medium tabular-nums">
               {page} / {pageCount}
             </span>
-            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
+            <Button variant="outline" size="icon" className="h-11 w-11" aria-label="Next page" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
+            <Button variant="outline" size="icon" className="h-11 w-11" aria-label="Last page" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
               »
             </Button>
           </div>
@@ -273,19 +283,19 @@ export function DataTable<T>({
               </SelectContent>
             </Select>
             <div className="flex items-center gap-1">
-              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(1)}>
+              <Button variant="outline" size="icon" className="h-8 w-8" aria-label="First page" disabled={page <= 1} onClick={() => onPageChange(1)}>
                 «
               </Button>
-              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+              <Button variant="outline" size="icon" className="h-8 w-8" aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
               <span className="px-2 font-medium">
                 {page} / {pageCount}
               </span>
-              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
+              <Button variant="outline" size="icon" className="h-8 w-8" aria-label="Next page" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
+              <Button variant="outline" size="icon" className="h-8 w-8" aria-label="Last page" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
                 »
               </Button>
             </div>

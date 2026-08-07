@@ -290,6 +290,7 @@ export default function LoginPage() {
                 <Label className="text-[var(--login-label-text)] text-sm">密码</Label>
                 <div className="field-input-wrap has-icon relative">
                   <Input
+                    clearable={false}
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => {
@@ -298,17 +299,16 @@ export default function LoginPage() {
                     }}
                     placeholder="请输入登录密码"
                     aria-invalid={errors.password ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))] pr-10"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))] pr-12"
                   />
                   <div className="field-icon-wrap">
                     <Lock className="field-icon-svg w-4 h-4" />
                   </div>
                   <button
                     type="button"
-                    tabIndex={-1}
                     aria-label={showPassword ? '隐藏密码' : '显示密码'}
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                    className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -394,6 +394,7 @@ export default function LoginPage() {
                 <Label className="text-[var(--login-label-text)] text-sm">新密码</Label>
                 <div className="field-input-wrap has-icon relative">
                   <Input
+                    clearable={false}
                     type={showNewPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => {
@@ -403,17 +404,16 @@ export default function LoginPage() {
                     placeholder="至少 12 位强密码"
                     autoFocus
                     aria-invalid={errors.newPassword ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-12"
                   />
                   <div className="field-icon-wrap">
                     <ShieldCheck className="field-icon-svg w-4 h-4" />
                   </div>
                   <button
                     type="button"
-                    tabIndex={-1}
                     aria-label={showNewPassword ? '隐藏密码' : '显示密码'}
                     onClick={() => setShowNewPassword(!showNewPassword)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                    className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                   >
                     {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -428,6 +428,7 @@ export default function LoginPage() {
                 <Label className="text-[var(--login-label-text)] text-sm">确认新密码</Label>
                 <div className="field-input-wrap has-icon relative">
                   <Input
+                    clearable={false}
                     type={showNewPasswordAgain ? 'text' : 'password'}
                     value={newPasswordAgain}
                     onChange={(e) => {
@@ -436,17 +437,16 @@ export default function LoginPage() {
                     }}
                     placeholder="请再次输入新密码"
                     aria-invalid={errors.newPasswordAgain ? 'true' : undefined}
-                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-10"
+                    className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-12"
                   />
                   <div className="field-icon-wrap">
                     <Lock className="field-icon-svg w-4 h-4" />
                   </div>
                   <button
                     type="button"
-                    tabIndex={-1}
                     aria-label={showNewPasswordAgain ? '隐藏密码' : '显示密码'}
                     onClick={() => setShowNewPasswordAgain(!showNewPasswordAgain)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)]"
+                    className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md text-[var(--login-muted-text)] hover:text-[var(--login-heading-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                   >
                     {showNewPasswordAgain ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>

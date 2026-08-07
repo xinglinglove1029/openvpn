@@ -182,7 +182,7 @@ export default function FirewallPage() {
       header: '操作',
       className: 'w-[180px]',
       render: (f) => (
-        <div className="flex items-center gap-1">
+        <div className="row-actions flex flex-wrap items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => openEditForm(f)}>
             <Pencil className="h-4 w-4 mr-1" />
             编辑
@@ -415,7 +415,7 @@ function FirewallFormDialog({
                 {groups.map((group) => (
                   <label
                     key={group.id}
-                    className="flex items-center gap-2 text-sm cursor-pointer"
+                    className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
                     style={{ paddingLeft: group.depth * 12 }}
                   >
                     <Checkbox
@@ -438,7 +438,7 @@ function FirewallFormDialog({
                 {groups.map((group) => (
                   <label
                     key={group.id}
-                    className="flex items-center gap-2 text-sm cursor-pointer"
+                    className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
                     style={{ paddingLeft: group.depth * 12 }}
                   >
                     <Checkbox

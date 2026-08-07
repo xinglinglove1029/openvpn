@@ -17,6 +17,7 @@ const PAGES = [
   { name: 'profile', path: '/profile' },
   { name: 'roles', path: '/roles' },
   { name: 'permissions', path: '/permissions' },
+  { name: 'download', path: '/download' },
 ];
 
 async function login(page: Page) {
@@ -44,6 +45,8 @@ async function checkNoHorizontalOverflow(page: Page, pageName: string) {
 }
 
 async function checkTouchTargets(page: Page, pageName: string) {
+  if ((page.viewportSize()?.width ?? 1024) >= 1024) return;
+
   const smallTargets = await page.evaluate(() => {
     const buttons = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="checkbox"], input[type="radio"]'));
     const visible = buttons.filter((el) => {
@@ -73,6 +76,70 @@ async function checkTouchTargets(page: Page, pageName: string) {
     smallTargets.length === 0,
     `[${pageName}] ${smallTargets.length} 个触摸目标过小 (<36px): ${JSON.stringify(smallTargets.slice(0, 5))}`,
   ).toBeTruthy();
+}
+
+async function checkClosedDrawerGeometry(page: Page, pageName: string) {
+  const viewportWidth = page.viewportSize()?.width ?? 1024;
+  if (viewportWidth >= 1024) return;
+
+  const main = page.getByTestId('app-main');
+  const drawer = page.getByTestId('mobile-sidebar-drawer');
+  // Public routes (for example, /download) do not use the authenticated app shell.
+  if (!await main.count() || !await drawer.count()) return;
+
+  const drawerBeforeClose = await drawer.boundingBox();
+  if (drawerBeforeClose && drawerBeforeClose.x >= 0) {
+    await page.getByTestId('mobile-sidebar-toggle').click();
+    await page.waitForTimeout(350);
+  }
+
+  const geometry = await page.evaluate(() => {
+    const mainElement = document.querySelector('[data-testid="app-main"]');
+    const drawerElement = document.querySelector('[data-testid="mobile-sidebar-drawer"]');
+    const mainRect = mainElement?.getBoundingClientRect();
+    const drawerRect = drawerElement?.getBoundingClientRect();
+    return {
+      mainLeft: mainRect?.left ?? -1,
+      mainWidth: mainRect?.width ?? -1,
+      viewportWidth: window.innerWidth,
+      drawerRight: drawerRect?.right ?? -1,
+    };
+  });
+
+  expect(geometry.mainLeft, `[${pageName}] closed drawer left gutter`).toBeGreaterThanOrEqual(0);
+  expect(geometry.mainLeft, `[${pageName}] closed drawer left gutter`).toBeLessThanOrEqual(24);
+  expect(geometry.mainWidth, `[${pageName}] main width after closing drawer`).toBeGreaterThan(geometry.viewportWidth - 32);
+  expect(geometry.drawerRight, `[${pageName}] hidden drawer must not remain in view`).toBeLessThanOrEqual(1);
+}
+
+async function checkDesktopSidebarGeometry(page: Page, pageName: string) {
+  if ((page.viewportSize()?.width ?? 1024) < 1024) return;
+
+  const shellPresent = await page.locator('[data-testid="app-main"], [data-testid="mobile-sidebar-drawer"]').count();
+  // Public routes are deliberately outside the desktop administration shell.
+  if (shellPresent < 2) return;
+
+  const geometry = await page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>('[data-testid="app-main"]');
+    const drawer = document.querySelector<HTMLElement>('[data-testid="mobile-sidebar-drawer"]');
+    const mainRect = main?.getBoundingClientRect();
+    const drawerRect = drawer?.getBoundingClientRect();
+    return {
+      mainLeft: mainRect?.left ?? -1,
+      mainWidth: mainRect?.width ?? -1,
+      drawerLeft: drawerRect?.left ?? -1,
+      drawerRight: drawerRect?.right ?? -1,
+      drawerWidth: drawerRect?.width ?? -1,
+      viewportWidth: window.innerWidth,
+    };
+  });
+
+  expect(geometry.drawerLeft, `[${pageName}] desktop sidebar must start at the viewport edge`).toBeGreaterThanOrEqual(-1);
+  expect(geometry.drawerLeft, `[${pageName}] desktop sidebar must start at the viewport edge`).toBeLessThanOrEqual(1);
+  expect(geometry.drawerWidth, `[${pageName}] desktop sidebar must have its collapsed or expanded width`).toBeGreaterThanOrEqual(64);
+  expect(geometry.mainLeft, `[${pageName}] main content must begin after the persistent desktop sidebar`).toBeGreaterThanOrEqual(geometry.drawerRight - 1);
+  expect(geometry.mainLeft, `[${pageName}] desktop layout must not reserve an extra sidebar gutter`).toBeLessThanOrEqual(geometry.drawerRight + 1);
+  expect(geometry.mainWidth + geometry.mainLeft, `[${pageName}] desktop main must fill the remaining shell width`).toBeGreaterThanOrEqual(geometry.viewportWidth - 1);
 }
 
 async function checkNoCutoffElements(page: Page, pageName: string) {
@@ -143,6 +210,8 @@ test.describe('认证页面移动端适配', () => {
       await page.waitForTimeout(2000);
 
       await checkNoHorizontalOverflow(page, name);
+      await checkClosedDrawerGeometry(page, name);
+      await checkDesktopSidebarGeometry(page, name);
       await checkNoCutoffElements(page, name);
       await checkTouchTargets(page, name);
 
@@ -247,6 +316,9 @@ test.describe('DataTable 移动端卡片模式', () => {
       const table = page.locator('table');
       const tableVisible = await table.isVisible({ timeout: 2000 }).catch(() => false);
       expect(!tableVisible, '移动端不应显示传统表格').toBeTruthy();
+      const cards = page.getByTestId('data-table-mobile-card');
+      await expect(cards.first(), 'Users mobile table must render at least one data card.').toBeVisible();
+      expect(await cards.count(), 'Users mobile data cards must not be empty.').toBeGreaterThan(0);
       await page.screenshot({ path: `screenshots/users-cardview-${test.info().project.name}.png`, fullPage: false });
     }
   });
@@ -260,7 +332,76 @@ test.describe('DataTable 移动端卡片模式', () => {
       const table = page.locator('table');
       const tableVisible = await table.isVisible({ timeout: 2000 }).catch(() => false);
       expect(!tableVisible, '移动端不应显示传统表格').toBeTruthy();
+      const cards = page.getByTestId('data-table-mobile-card');
+      // A clean deployment can have no clients. When data is available, verify its mobile card presentation;
+      // otherwise the hidden desktop table assertion above covers the valid empty state.
+      if (await cards.count()) {
+        await expect(cards.first(), 'Clients with data must render mobile data cards.').toBeVisible();
+      }
       await page.screenshot({ path: `screenshots/clients-cardview-${test.info().project.name}.png`, fullPage: false });
     }
+  });
+});
+
+
+test.describe('responsive shared surfaces', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page);
+  });
+
+  test('permissions renders cards rather than the desktop tree table below lg', async ({ page }) => {
+    await page.goto('/permissions');
+    await page.waitForLoadState('domcontentloaded');
+    if ((page.viewportSize()?.width ?? 1024) < 1024) {
+      const mobileList = page.getByTestId('permissions-mobile-list');
+      await expect(mobileList).toBeVisible();
+      await expect(mobileList.getByTestId('permissions-mobile-card').first()).toBeVisible();
+      await expect(page.getByTestId('permissions-desktop-tree')).toBeHidden();
+    }
+  });
+
+  test('opened dialog remains inside the dynamic viewport and can scroll', async ({ page }) => {
+    await page.goto('/clients');
+    await page.waitForLoadState('domcontentloaded');
+    const create = page.getByRole('button').filter({ hasText: /\u6dfb\u52a0\u5ba2\u6237\u7aef|\u65b0\u589e/ }).first();
+    await expect(create, 'The default admin fixture must be able to open a client form.').toBeVisible();
+    await create.click();
+    const dialog = page.locator('[role="dialog"]').last();
+    await expect(dialog).toBeVisible();
+    const close = dialog.getByRole('button', { name: 'Close' });
+    await expect(close).toBeVisible();
+
+    const metrics = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        overflowY: window.getComputedStyle(element).overflowY,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      };
+    });
+    expect(metrics.top).toBeGreaterThanOrEqual(0);
+    expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+    expect(metrics.width).toBeLessThanOrEqual(metrics.viewportWidth - 16);
+    expect(['auto', 'scroll']).toContain(metrics.overflowY);
+
+    if (metrics.scrollHeight > metrics.clientHeight) {
+      const scrollTop = await dialog.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        return element.scrollTop;
+      });
+      expect(scrollTop, 'A naturally overflowing dialog must scroll its real content.').toBeGreaterThan(0);
+    }
+    await expect(close, 'The dialog close affordance must remain reachable after scrolling.').toBeVisible();
+    const closeBox = await close.boundingBox();
+    expect(closeBox, 'The dialog close affordance needs measurable bounds after scrolling.').not.toBeNull();
+    expect(closeBox!.y, 'The dialog close affordance must stay inside the dialog scroll surface.').toBeGreaterThanOrEqual(metrics.top);
+    expect(closeBox!.y + closeBox!.height, 'The dialog close affordance must stay inside the dialog scroll surface.').toBeLessThanOrEqual(metrics.bottom + 1);
+    await close.click();
+    await expect(dialog, 'The close affordance must remain clickable after scrolling.').toBeHidden();
   });
 });

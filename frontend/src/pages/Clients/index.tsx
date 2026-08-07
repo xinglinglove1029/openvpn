@@ -147,7 +147,7 @@ export default function ClientsPage() {
       header: '操作',
       className: 'w-[200px]',
       render: (c) => (
-        <div className="flex items-center gap-1">
+        <div className="row-actions flex flex-wrap items-center gap-1">
           <HasPermission code="client:download">
             {c.file && (
               <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} asChild>
@@ -562,7 +562,7 @@ function ClientEditorDialog({
             }}
             rows={18}
             aria-invalid={errors.content ? 'true' : undefined}
-            className={cn('font-mono text-xs min-h-[300px]', errors.content && 'border-destructive focus-visible:ring-destructive/40')}
+            className={cn('font-mono text-xs min-h-[14rem] sm:min-h-[300px]', errors.content && 'border-destructive focus-visible:ring-destructive/40')}
           />
           {errors.content && <p className="text-xs text-destructive">{errors.content}</p>}
           <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">

@@ -201,6 +201,7 @@ function ConfigFields({
               <div className="space-y-1.5 min-w-0">
                 <div className="relative">
                   <Input
+                    clearable={false}
                     type={visible ? 'text' : 'password'}
                     value={typeof v === 'string' ? v : ''}
                     placeholder={field.placeholder}
@@ -290,7 +291,7 @@ function ConfigFields({
         // switch
         const on = v === true;
         return (
-          <div key={field.key} className="flex items-center justify-between rounded-lg border px-3 py-2">
+          <div key={field.key} className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border px-3 py-2">
             <Label className="cursor-pointer">{field.label}</Label>
             <Switch checked={on} onCheckedChange={setVal} />
           </div>
@@ -728,7 +729,7 @@ export default function ChannelProvidersPage() {
             </div>
 
             <div className="rounded-lg border px-3 py-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <Label className="cursor-pointer">状态</Label>
                 <RadioGroup
                   className="flex items-center gap-4"

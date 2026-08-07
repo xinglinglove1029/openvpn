@@ -92,7 +92,7 @@ export function Sidebar({ collapsed = false }: SidebarProps) {
   return (
     <nav
       className={cn(
-        'min-h-screen border-r border-border/40 bg-card/50 backdrop-blur-xl flex flex-col transition-[width] duration-300 ease-out',
+        'h-screen h-dvh min-h-screen min-h-dvh border-r border-border/40 bg-card/50 backdrop-blur-xl flex flex-col transition-[width] duration-300 ease-out',
         collapsed ? 'w-16' : 'w-64',
       )}
     >

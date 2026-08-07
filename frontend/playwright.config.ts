@@ -7,6 +7,10 @@ const CHROMIUM_USE = {
   },
 };
 
+const WEBKIT_USE = {
+  browserName: 'webkit' as const,
+};
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
@@ -25,6 +29,26 @@ export default defineConfig({
   },
 
   projects: [
+    {
+      name: 'desktop-lg-boundary',
+      use: {
+        ...CHROMIUM_USE,
+        viewport: { width: 1024, height: 768 },
+        deviceScaleFactor: 1,
+        isMobile: false,
+        hasTouch: false,
+      },
+    },
+    {
+      name: 'iphone-se-320',
+      use: {
+        ...CHROMIUM_USE,
+        viewport: { width: 320, height: 568 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+      },
+    },
     {
       name: 'iphone-se',
       use: {
@@ -47,6 +71,26 @@ export default defineConfig({
         hasTouch: true,
         userAgent:
           'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+      },
+    },
+    {
+      name: 'landscape-compact',
+      use: {
+        ...CHROMIUM_USE,
+        viewport: { width: 667, height: 375 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+      },
+    },
+    {
+      name: 'tablet-1023',
+      use: {
+        ...CHROMIUM_USE,
+        viewport: { width: 1023, height: 768 },
+        deviceScaleFactor: 1,
+        isMobile: true,
+        hasTouch: true,
       },
     },
     {
@@ -89,6 +133,42 @@ export default defineConfig({
       name: 'ipad-mini',
       use: {
         ...CHROMIUM_USE,
+        viewport: { width: 768, height: 1024 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        userAgent:
+          'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+      },
+    },
+    {
+      name: 'webkit-iphone-se-320',
+      use: {
+        ...WEBKIT_USE,
+        viewport: { width: 320, height: 568 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        userAgent:
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+      },
+    },
+    {
+      name: 'webkit-landscape-compact',
+      use: {
+        ...WEBKIT_USE,
+        viewport: { width: 667, height: 375 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        userAgent:
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+      },
+    },
+    {
+      name: 'webkit-ipad-mini',
+      use: {
+        ...WEBKIT_USE,
         viewport: { width: 768, height: 1024 },
         deviceScaleFactor: 2,
         isMobile: true,
