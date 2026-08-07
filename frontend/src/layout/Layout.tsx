@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { BackgroundScene } from '@/components/BackgroundScene';
 import { useAuth } from '@/store/auth';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export function Layout() {
   const { user, isLoading, hasPermission, permissionTree } = useAuth();
@@ -11,6 +12,7 @@ export function Layout() {
   const location = useLocation();
   // 移动端 Sidebar 抽屉开关
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isMobile = useIsMobile();
   // 桌面端 Sidebar 折叠状态（仅图标模式），持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -120,32 +122,31 @@ export function Layout() {
       {/* CSS 动态光晕层 - 呼吸+漂浮效果，与全站风格统一
           移动端：减小尺寸/降低透明度，提升性能并避免视觉过载 */}
       <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
-        {/* 主光晕 - 右上，呼吸动画 */}
         <div
-          className="absolute -top-32 -right-32 w-[28rem] h-[28rem] sm:w-[40rem] sm:h-[40rem] lg:w-[50rem] lg:h-[50rem] rounded-full blur-3xl opacity-20 dark:opacity-15 sm:opacity-25 sm:dark:opacity-20 lg:opacity-30 lg:dark:opacity-20 animate-pulse"
+          className={`absolute -top-32 -right-32 w-[28rem] h-[28rem] sm:w-[40rem] sm:h-[40rem] lg:w-[50rem] lg:h-[50rem] rounded-full blur-3xl ${isMobile ? 'opacity-10 dark:opacity-8' : 'opacity-20 dark:opacity-15 sm:opacity-25 sm:dark:opacity-20 lg:opacity-30 lg:dark:opacity-20'} animate-pulse`}
           style={{
             background:
               'radial-gradient(circle, color-mix(in srgb, var(--accent) 35%, transparent) 0%, transparent 70%)',
           }}
         />
-        {/* 次光晕 - 左下，漂浮动画 */}
         <div
-          className="absolute bottom-0 -left-32 w-[24rem] h-[24rem] sm:w-[32rem] sm:h-[32rem] lg:w-[40rem] lg:h-[40rem] rounded-full blur-3xl opacity-15 dark:opacity-10 sm:opacity-18 sm:dark:opacity-13 lg:opacity-20 lg:dark:opacity-15"
+          className={`absolute bottom-0 -left-32 w-[24rem] h-[24rem] sm:w-[32rem] sm:h-[32rem] lg:w-[40rem] lg:h-[40rem] rounded-full blur-3xl ${isMobile ? 'opacity-8 dark:opacity-5' : 'opacity-15 dark:opacity-10 sm:opacity-18 sm:dark:opacity-13 lg:opacity-20 lg:dark:opacity-15'}`}
           style={{
             background:
               'radial-gradient(circle, color-mix(in srgb, var(--accent-2, var(--accent)) 30%, transparent) 0%, transparent 70%)',
             animation: 'float 14s ease-in-out infinite',
           }}
         />
-        {/* 微光斑 - 中部偏右，缓慢漂浮（移动端隐藏以节省性能） */}
-        <div
-          className="hidden sm:block absolute top-1/4 right-1/4 w-72 h-72 rounded-full blur-3xl opacity-15"
-          style={{
-            background:
-              'radial-gradient(circle, color-mix(in srgb, var(--accent-3, var(--accent)) 35%, transparent) 0%, transparent 70%)',
-            animation: 'float 18s ease-in-out infinite reverse',
-          }}
-        />
+        {!isMobile && (
+          <div
+            className="hidden sm:block absolute top-1/4 right-1/4 w-72 h-72 rounded-full blur-3xl opacity-15"
+            style={{
+              background:
+                'radial-gradient(circle, color-mix(in srgb, var(--accent-3, var(--accent)) 35%, transparent) 0%, transparent 70%)',
+              animation: 'float 18s ease-in-out infinite reverse',
+            }}
+          />
+        )}
       </div>
       {/* 遮罩让背景不抢戏（z-5） */}
       <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />
@@ -156,6 +157,7 @@ export function Layout() {
           aria-hidden
           onClick={() => setSidebarOpen(false)}
           className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm lg:hidden animate-in fade-in duration-200"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         />
       )}
 
@@ -176,7 +178,7 @@ export function Layout() {
           sidebarCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         />
-        <main className="flex-1 overflow-auto p-4 sm:p-6">
+        <main className="flex-1 overflow-auto p-4 sm:p-6" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
           {/* key 绑定路由路径，切换页面时重新触发 panel-enter 入场动画 */}
           <div key={location.pathname} className="panel-enter">
             <Outlet />

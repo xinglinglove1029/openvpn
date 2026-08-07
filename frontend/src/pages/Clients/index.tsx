@@ -9,7 +9,6 @@ import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { PageHeader } from '@/components/PageHeader';
 import { DataTable, type Column } from '@/components/DataTable';
-import { StatusBadge } from '@/components/StatusBadge';
 import { ConfirmDialog, type ConfirmState } from '@/components/ConfirmDialog';
 import { Card, CardContent } from '@/ui/card';
 import { Button } from '@/ui/button';
@@ -17,6 +16,7 @@ import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
 import { Textarea } from '@/ui/textarea';
 import { useAuth } from '@/store/auth';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { HasPermission } from '@/components/HasPermission';
 
 import { cn } from '@/lib/utils';
@@ -33,6 +33,7 @@ type FieldErrors = Record<string, string>;
 
 export default function ClientsPage() {
   const { hasPermission } = useAuth();
+  const isMobile = useIsMobile();
   const [reloadKey, setReloadKey] = useState(0);
   const [search, setSearch] = useState('');
   const [confirmState, setConfirmState] = useState<ConfirmState>();
@@ -149,34 +150,34 @@ export default function ClientsPage() {
         <div className="flex items-center gap-1">
           <HasPermission code="client:download">
             {c.file && (
-              <Button variant="ghost" size="sm" asChild>
+              <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} asChild>
                 <a href={c.file} download={c.fullName}>
-                  <Download className="h-4 w-4 mr-1" />
-                  下载
+                  <Download className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+                  {!isMobile && '下载'}
                 </a>
               </Button>
             )}
           </HasPermission>
           <HasPermission code="client:download">
-            <Button variant="ghost" size="sm" onClick={() => copyClientFile(c)}>
-              <Copy className="h-4 w-4 mr-1" />
-              复制
+            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => copyClientFile(c)}>
+              <Copy className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+              {!isMobile && '复制'}
             </Button>
           </HasPermission>
           <HasPermission code="client:regenerate">
-            <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'config')}>
-              <FileText className="h-4 w-4 mr-1" />
-              配置
+            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => openEditor(c, 'config')}>
+              <FileText className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+              {!isMobile && '配置'}
             </Button>
           </HasPermission>
           <HasPermission code="client:regenerate">
-            <Button variant="ghost" size="sm" onClick={() => openEditor(c, 'ccd')}>
-              <FolderOpen className="h-4 w-4 mr-1" />
-              CCD
+            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => openEditor(c, 'ccd')}>
+              <FolderOpen className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+              {!isMobile && 'CCD'}
             </Button>
           </HasPermission>
           <HasPermission code="client:delete">
-            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteClient(c)}>
+            <Button variant="ghost" size="sm" className={cn('text-destructive', isMobile && 'h-10 w-10 p-0')} onClick={() => deleteClient(c)}>
               <Trash2 className="h-4 w-4" />
             </Button>
           </HasPermission>
@@ -197,8 +198,8 @@ export default function ClientsPage() {
       </PageHeader>
 
       {/* Search */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="relative flex-1 w-full sm:max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="搜索客户端名称"
@@ -213,7 +214,7 @@ export default function ClientsPage() {
       {settings?.client?.client_url && Object.keys(settings.client.client_url).length > 0 && (
         <Card>
           <CardContent className="pt-4">
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-4">
               <span className="text-sm font-medium text-muted-foreground">客户端下载：</span>
               {Object.entries(settings.client.client_url).map(([key, url]) => (
                 <a
@@ -389,15 +390,15 @@ function AddClientDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) resetForm(); onOpenChange(v); }}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="w-full sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>添加客户端配置</DialogTitle>
           <DialogDescription>名称会用于生成证书与 .ovpn 文件；地址、端口、CCD、自定义配置会写入当前客户端配置。MFA 验证将根据用户绑定状态自动启用。</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Name */}
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="client-name" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="client-name" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               客户端名称 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -413,8 +414,8 @@ function AddClientDialog({
           </div>
 
           {/* Server address */}
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="server-addr" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="server-addr" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               VPN 服务器地址 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -429,8 +430,8 @@ function AddClientDialog({
           </div>
 
           {/* Server port */}
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="server-port" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="server-port" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               VPN 端口 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -445,8 +446,8 @@ function AddClientDialog({
           </div>
 
           {/* CCD config */}
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="ccd-config" className="pt-2 text-right text-sm font-medium text-foreground/80">CCD 配置</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="ccd-config" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">CCD 配置</Label>
             <div className="space-y-1.5 min-w-0">
               <Textarea
                 id="ccd-config"
@@ -460,8 +461,8 @@ function AddClientDialog({
           </div>
 
           {/* Custom config */}
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="custom-config" className="pt-2 text-right text-sm font-medium text-foreground/80">自定义配置</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="custom-config" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">自定义配置</Label>
             <div className="space-y-1.5 min-w-0">
               <Textarea
                 id="custom-config"
@@ -474,7 +475,7 @@ function AddClientDialog({
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => { resetForm(); onOpenChange(false); }}>取消</Button>
             <Button type="submit" disabled={saving}>
               {saving ? '生成中...' : '生成客户端'}
@@ -547,7 +548,7 @@ function ClientEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="w-full sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}：{client.name}</DialogTitle>
           <DialogDescription>编辑并保存 {editor === 'config' ? '.ovpn 配置文件' : 'CCD 路由配置'} 内容</DialogDescription>
@@ -564,7 +565,7 @@ function ClientEditorDialog({
             className={cn('font-mono text-xs min-h-[300px]', errors.content && 'border-destructive focus-visible:ring-destructive/40')}
           />
           {errors.content && <p className="text-xs text-destructive">{errors.content}</p>}
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>取消</Button>
             <Button type="submit" disabled={saving}>
               {saving ? '保存中...' : '保存'}

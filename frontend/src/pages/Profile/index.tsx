@@ -35,8 +35,8 @@ function FormField({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-      <Label htmlFor={id} className="pt-2 text-right text-sm font-medium text-foreground/80">
+    <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+      <Label htmlFor={id} className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
         {label}
         {required && <span className="text-destructive ml-0.5">*</span>}
       </Label>
@@ -298,9 +298,7 @@ export default function ProfilePage() {
   }
 
   const avatarSeed = profile?.email || user?.email || user?.username || 'U';
-  const displayName = profile?.name || user?.name || user?.username || '用户';
   const displayUsername = profile?.username || user?.username || '-';
-  const displayEmail = profile?.email || user?.email || '-';
   const displayUserId = user?.id ? String(user.id) : '-';
   // RBAC：admin 用户由后端下发的 isAdmin 字段决定
   const isAdmin = !!user?.isAdmin;
@@ -396,9 +394,10 @@ export default function ProfilePage() {
                 />
               </FormField>
 
-              <div className="flex justify-end pt-2">
+              <div className="flex flex-col sm:flex-row sm:justify-end pt-2 gap-2">
                 <GlowButton
                   type="submit"
+                  className="w-full sm:w-auto"
                   loading={savingProfile}
                   loadingText="保存中…"
                   icon={<Save className="w-4 h-4" />}
@@ -523,17 +522,18 @@ export default function ProfilePage() {
               </div>
             </FormField>
 
-            <div className="flex items-center gap-2 pl-[156px] text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 pl-0 sm:pl-[156px] text-xs text-muted-foreground">
               <ShieldCheck className="w-3.5 h-3.5" />
               密码要求：12 位以上 · 大小写字母 · 数字 · 特殊字符
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex flex-col sm:flex-row sm:justify-end pt-2 gap-2">
               <GlowButton
                 type="submit"
                 loading={savingPassword}
                 loadingText="提交中…"
                 icon={<Lock className="w-4 h-4" />}
+                className="w-full sm:w-auto"
               >
                 更新密码
               </GlowButton>
@@ -563,11 +563,12 @@ export default function ProfilePage() {
                     <Badge variant="outline">未绑定</Badge>
                   </div>
                 </FormField>
-                <div className="flex justify-end pt-2">
+                <div className="flex flex-col sm:flex-row sm:justify-end pt-2 gap-2">
                   <GlowButton
                     type="button"
                     icon={<ShieldCheck className="w-4 h-4" />}
                     onClick={handleStartBindMfa}
+                    className="w-full sm:w-auto"
                   >
                     绑定 MFA
                   </GlowButton>
@@ -608,8 +609,8 @@ export default function ProfilePage() {
                   />
                 </FormField>
 
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button type="button" variant="outline" onClick={handleCancelBindMfa}>
+                <div className="flex flex-col sm:flex-row sm:justify-end gap-2 pt-2">
+                  <Button type="button" variant="outline" onClick={handleCancelBindMfa} className="w-full sm:w-auto">
                     取消
                   </Button>
                   <GlowButton
@@ -617,6 +618,7 @@ export default function ProfilePage() {
                     loading={mfaSaving}
                     loadingText="验证中…"
                     icon={<ShieldCheck className="w-4 h-4" />}
+                    className="w-full sm:w-auto"
                   >
                     确认绑定
                   </GlowButton>
@@ -632,12 +634,13 @@ export default function ProfilePage() {
                     <Badge variant="secondary">已绑定</Badge>
                   </div>
                 </FormField>
-                <div className="flex justify-end pt-2">
+                <div className="flex flex-col sm:flex-row sm:justify-end pt-2 gap-2">
                   <Button
                     type="button"
                     variant="outline"
                     onClick={handleUnbindMfa}
                     disabled={mfaUnbinding}
+                    className="w-full sm:w-auto"
                   >
                     {mfaUnbinding ? '解除中…' : '解除绑定'}
                   </Button>

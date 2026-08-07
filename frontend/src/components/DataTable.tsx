@@ -16,7 +16,9 @@ import {
   SelectValue,
 } from '@/ui/select';
 import { Button } from '@/ui/button';
+import { Card, CardContent } from '@/ui/card';
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export interface Column<T> {
   key: string;
@@ -98,6 +100,8 @@ export function DataTable<T>({
   keyFn,
   fullData,
 }: DataTableProps<T>) {
+  const isMobile = useIsMobile();
+
   if (!total) return null;
 
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -145,99 +149,149 @@ export function DataTable<T>({
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {columns.map((col) => {
-                const isActive = sortKey === col.key;
-                const SortIcon = !col.sortable
-                  ? null
-                  : isActive && sortDir === 'asc'
-                    ? ChevronUp
-                    : isActive && sortDir === 'desc'
-                      ? ChevronDown
-                      : ChevronsUpDown;
-                return (
-                  <TableHead
-                    key={col.key}
-                    className={cn(
-                      col.className,
-                      col.sortable && 'cursor-pointer select-none hover:text-[var(--accent)] transition-colors',
-                      isActive && 'text-[var(--accent)]',
-                    )}
-                    onClick={() => handleSort(col)}
-                  >
-                    <span className="inline-flex items-center gap-1.5">
-                      {col.header}
-                      {SortIcon && (
-                        <SortIcon
-                          className={cn(
-                            'h-3.5 w-3.5 shrink-0 transition-opacity',
-                            isActive ? 'opacity-100' : 'opacity-40',
-                          )}
-                        />
-                      )}
-                    </span>
-                  </TableHead>
-                );
-              })}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {finalData.map((item, index) => (
-              <TableRow key={keyFn ? keyFn(item, finalStart + index) : finalStart + index}>
+      {isMobile ? (
+        <div className="space-y-3">
+          {finalData.map((item, index) => (
+            <Card
+              key={keyFn ? keyFn(item, finalStart + index) : finalStart + index}
+            >
+              <CardContent className="p-4 space-y-2">
                 {columns.map((col) => (
-                  <TableCell key={col.key} className={col.className}>
-                    {col.render(item, finalStart + index)}
-                  </TableCell>
+                  <div
+                    key={col.key}
+                    className={`flex items-center justify-between gap-3 ${col.className ?? ''}`}
+                  >
+                    <span className="text-xs font-medium text-muted-foreground shrink-0">
+                      {col.header}
+                    </span>
+                    <span className="text-sm text-right truncate">
+                      {col.render(item, finalStart + index)}
+                    </span>
+                  </div>
                 ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* 分页栏：左侧统计、右侧分页器+每页条数 */}
-      <div className="flex items-center justify-between gap-4 text-sm">
-        <div className="text-muted-foreground">
-          显示 <strong>{finalStart + 1}-{finalEnd}</strong> / 共 {total} 条
+              </CardContent>
+            </Card>
+          ))}
         </div>
-        <div className="flex items-center gap-3">
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => onPageSizeChange(Number(value))}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {pageSizeOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
+      ) : (
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {columns.map((col) => {
+                  const isActive = sortKey === col.key;
+                  const SortIcon = !col.sortable
+                    ? null
+                    : isActive && sortDir === 'asc'
+                      ? ChevronUp
+                      : isActive && sortDir === 'desc'
+                        ? ChevronDown
+                        : ChevronsUpDown;
+                  return (
+                    <TableHead
+                      key={col.key}
+                      className={cn(
+                        col.className,
+                        col.sortable && 'cursor-pointer select-none hover:text-[var(--accent)] transition-colors',
+                        isActive && 'text-[var(--accent)]',
+                      )}
+                      onClick={() => handleSort(col)}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        {col.header}
+                        {SortIcon && (
+                          <SortIcon
+                            className={cn(
+                              'h-3.5 w-3.5 shrink-0 transition-opacity',
+                              isActive ? 'opacity-100' : 'opacity-40',
+                            )}
+                          />
+                        )}
+                      </span>
+                    </TableHead>
+                  );
+                })}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {finalData.map((item, index) => (
+                <TableRow key={keyFn ? keyFn(item, finalStart + index) : finalStart + index}>
+                  {columns.map((col) => (
+                    <TableCell key={col.key} className={col.className}>
+                      {col.render(item, finalStart + index)}
+                    </TableCell>
+                  ))}
+                </TableRow>
               ))}
-            </SelectContent>
-          </Select>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(1)}>
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {isMobile ? (
+        <div className="flex flex-col gap-2 text-sm">
+          <div className="text-muted-foreground text-center">
+            显示 <strong>{finalStart + 1}-{finalEnd}</strong> / 共 {total} 条
+          </div>
+          <div className="flex items-center justify-center gap-1">
+            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1} onClick={() => onPageChange(1)}>
               «
             </Button>
-            <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="px-2 font-medium">
+            <span className="px-2 font-medium tabular-nums">
               {page} / {pageCount}
             </span>
-            <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
+            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
+            <Button variant="outline" size="icon" className="h-9 w-9" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
               »
             </Button>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <div className="text-muted-foreground">
+            显示 <strong>{finalStart + 1}-{finalEnd}</strong> / 共 {total} 条
+          </div>
+          <div className="flex items-center gap-3">
+            <Select
+              value={String(pageSize)}
+              onValueChange={(value) => onPageSizeChange(Number(value))}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {pageSizeOptions.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(1)}>
+                «
+              </Button>
+              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="px-2 font-medium">
+                {page} / {pageCount}
+              </span>
+              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-8 w-8" disabled={page >= pageCount} onClick={() => onPageChange(pageCount)}>
+                »
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

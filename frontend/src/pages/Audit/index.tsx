@@ -161,9 +161,9 @@ export default function AuditPage() {
       <PageHeader eyebrow="Audit" title="操作审计" description="查看系统操作日志与审计记录" />
 
       {/* 操作工具栏：筛选条件 在左，刷新、导出 在右 */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
         <Select value={operator} onValueChange={setOperator}>
-          <SelectTrigger className="w-[140px] h-8">
+          <SelectTrigger className="w-full sm:w-[140px] h-8">
             <SelectValue placeholder="全部操作人" />
           </SelectTrigger>
           <SelectContent>
@@ -176,7 +176,7 @@ export default function AuditPage() {
           </SelectContent>
         </Select>
         <Select value={module} onValueChange={setModule}>
-          <SelectTrigger className="w-[120px] h-8">
+          <SelectTrigger className="w-full sm:w-[120px] h-8">
             <SelectValue placeholder="全部模块" />
           </SelectTrigger>
           <SelectContent>
@@ -188,7 +188,7 @@ export default function AuditPage() {
           </SelectContent>
         </Select>
         <Select value={action} onValueChange={setAction}>
-          <SelectTrigger className="w-[120px] h-8">
+          <SelectTrigger className="w-full sm:w-[120px] h-8">
             <SelectValue placeholder="全部动作" />
           </SelectTrigger>
           <SelectContent>
@@ -204,7 +204,7 @@ export default function AuditPage() {
           onChange={setDateRange}
           placeholder="选择时间范围"
         />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="w-full sm:w-auto sm:ml-auto flex flex-col sm:flex-row items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)}>
             <RefreshCw className="h-3.5 w-3.5 mr-1" />
             刷新

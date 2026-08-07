@@ -10,6 +10,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/ui/alert-dialog';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { cn } from '@/lib/utils';
 
 export interface ConfirmState {
   title: string;
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   onClose: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const isMobile = useIsMobile();
 
   async function handleConfirm() {
     setSaving(true);
@@ -33,7 +36,7 @@ export function ConfirmDialog({
       await state.onConfirm();
       onClose();
     } catch {
-      // �G�误由调用方 notify 处理
+      // 错误由调用方 notify 处理
     } finally {
       setSaving(false);
     }
@@ -43,20 +46,52 @@ export function ConfirmDialog({
 
   return (
     <AlertDialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        className={cn(
+          isMobile && 'w-[95vw] max-w-[95vw] p-4 gap-3',
+        )}
+      >
         <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2">
-            <AlertTriangle className={`h-5 w-5 ${state.danger ? 'text-destructive' : 'text-warning'}`} />
+          <AlertDialogTitle
+            className={cn(
+              'flex items-center gap-2',
+              isMobile && 'flex-col text-center gap-2',
+            )}
+          >
+            <AlertTriangle
+              className={cn(
+                state.danger ? 'text-destructive' : 'text-warning',
+                isMobile ? 'h-6 w-6' : 'h-5 w-5',
+              )}
+            />
             {state.title}
           </AlertDialogTitle>
-          <AlertDialogDescription>{state.message}</AlertDialogDescription>
+          <AlertDialogDescription
+            className={cn(
+              isMobile && 'text-xs',
+            )}
+          >
+            {state.message}
+          </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={saving}>取消</AlertDialogCancel>
+        <AlertDialogFooter
+          className={cn(
+            isMobile && 'flex-col gap-2 sm:flex-row sm:justify-end sm:space-x-0',
+          )}
+        >
+          <AlertDialogCancel
+            disabled={saving}
+            className={cn(isMobile && 'w-full')}
+          >
+            取消
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={handleConfirm}
             disabled={saving}
-            className={state.danger ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
+            className={cn(
+              state.danger && 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+              isMobile && 'w-full',
+            )}
           >
             {saving ? '处理中...' : '确认执行'}
           </AlertDialogAction>

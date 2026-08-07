@@ -48,28 +48,11 @@ import { ConfirmDialog, type ConfirmState } from '@/components/ConfirmDialog';
 import { HasPermission } from '@/components/HasPermission';
 import { useAuth } from '@/store/auth';
 import { api } from '@/api';
-import { messageOf, normalizeList } from '@/lib/format';
+import { messageOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { PermissionTreeNode } from '@/types';
 
 /* ───────── 工具：扁平化权限树（保留层级信息） ───────── */
-
-interface FlatNode extends PermissionTreeNode {
-  depth: number;
-  parent: PermissionTreeNode | null;
-}
-
-/** 递归扁平化权限树，记录 depth 和 parent，便于上移/下移时找兄弟节点 */
-function flatten(nodes: PermissionTreeNode[], depth = 0, parent: PermissionTreeNode | null = null): FlatNode[] {
-  const result: FlatNode[] = [];
-  for (const node of nodes) {
-    result.push({ ...node, depth, parent });
-    if (node.children && node.children.length) {
-      result.push(...flatten(node.children, depth + 1, node));
-    }
-  }
-  return result;
-}
 
 /** 收集所有后代节点（含自身）的 ID */
 function collectDescendantIds(node: PermissionTreeNode): number[] {
@@ -80,11 +63,6 @@ function collectDescendantIds(node: PermissionTreeNode): number[] {
     }
   }
   return ids;
-}
-
-/** 收集所有节点的 ID */
-function collectAllIds(nodes: PermissionTreeNode[]): number[] {
-  return nodes.flatMap((n) => collectDescendantIds(n));
 }
 
 /* ───────── 权限表单对话框 ───────── */

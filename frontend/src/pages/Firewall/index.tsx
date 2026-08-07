@@ -411,7 +411,7 @@ function FirewallFormDialog({
           {groups.length > 0 && (
             <div className="space-y-2">
               <Label>源用户组</Label>
-              <div className="grid grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
                 {groups.map((group) => (
                   <label
                     key={group.id}
@@ -434,7 +434,7 @@ function FirewallFormDialog({
           {groups.length > 0 && (
             <div className="space-y-2">
               <Label>目的用户组</Label>
-              <div className="grid grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
                 {groups.map((group) => (
                   <label
                     key={group.id}
@@ -471,7 +471,7 @@ function FirewallFormDialog({
           </div>
 
           {/* Status switch */}
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <Label htmlFor="fw-status">启用规则</Label>
             <Switch id="fw-status" checked={status} onCheckedChange={setStatus} />
           </div>
@@ -488,7 +488,7 @@ function FirewallFormDialog({
             />
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row">
             <Button type="button" variant="outline" onClick={() => { resetForm(); onOpenChange(false); }}>取消</Button>
             <Button type="submit" disabled={saving}>
               {saving ? '保存中...' : '保存规则'}

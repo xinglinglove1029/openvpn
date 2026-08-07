@@ -9,6 +9,7 @@ import {
 } from '@/ui/popover';
 import { Separator } from '@/ui/separator';
 import { useNotificationHub } from '@/hooks/useNotificationHub';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 
 function eventLabel(event: string) {
@@ -27,6 +28,7 @@ function formatTime(value?: string) {
 export function NotificationBell() {
   const { snapshot, latest, state, markRead } = useNotificationHub();
   const popoverOpenRef = useRef(false);
+  const isMobile = useIsMobile();
 
   const unread = snapshot.unread;
 
@@ -54,7 +56,10 @@ export function NotificationBell() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative"
+          className={cn(
+            'relative',
+            isMobile && 'h-11 w-11 min-h-[44px] min-w-[44px]',
+          )}
           title={
             unread > 0
               ? `${unread} 条未读通知`
@@ -78,7 +83,13 @@ export function NotificationBell() {
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
+      <PopoverContent
+        align="end"
+        className={cn(
+          'p-0',
+          isMobile ? 'w-[95vw]' : 'w-80',
+        )}
+      >
         <div className="flex items-center justify-between px-4 py-3">
           <div>
             <p className="text-sm font-semibold">站内信</p>

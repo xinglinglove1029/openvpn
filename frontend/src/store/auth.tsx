@@ -49,7 +49,7 @@ function readStoredUser(): ClientUserInfo | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ClientUserInfo | null>(() => readStoredUser());
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading] = useState(false);
   const [permissionTree, setPermissionTree] = useState<PermissionTreeNode[]>([]);
 
   // 监听跨标签页的 localStorage 变化，保持登录态一致

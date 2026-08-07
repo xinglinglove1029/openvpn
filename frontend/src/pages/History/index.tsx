@@ -3,7 +3,7 @@ import { Search, RefreshCw, Download } from 'lucide-react';
 import { api } from '../../api';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
-import { formatBytes, getClientBytes, normalizeList } from '@/lib/format';
+import { formatBytes, getClientBytes } from '@/lib/format';
 import { formatDateTime, formatDuration } from '@/lib/utils';
 import { PageHeader } from '@/components/PageHeader';
 import { TimeRangePicker } from '@/components/TimeRangePicker';
@@ -150,7 +150,7 @@ export default function HistoryPage() {
       <Card>
         <CardContent className="p-6">
           {/* 过滤栏 */}
-          <div className="flex flex-wrap items-center gap-3 mb-6">
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 mb-6">
             <TimeRangePicker
               value={dateRange}
               onChange={setDateRange}
@@ -159,17 +159,17 @@ export default function HistoryPage() {
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
-                className="pl-8 w-[200px]"
+                className="pl-8 w-full sm:w-[200px]"
                 value={search}
                 placeholder="搜索用户/IP"
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <Button size="sm" onClick={() => setReloadKey((v) => v + 1)}>
+            <Button size="sm" onClick={() => setReloadKey((v) => v + 1)} className="w-full sm:w-auto">
               <RefreshCw className="h-4 w-4 mr-1" />
               查询
             </Button>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" size="sm" asChild className="w-full sm:w-auto">
               <a href={`/ovpn/history/export?qt=${qt}`}>
                 <Download className="h-4 w-4 mr-1" />
                 导出

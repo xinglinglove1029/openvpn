@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Lock, User, KeyRound, ShieldCheck, Eye, EyeOff } from 'lucide-react';
-import { useNavigate, useSearchParams, Navigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
@@ -9,6 +9,7 @@ import { Checkbox } from '@/ui/checkbox';
 import { HeroOrbitScene } from '@/components/HeroOrbitScene';
 import { PasswordStrength } from '@/components/PasswordStrength';
 import { useAuth } from '@/store/auth';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 
 type LoginMode = 'login' | 'mfa' | 'first-password';
@@ -45,6 +46,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showNewPasswordAgain, setShowNewPasswordAgain] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     if (user) {
@@ -194,7 +196,7 @@ export default function LoginPage() {
       </div>
 
       {/* 左侧品牌区 */}
-      <aside className="reference-login-brand">
+      <aside className="reference-login-brand hidden md:flex shrink-0">
         <div className="reference-login-gradient" />
         <div className="reference-login-glow glow-a" />
         <div className="reference-login-glow glow-b" />
@@ -235,8 +237,7 @@ export default function LoginPage() {
       {/* 右侧登录表单区 */}
       <section className="reference-login-form">
         <div className="reference-mobile-bg" />
-        <div className="reference-login-card">
-          {/* 卡片标题 */}
+        <div className={cn("reference-login-card", isMobile && "w-full max-w-md mx-auto")}>
           <div className="reference-card-heading">
             <div className="reference-card-icon" aria-hidden="true">
               <Lock size={22} color="#fff" />

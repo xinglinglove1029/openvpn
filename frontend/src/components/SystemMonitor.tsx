@@ -40,6 +40,7 @@ import { realtimeHub, type ConnectionState } from '@/lib/notificationHub';
 import { formatBytes } from '@/lib/format';
 import { api } from '@/api';
 import type { SystemStatsPayload } from '@/types';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /* ---------- 工具函数 ---------- */
 
@@ -334,16 +335,13 @@ interface MetricCardProps {
   percent: number;
   primary: string;
   secondary: string;
-  /** 用于控制环形颜色 */
   tone?: 'default' | 'warning' | 'danger';
-  /** 自定义中心内容；不传则用 percent */
   ringLabel?: React.ReactNode;
-  /** 最近 N 个采样点（用于 sparkline 趋势），单位由 caller 决定（0-100 或任意数值） */
   history?: number[];
-  /** sparkline 主题色；缺省跟随 tone */
+  size?: number;
 }
 
-function MetricCard({ title, icon: Icon, percent, primary, secondary, tone = 'default', ringLabel, history }: MetricCardProps) {
+function MetricCard({ title, icon: Icon, percent, primary, secondary, tone = 'default', ringLabel, history, size }: MetricCardProps) {
   const color =
     tone === 'danger'
       ? 'var(--destructive, #ef4444)'
@@ -351,10 +349,11 @@ function MetricCard({ title, icon: Icon, percent, primary, secondary, tone = 'de
         ? '#f59e0b'
         : 'var(--accent)';
   const sparkData = history && history.length > 0 ? history : [percent];
+  const ringSize = size ?? 132;
   return (
     <CardGlow className="h-full">
       <Card className="h-full border-0 bg-transparent shadow-none">
-        <CardContent className="relative z-10 flex h-full flex-col items-center justify-center gap-3 py-5">
+        <CardContent className="relative z-10 flex h-full flex-col items-center justify-center gap-2 py-4 px-3">
           <div className="flex w-full items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <Icon className="h-3.5 w-3.5" />
@@ -369,23 +368,22 @@ function MetricCard({ title, icon: Icon, percent, primary, secondary, tone = 'de
               <Icon className="h-3.5 w-3.5" />
             </span>
           </div>
-          <RingChart value={percent} color={color} label={ringLabel ? undefined : `${title} ${percent.toFixed(0)}%`}>
+          <RingChart value={percent} color={color} size={ringSize} label={ringLabel ? undefined : `${title} ${percent.toFixed(0)}%`}>
             {ringLabel ?? (
               <>
-                <span className="text-2xl font-bold tabular-nums tracking-tight">{percent.toFixed(0)}</span>
+                <span className={`font-bold tabular-nums tracking-tight ${ringSize <= 100 ? 'text-lg' : 'text-2xl'}`}>{percent.toFixed(0)}</span>
                 <span className="text-[10px] text-muted-foreground -mt-1">%</span>
               </>
             )}
           </RingChart>
           <div className="w-full text-center">
-            <p className="text-sm font-semibold tabular-nums">{primary}</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">{secondary}</p>
+            <p className="text-sm font-semibold tabular-nums truncate">{primary}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground truncate">{secondary}</p>
           </div>
-          {/* 趋势迷你图：固定 28px 高度，宽度撑满 */}
           <Sparkline
             data={sparkData}
             color={color}
-            height={28}
+            height={24}
             unit={title.includes('网络') ? ' B/s' : '%'}
             label={title}
           />
@@ -505,6 +503,7 @@ export default function SystemMonitor() {
   const [stats, setStats] = useState<SystemStatsPayload | null>(null);
   const [connection, setConnection] = useState<ConnectionState>(realtimeHub.getState());
   const [now, setNow] = useState(Date.now());
+  const isMobile = useIsMobile();
 
   // 趋势历史：4 个核心指标的最近 N 个采样点
   const [cpuHist, setCpuHist] = useState<number[]>([]);
@@ -596,6 +595,8 @@ export default function SystemMonitor() {
   const staleMs = stats?.timestamp ? Math.max(0, now - stats.timestamp) : Number.POSITIVE_INFINITY;
   const showDisconnectAlert = !isOpen || staleMs > 15_000;
 
+  const ringSize = isMobile ? 100 : 132;
+
   return (
     <CardGlow>
       <Card>
@@ -628,8 +629,7 @@ export default function SystemMonitor() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-5">
-          {/* 断线提示：仅在 WS 异常或长时间无数据时显示 */}
+        <CardContent className="space-y-4">
           {showDisconnectAlert && (
             <div
               className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
@@ -646,7 +646,6 @@ export default function SystemMonitor() {
             </div>
           )}
 
-          {/* 四个核心指标卡 */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               title="CPU 使用率"
@@ -656,6 +655,7 @@ export default function SystemMonitor() {
               secondary={stats ? `${stats.host.cpuCores || '-'} 核 · ${stats.host.cpuModel || '-'}` : '等待数据'}
               tone={cpuTone}
               history={cpuHist}
+              size={ringSize}
             />
             <MetricCard
               title="内存使用率"
@@ -665,6 +665,7 @@ export default function SystemMonitor() {
               secondary={stats ? `共 ${formatBytes(stats.memory.totalBytes)} · 可用 ${formatBytes(stats.memory.availableBytes)}` : '等待数据'}
               tone={memTone}
               history={memHist}
+              size={ringSize}
             />
             <MetricCard
               title="磁盘使用率"
@@ -678,6 +679,7 @@ export default function SystemMonitor() {
               secondary={stats && stats.disks.length > 0 ? `最满 ${stats.disks[0].mountpoint}` : '等待数据'}
               tone={diskTone}
               history={diskHist}
+              size={ringSize}
             />
             <MetricCard
               title="网络总速率"
@@ -691,6 +693,7 @@ export default function SystemMonitor() {
               }
               tone={netTone}
               history={netHist}
+              size={ringSize}
             />
           </div>
 
@@ -722,7 +725,6 @@ export default function SystemMonitor() {
             />
           </div>
 
-          {/* 每核 CPU 占用 + 磁盘 + 网络接口 */}
           <div className="grid gap-4 lg:grid-cols-3">
             {/* 每核 CPU */}
             <div className="space-y-2 rounded-lg border border-border/40 bg-muted/10 p-3">
@@ -734,7 +736,7 @@ export default function SystemMonitor() {
                 <span className="text-[10px] text-muted-foreground">{stats?.cpuPerCore.length ?? 0} 核</span>
               </div>
               {stats && stats.cpuPerCore.length > 0 ? (
-                <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6 lg:grid-cols-4 xl:grid-cols-6">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-6">
                   {stats.cpuPerCore.map((v, idx) => {
                     const p = clampPercent(v);
                     const tone = p >= 90 ? 'bg-red-500' : p >= 70 ? 'bg-amber-500' : 'bg-[var(--accent)]';

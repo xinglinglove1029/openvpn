@@ -159,8 +159,8 @@ export default function CertsPage() {
       <PageHeader eyebrow="Trust" title="证书管理" description="管理 CA 证书与客户端证书生命周期" />
 
       {/* 操作工具栏：搜索、筛选 在左，刷新、更新证书 在右 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-48">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
+        <div className="relative w-full sm:w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={searchText}
@@ -170,7 +170,7 @@ export default function CertsPage() {
           />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'normal' | 'expiring' | 'expired')}>
-          <SelectTrigger className="w-[110px] h-8">
+          <SelectTrigger className="w-full sm:w-[110px] h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -180,15 +180,15 @@ export default function CertsPage() {
             <SelectItem value="expired">已过期</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
           <HasPermission code="cert:view">
-            <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)}>
+            <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)} className="w-full sm:w-auto">
               <RefreshCw className="h-3.5 w-3.5 mr-1" />
               刷新
             </Button>
           </HasPermission>
           <HasPermission code="cert:renew">
-            <Button size="sm" onClick={() => setRenewOpen(true)}>
+            <Button size="sm" onClick={() => setRenewOpen(true)} className="w-full sm:w-auto">
               <ShieldCheck className="h-3.5 w-3.5 mr-1" />
               更新证书
             </Button>

@@ -1085,21 +1085,6 @@ function GroupAssignDialog({
     return result;
   }
 
-  // 收集指定节点的所有叶子节点 ID（用于 UI 半选状态计算）
-  function collectLeafIds(groupId: number): number[] {
-    const result: number[] = [];
-    const visit = (pid: number) => {
-      const children = allGroups.filter((g) => g.parentId === pid);
-      if (children.length === 0) {
-        result.push(pid);
-      } else {
-        children.forEach((c) => visit(c.id));
-      }
-    };
-    visit(groupId);
-    return result;
-  }
-
   function toggleExpand(id: number) {
     setExpanded((prev) => {
       const next = new Set(prev);

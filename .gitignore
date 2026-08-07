@@ -27,3 +27,8 @@ _bmad-output/
 *.exe
 *.exe~
 
+# 测试产物
+frontend/screenshots/
+frontend/test-results/
+/openvpn-web
+

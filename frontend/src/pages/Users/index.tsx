@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   Users,
@@ -16,6 +16,7 @@ import {
 import { api } from '@/api';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   expiryStatus,
   isUserExpired,
@@ -111,10 +112,6 @@ export default function UsersPage() {
   const [selectedGroupId, setSelectedGroupId] = useState(1);
   const [confirmState, setConfirmState] = useState<ConfirmState>();
 
-  const refreshAll = () => {
-    setReloadKey((v) => v + 1);
-    setUsersReloadKey((v) => v + 1);
-  };
   const refreshGroups = () => setReloadKey((v) => v + 1);
   const refreshUsers = () => setUsersReloadKey((v) => v + 1);
 
@@ -155,7 +152,7 @@ export default function UsersPage() {
         </Button>
       </PageHeader>
 
-      <div className="grid grid-cols-[260px_1fr] gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         {/* 左侧分组树 */}
         <GroupTreePanel
           groups={groups}
@@ -270,8 +267,8 @@ function GroupTreePanel({
     <>
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-base">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
               <FolderTree className="h-4 w-4" />
               用户组
             </CardTitle>
@@ -469,7 +466,7 @@ function GroupFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{mode === 'add' ? '新增用户组' : `编辑用户组：${group?.name}`}</DialogTitle>
           <DialogDescription>
@@ -477,8 +474,8 @@ function GroupFormDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="group-name" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="group-name" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               分组名称 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -494,8 +491,8 @@ function GroupFormDialog({
               {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
             </div>
           </div>
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               上级分组 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -517,7 +514,7 @@ function GroupFormDialog({
               {errors.parentId && <p className="text-xs text-destructive">{errors.parentId}</p>}
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>
@@ -586,7 +583,7 @@ function GroupConfigDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>组配置：{group.name}</DialogTitle>
           <DialogDescription>编辑此分组的 OpenVPN 配置</DialogDescription>
@@ -602,7 +599,7 @@ function GroupConfigDialog({
             }}
           />
           {errors.content && <p className="text-xs text-destructive">{errors.content}</p>}
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>
@@ -623,7 +620,6 @@ function UserTablePanel({
   selectedGroupId,
   usersState,
   clients,
-  isAdmin,
   notify,
   reload,
   confirmAction,
@@ -637,6 +633,7 @@ function UserTablePanel({
   reload: () => void;
   confirmAction: (state: ConfirmState) => void;
 }) {
+  const isMobile = useIsMobile();
   const users = usersState.data?.users || [];
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [userSearch, setUserSearch] = useState('');
@@ -960,36 +957,36 @@ function UserTablePanel({
       render: (user) => (
         <div className="flex items-center gap-1">
           <HasPermission code="user:update">
-            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openEditUser(user)}>
-              编辑
+            <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => openEditUser(user)}>
+              {isMobile ? <Edit className="h-4 w-4" /> : '编辑'}
             </Button>
           </HasPermission>
           <HasPermission
             code={user.isEnable === false ? 'user:enable' : 'user:disable'}
             fallback={
-              <Button size="sm" variant="ghost" className="h-7 px-2" disabled>
-                {user.isEnable === false ? '启用' : '禁用'}
+              <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} disabled>
+                {isMobile ? <KeyRound className="h-4 w-4" /> : (user.isEnable === false ? '启用' : '禁用')}
               </Button>
             }
           >
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 px-2"
+              className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')}
               onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}
             >
-              {user.isEnable === false ? '启用' : '禁用'}
+              {isMobile ? <KeyRound className="h-4 w-4" /> : (user.isEnable === false ? '启用' : '禁用')}
             </Button>
           </HasPermission>
           <HasPermission code="user:reset_password">
-            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => openResetPassword(user)}>
-              重置密码
+            <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => openResetPassword(user)}>
+              {isMobile ? <KeyRound className="h-4 w-4" /> : '重置密码'}
             </Button>
           </HasPermission>
           {(user.mfaSecret || user.mfaEnabled) && (
             <HasPermission code="user:reset_mfa">
-              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resetMfa(user)}>
-                重置 MFA
+              <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => resetMfa(user)}>
+                {isMobile ? <KeyRound className="h-4 w-4" /> : '重置 MFA'}
               </Button>
             </HasPermission>
           )}
@@ -998,10 +995,10 @@ function UserTablePanel({
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7 px-2 text-destructive hover:text-destructive"
+                className={cn('h-7 px-2 text-destructive hover:text-destructive', isMobile && 'h-10 w-10 p-0')}
                 onClick={() => deleteUser(user)}
               >
-                删除
+                {isMobile ? <Trash2 className="h-4 w-4" /> : '删除'}
               </Button>
             )}
           </HasPermission>
@@ -1014,12 +1011,12 @@ function UserTablePanel({
     <>
       <Card>
         <CardHeader className="pb-4">
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-base">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
               <Users className="h-4 w-4" />
               VPN 账号
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <HasPermission code="user:import">
                 <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
                   <Upload className="mr-1 h-3.5 w-3.5" />
@@ -1060,8 +1057,8 @@ function UserTablePanel({
         </CardHeader>
         <CardContent className="space-y-4">
           {/* 过滤栏 */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[200px]">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
+            <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="pl-8"
@@ -1071,7 +1068,7 @@ function UserTablePanel({
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[130px]">
+              <SelectTrigger className="w-full sm:w-[130px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1083,7 +1080,7 @@ function UserTablePanel({
               </SelectContent>
             </Select>
             <Select value={mfaFilter} onValueChange={setMfaFilter}>
-              <SelectTrigger className="w-[130px]">
+              <SelectTrigger className="w-full sm:w-[130px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1095,7 +1092,7 @@ function UserTablePanel({
               </SelectContent>
             </Select>
             <Select value={expireFilter} onValueChange={setExpireFilter}>
-              <SelectTrigger className="w-[140px]">
+              <SelectTrigger className="w-full sm:w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1110,9 +1107,9 @@ function UserTablePanel({
 
           {/* 批量操作栏 */}
           {selectedUserIds.length > 0 && (
-            <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-4 py-2">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-md border bg-muted/50 px-4 py-2">
               <span className="text-sm font-medium">已选择 {selectedUserIds.length} 个账号</span>
-              <Separator orientation="vertical" className="h-4" />
+              <Separator orientation="vertical" className="hidden sm:block h-4" />
               <HasPermission code="user:enable">
                 <Button
                   size="sm"
@@ -1373,7 +1370,7 @@ function UserFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {mode === 'add' ? '添加 VPN 用户' : `编辑用户：${user?.username}`}
@@ -1383,8 +1380,8 @@ function UserFormDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="user-username" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="user-username" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               账号 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -1402,8 +1399,8 @@ function UserFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="user-name" className="pt-2 text-right text-sm font-medium text-foreground/80">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="user-name" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               姓名 <span className="text-destructive ml-0.5">*</span>
             </Label>
             <div className="space-y-1.5 min-w-0">
@@ -1420,8 +1417,8 @@ function UserFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="user-email" className="pt-2 text-right text-sm font-medium text-foreground/80">邮箱 {mode === 'add' && <span className="text-destructive">*</span>}</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="user-email" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">邮箱 {mode === 'add' && <span className="text-destructive">*</span>}</Label>
             <div className="space-y-1.5 min-w-0">
               <Input
                 id="user-email"
@@ -1437,8 +1434,8 @@ function UserFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label htmlFor="user-ip" className="pt-2 text-right text-sm font-medium text-foreground/80">固定 IP</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="user-ip" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">固定 IP</Label>
             <div className="space-y-1.5 min-w-0">
               <Input
                 id="user-ip"
@@ -1453,8 +1450,8 @@ function UserFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">所属分组</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">所属分组</Label>
             <div className="space-y-1.5 min-w-0">
               <Select value={gid} onValueChange={setGid}>
                 <SelectTrigger>
@@ -1471,8 +1468,8 @@ function UserFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">客户端配置</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">客户端配置</Label>
             <div className="space-y-1.5 min-w-0">
               <Select value={ovpnConfig || '__none__'} onValueChange={(v) => setOvpnConfig(v === '__none__' ? '' : v)}>
                 <SelectTrigger>
@@ -1491,8 +1488,8 @@ function UserFormDialog({
           </div>
 
           {mode === 'add' && (
-            <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label htmlFor="user-password" className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label htmlFor="user-password" className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 初始密码 <span className="text-destructive ml-0.5">*</span>
               </Label>
               <div className="space-y-1.5 min-w-0">
@@ -1523,8 +1520,8 @@ function UserFormDialog({
             </div>
           )}
 
-          <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-            <Label className="pt-2 text-right text-sm font-medium text-foreground/80">过期日期</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">过期日期</Label>
             <div className="space-y-1.5 min-w-0">
               <DatePickerField value={expireDate} onChange={setExpireDate} />
             </div>
@@ -1532,7 +1529,7 @@ function UserFormDialog({
 
           {mode === 'add' && (
             <div className="grid grid-cols-[140px_1fr] items-center gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">自动创建客户端</Label>
+              <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">自动创建客户端</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={autoCreateClient} onCheckedChange={setAutoCreateClient} />
                 <span className="text-xs text-muted-foreground">开启后将基于用户名生成 .ovpn 配置文件</span>
@@ -1542,7 +1539,7 @@ function UserFormDialog({
 
           {mode === 'add' && (
             <div className="grid grid-cols-[140px_1fr] items-center gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">发送通知邮件</Label>
+              <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">发送通知邮件</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
               </div>
@@ -1551,14 +1548,14 @@ function UserFormDialog({
 
           {mode === 'add' && (
             <div className="grid grid-cols-[140px_1fr] items-center gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">首次登录修改密码</Label>
+              <Label className="pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">首次登录修改密码</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={isFirstLogin} onCheckedChange={setIsFirstLogin} />
               </div>
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>
@@ -1634,7 +1631,7 @@ function ResetPasswordDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>重置密码：{user?.username}</DialogTitle>
           <DialogDescription>设置新的登录密码</DialogDescription>
@@ -1670,14 +1667,14 @@ function ResetPasswordDialog({
             {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
           </div>
 
-          <div className="flex items-center justify-between rounded-md border px-4 py-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-md border px-4 py-3">
             <div>
               <p className="font-medium">发送通知邮件</p>
             </div>
             <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row sm:justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>

@@ -18,7 +18,7 @@ import {
   EyeOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
@@ -173,8 +173,8 @@ function ConfigFields({
         const setVal = (next: unknown) => onChange({ ...value, [field.key]: next });
         if (field.kind === 'text') {
           return (
-            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-0.5">*</span>}
               </Label>
@@ -193,8 +193,8 @@ function ConfigFields({
         if (field.kind === 'password') {
           const visible = !!visibleKeys[field.key];
           return (
-            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-0.5">*</span>}
               </Label>
@@ -224,8 +224,8 @@ function ConfigFields({
         }
         if (field.kind === 'textarea') {
           return (
-            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-0.5">*</span>}
               </Label>
@@ -244,8 +244,8 @@ function ConfigFields({
         }
         if (field.kind === 'number') {
           return (
-            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-0.5">*</span>}
               </Label>
@@ -266,8 +266,8 @@ function ConfigFields({
         if (field.kind === 'select') {
           const cur = typeof v === 'string' ? v : (field.options[0]?.value ?? '');
           return (
-            <div key={field.key} className="grid grid-cols-[140px_1fr] items-start gap-4">
-              <Label className="pt-2 text-right text-sm font-medium text-foreground/80">
+            <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
                 {field.label}
                 {field.required && <span className="text-red-500 ml-0.5">*</span>}
               </Label>
@@ -610,7 +610,7 @@ export default function ChannelProvidersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <Bell className="w-7 h-7" />
@@ -620,12 +620,12 @@ export default function ChannelProvidersPage() {
             配置 Webhook / 邮件 / 钉钉 / 飞书 / 企业微信 / Discord / Slack / Telegram / Mattermost 渠道，启用后会在用户上下线时自动派发
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={handleReload} disabled={state.loading}>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <Button variant="outline" onClick={handleReload} disabled={state.loading} className="w-full sm:w-auto">
             <RefreshCw className={`w-4 h-4 mr-2 ${state.loading ? 'animate-spin' : ''}`} />
             刷新
           </Button>
-          <Button onClick={openCreate}>
+          <Button onClick={openCreate} className="w-full sm:w-auto">
             <Plus className="w-4 h-4 mr-2" />
             新增渠道
           </Button>
@@ -671,7 +671,7 @@ export default function ChannelProvidersPage() {
       />
 
       <Dialog open={form.open} onOpenChange={(o) => !o && closeForm()}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] sm:w-auto max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{form.mode === 'create' ? '新增通知渠道' : '编辑通知渠道'}</DialogTitle>
             <DialogDescription>
@@ -682,7 +682,7 @@ export default function ChannelProvidersPage() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1">
                   渠道名称<span className="text-red-500">*</span>
@@ -749,9 +749,9 @@ export default function ChannelProvidersPage() {
             />
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={closeForm}>取消</Button>
-            <Button onClick={submitForm}>{form.mode === 'create' ? '保存' : '更新'}</Button>
+          <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <Button variant="outline" onClick={closeForm} className="w-full sm:w-auto">取消</Button>
+            <Button onClick={submitForm} className="w-full sm:w-auto">{form.mode === 'create' ? '保存' : '更新'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,18 +1,14 @@
 import { useEffect, useRef } from 'react';
 import type * as THREE from 'three';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
-/**
- * 全屏 three.js 背景层：
- *  - 缓慢飘动的粒子
- *  - 网格地面（透视线条）
- *  - 跟随鼠标视差
- *  - 主题色自适应（从 --accent / --accent-2 读取）
- *  - 异步加载 three，不阻塞首屏
- */
 export function BackgroundScene() {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
+    if (isMobile) return;
+
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -184,7 +180,20 @@ export function BackgroundScene() {
       disposed = true;
       cleanup?.();
     };
-  }, []);
+  }, [isMobile]);
+
+  if (isMobile) {
+    return (
+      <div
+        className="app-bg-scene"
+        aria-hidden="true"
+        style={{
+          background:
+            'radial-gradient(ellipse at 20% 20%, color-mix(in srgb, var(--accent) 18%, transparent) 0%, transparent 55%), radial-gradient(ellipse at 80% 80%, color-mix(in srgb, var(--accent-2, var(--accent)) 14%, transparent) 0%, transparent 55%)',
+        }}
+      />
+    );
+  }
 
   return <div className="app-bg-scene" ref={mountRef} aria-hidden="true" />;
 }

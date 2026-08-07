@@ -1,4 +1,4 @@
-import { Palette, User, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Palette, User, Menu, PanelLeftClose, PanelLeftOpen, Check } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -22,6 +22,7 @@ import { useAuth } from '../store/auth';
 import { defaultAvatarUrl, parseAvatarValue } from '../components/AvatarPicker';
 import { NotificationBell } from '../components/NotificationBell';
 import { ManagementStatus } from '../components/ManagementStatus';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface TopBarProps {
   /** 移动端汉堡菜单点击回调，用于切换 Sidebar 抽屉 */
@@ -35,26 +36,26 @@ interface TopBarProps {
 export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopBarProps) {
   const { theme, setTheme } = useTheme();
   const { user, logout } = useAuth();
+  const isMobile = useIsMobile();
 
-  // 自定义头像优先；其次 dicebear 兜底
   const avatarSeed = user?.email || user?.username || 'U';
   const parsedAvatar = parseAvatarValue(user?.avatar, avatarSeed);
   const avatarSrc = parsedAvatar.kind === 'none' ? defaultAvatarUrl(avatarSeed) : parsedAvatar.url;
 
   return (
-    <header className="h-14 sm:h-16 border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-3 sm:px-6 sticky top-0 z-10 relative gap-2">
+    <header className={`${isMobile ? 'h-12' : 'h-14 sm:h-16'} border-b border-border/40 bg-card/60 backdrop-blur-xl flex items-center px-2 sm:px-6 sticky top-0 z-10 relative gap-1 sm:gap-2`}>
       {/* 左侧：菜单切换按钮
           - 移动端（<lg）：汉堡按钮控制抽屉
           - 桌面端（lg+）：折叠/展开 Sidebar */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-1 sm:gap-2 min-w-0">
         <Button
           variant="ghost"
           size="icon"
-          className="lg:hidden h-9 w-9 shrink-0"
+          className={`lg:hidden shrink-0 ${isMobile ? 'h-11 w-11' : 'h-9 w-9'}`}
           aria-label="打开菜单"
           onClick={onMenuClick}
         >
-          <Menu className="h-5 w-5" />
+          <Menu className={isMobile ? 'h-6 w-6' : 'h-5 w-5'} />
         </Button>
         <Button
           variant="ghost"
@@ -72,13 +73,11 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
         </Button>
       </div>
 
-      {/* 顶部呼吸灯：OpenVPN Management 异常时实时提醒，居中显示更醒目 */}
       <div className="flex-1 flex items-center justify-center min-w-0">
         <ManagementStatus />
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-4 justify-end shrink-0">
-        {/* GitHub 仓库入口（移动端隐藏文字仅留图标） */}
+      <div className="flex items-center gap-1 sm:gap-4 justify-end shrink-0">
         <a
           href="https://github.com/xinglinglove1029/openvpn"
           target="_blank"
@@ -92,31 +91,55 @@ export function TopBar({ onMenuClick, sidebarCollapsed, onToggleCollapse }: TopB
           </svg>
         </a>
 
-        {/* 主题切换：下拉选择，支持 6 个主题（移动端紧凑） */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          <Palette className="w-4 h-4 text-muted-foreground hidden sm:block" />
-          <Select value={theme} onValueChange={(v) => setTheme(v as ThemeKey)}>
-            <SelectTrigger className="w-[110px] sm:w-[130px] h-9" aria-label="切换主题">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
+        {isMobile ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-11 w-11"
+                aria-label="切换主题"
+              >
+                <Palette className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
               {(Object.keys(themeLabels) as ThemeKey[]).map((key) => (
-                <SelectItem key={key} value={key}>
-                  {themeLabels[key]}
-                </SelectItem>
+                <DropdownMenuItem
+                  key={key}
+                  onClick={() => setTheme(key)}
+                  className="flex items-center justify-between"
+                >
+                  <span>{themeLabels[key]}</span>
+                  {theme === key && <Check className="h-4 w-4 text-[var(--accent)]" />}
+                </DropdownMenuItem>
               ))}
-            </SelectContent>
-          </Select>
-        </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <Palette className="w-4 h-4 text-muted-foreground hidden sm:block" />
+            <Select value={theme} onValueChange={(v) => setTheme(v as ThemeKey)}>
+              <SelectTrigger className="w-[110px] sm:w-[130px] h-9" aria-label="切换主题">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(themeLabels) as ThemeKey[]).map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {themeLabels[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
-        {/* 通知按钮（真实未读数 + WebSocket 实时推送） */}
         <NotificationBell />
 
-        {/* 用户菜单（移动端只显示头像，隐藏用户名） */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2 px-2">
-              <Avatar className="w-8 h-8">
+            <Button variant="ghost" className={`flex items-center gap-2 px-2 ${isMobile ? 'h-11 min-h-[44px]' : ''}`}>
+              <Avatar className={isMobile ? 'w-9 h-9' : 'w-8 h-8'}>
                 <AvatarImage src={avatarSrc} alt="头像" />
                 <AvatarFallback>
                   {user?.name?.[0] || user?.username?.[0] || 'U'}

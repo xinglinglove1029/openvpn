@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { Calendar } from '@/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface DatePickerFieldProps {
   value: string; // yyyy-MM-dd
@@ -31,6 +32,7 @@ function parseDateInputValue(value?: string) {
 export function DatePickerField({ value, onChange, placeholder = '选择日期', allowClear = true }: DatePickerFieldProps) {
   const [open, setOpen] = useState(false);
   const selected = parseDateInputValue(value);
+  const isMobile = useIsMobile();
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -38,15 +40,22 @@ export function DatePickerField({ value, onChange, placeholder = '选择日期',
         <Button
           variant="outline"
           className={cn(
-            'h-9 justify-start text-left font-normal',
-            !value && 'text-muted-foreground'
+            'justify-start text-left font-normal',
+            isMobile ? 'h-11 min-h-[44px]' : 'h-9',
+            !value && 'text-muted-foreground',
           )}
         >
-          <CalendarIcon className="mr-2 h-4 w-4" />
+          <CalendarIcon className={cn('mr-2', isMobile ? 'h-5 w-5' : 'h-4 w-4')} />
           {value ? format(selected || new Date(), 'yyyy/MM/dd') : placeholder}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
+      <PopoverContent
+        className={cn(
+          'p-0',
+          isMobile ? 'w-[95vw]' : 'w-auto',
+        )}
+        align="start"
+      >
         <Calendar
           mode="single"
           selected={selected}
@@ -56,6 +65,7 @@ export function DatePickerField({ value, onChange, placeholder = '选择日期',
               setOpen(false);
             }
           }}
+          className={cn(isMobile && '[--cell-size:2.75rem]')}
         />
         <div className="flex items-center justify-between p-3 border-t">
           {allowClear && (

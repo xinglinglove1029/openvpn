@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, Download, CheckCircle2, Eye, EyeOff } from 'lucide-react';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 
 import { api } from '@/api';
 import type { SettingsResponse } from '@/types';
@@ -112,8 +112,8 @@ function SettingField({ label, description, value, settingKey, type = 'text', pl
   const actualType = visibilityToggle ? (visible ? 'text' : 'password') : type;
 
   return (
-    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-      <Label className="pt-2 text-right text-sm font-medium text-foreground/80">{label}</Label>
+    <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+      <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">{label}</Label>
       <div className="space-y-1.5 min-w-0">
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
         <div className="relative">
@@ -161,8 +161,8 @@ function SettingSwitch({ label, description, checked, settingKey, store }: Setti
   const isChecked = draft === 'true';
 
   return (
-    <div className="flex items-center justify-between">
-      <div className="space-y-0.5">
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-0">
+      <div className="space-y-0.5 flex-1">
         <Label>{label}</Label>
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
       </div>
@@ -189,8 +189,8 @@ function SettingSelectField({ label, description, value, settingKey, options, st
   const draft = store.drafts[settingKey] ?? String(value);
 
   return (
-    <div className="grid grid-cols-[140px_1fr] items-start gap-4">
-      <Label className="pt-2 text-right text-sm font-medium text-foreground/80">{label}</Label>
+    <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+      <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">{label}</Label>
       <div className="space-y-1.5 min-w-0">
         {description && <p className="text-xs text-muted-foreground">{description}</p>}
         <Select
@@ -810,12 +810,12 @@ function SaveBar({
   return (
     <div
       className={cn(
-        'sticky bottom-4 z-30 mt-2 flex items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md',
+        'sticky bottom-4 z-30 mt-2 flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md',
         'border-[color-mix(in_srgb,var(--accent)_30%,transparent)]',
         'bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)]',
       )}
     >
-      <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground w-full sm:w-auto">
         {disabled ? (
           <span>所有设置已是最新</span>
         ) : (
@@ -824,7 +824,7 @@ function SaveBar({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
         <button
           type="button"
           onClick={onReset}
@@ -974,7 +974,7 @@ function ServiceTab({ store }: { store: DraftStore }) {
       {/* 编辑 server.conf */}
       {configOpen && (
         <Dialog open onOpenChange={(open) => !open && !configSaving && setConfigOpen(false)}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>编辑 server.conf</DialogTitle>
               <DialogDescription>修改 OpenVPN 服务端配置文件</DialogDescription>
@@ -1199,7 +1199,7 @@ function ClientPackagesTab() {
                               )}
                             </div>
                             <div className="min-w-0">
-                              <div className="flex items-center gap-2">
+                              <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
                                 <span className="font-medium text-sm">{pkg.filename}</span>
                                 {pkg.isActive && (
                                   <span className="px-1.5 py-0.5 rounded text-[10px] font-medium border bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] text-[var(--accent)] border-[color-mix(in_srgb,var(--accent)_25%,transparent)]">

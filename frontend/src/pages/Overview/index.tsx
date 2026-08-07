@@ -44,7 +44,6 @@ import SystemMonitor from '@/components/SystemMonitor';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { api } from '@/api';
-import { useAuth } from '@/store/auth';
 import { HasPermission } from '@/components/HasPermission';
 import {
   formatBytes,
@@ -73,7 +72,6 @@ type ModalState =
 /* ---------- main component ---------- */
 
 export default function OverviewPage() {
-  const { hasPermission } = useAuth();
   const [confirmState, setConfirmState] = useState<ConfirmState>();
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
 
@@ -303,7 +301,7 @@ export default function OverviewPage() {
       <SystemMonitor />
 
       {/* ---- Stats ---- */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="在线连接"
           icon={Activity}
@@ -339,7 +337,7 @@ export default function OverviewPage() {
 
       {/* ---- Risks ---- */}
       {risks.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {risks.map((risk, idx) => (
             <CardGlow
               key={`${risk.title}-${idx}`}
@@ -381,7 +379,7 @@ export default function OverviewPage() {
               <CardDescription>连接数、流量与 Top 用户聚合统计</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-6 md:grid-cols-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* trend bars */}
                 <div>
                   <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
@@ -450,7 +448,7 @@ export default function OverviewPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 {[
                   { label: '地址', value: serverRuntime.Address },
                   { label: '状态', value: serverRuntime.Status },
@@ -477,7 +475,7 @@ export default function OverviewPage() {
               <PageHeader eyebrow="Live Tunnel" title="在线连接" />
               <div className="flex items-center gap-2">
                 <Input
-                  className="h-9 w-[240px]"
+                  className="h-9 w-full sm:w-[240px]"
                   placeholder="搜索用户 / VPN IP / 来源 IP"
                   value={onlineSearch}
                   onChange={(e) => setOnlineSearch(e.target.value)}

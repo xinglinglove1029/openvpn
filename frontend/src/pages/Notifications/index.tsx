@@ -228,8 +228,8 @@ export default function NotificationsPage() {
       <PageHeader eyebrow="Notification" title="站内信" description="查看 Webhook / 邮件等渠道发送的运维通知" />
 
       {/* 操作工具栏：搜索、筛选 在左，刷新 在右 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-44">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
+        <div className="relative w-full sm:w-44">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={searchUser}
@@ -238,7 +238,7 @@ export default function NotificationsPage() {
             className="pl-8 h-8"
           />
         </div>
-        <div className="relative w-56">
+        <div className="relative w-full sm:w-56">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={searchMessage}
@@ -248,7 +248,7 @@ export default function NotificationsPage() {
           />
         </div>
         <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
-          <SelectTrigger className="w-[120px] h-8">
+          <SelectTrigger className="w-full sm:w-[120px] h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -263,7 +263,7 @@ export default function NotificationsPage() {
           </SelectContent>
         </Select>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-          <SelectTrigger className="w-[110px] h-8">
+          <SelectTrigger className="w-full sm:w-[110px] h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -272,8 +272,8 @@ export default function NotificationsPage() {
             <SelectItem value="failed">失败</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={handleReload} disabled={state.loading}>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
+          <Button size="sm" variant="outline" onClick={handleReload} disabled={state.loading} className="w-full sm:w-auto">
             <RefreshCw className={`h-3.5 w-3.5 mr-1 ${state.loading ? 'animate-spin' : ''}`} />
             刷新
           </Button>
@@ -324,7 +324,7 @@ export default function NotificationsPage() {
       )}
 
       <Dialog open={!!detailItem} onOpenChange={(open) => !open && setDetailItem(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] sm:w-auto">
           <DialogHeader>
             <DialogTitle>通知详情</DialogTitle>
             <DialogDescription>
@@ -333,7 +333,7 @@ export default function NotificationsPage() {
           </DialogHeader>
           {detailItem && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <div>
                   <div className="text-muted-foreground mb-1">事件类型</div>
                   <Badge variant="outline" className="bg-blue-500/15 text-blue-600 border-blue-500/25">

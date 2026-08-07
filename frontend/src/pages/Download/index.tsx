@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Download,
@@ -71,12 +71,6 @@ export default function DownloadPage() {
       cancelled = true;
     };
   }, []);
-
-  const grouped = useMemo(() => {
-    const out: Record<string, PublicClientPackage> = {};
-    for (const p of packages) out[p.platform] = p;
-    return out;
-  }, [packages]);
 
   const loginRedirectTo = `/login?next=${encodeURIComponent(nextParam)}`;
 
