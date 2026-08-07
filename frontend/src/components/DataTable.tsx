@@ -102,8 +102,6 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const isMobile = useIsMobile();
 
-  if (!total) return null;
-
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>(null);
 
@@ -146,6 +144,8 @@ export function DataTable<T>({
     const e = Math.min(s + pageSize, sortedFullData.length);
     return { finalData: sortedFullData.slice(s, e), finalStart: s, finalEnd: e };
   }, [fullData, data, sortedFullData, page, pageSize, start, end]);
+
+  if (!total) return null;
 
   return (
     <div className="space-y-3">
