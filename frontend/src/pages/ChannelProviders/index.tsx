@@ -653,22 +653,30 @@ export default function ChannelProvidersPage() {
         </Card>
       </div>
 
-      <DataTable<NotificationChannel>
-        columns={columns}
-        data={pagination.pagedItems}
-        fullData={items}
-        page={pagination.page}
-        pageSize={pagination.pageSize}
-        pageCount={pagination.pageCount}
-        total={pagination.total}
-        start={pagination.start}
-        end={pagination.end}
-        onPageChange={pagination.setPage}
-        onPageSizeChange={pagination.setPageSize}
-        emptyTitle={state.loading ? '加载中...' : '暂无渠道'}
-        emptyDescription={state.loading ? '正在拉取通知渠道' : '点击右上角"新增渠道"开始配置'}
-        keyFn={(item) => item.id}
-      />
+      {state.loading ? (
+        <p className="text-sm text-muted-foreground text-center py-8">加载中...</p>
+      ) : items.length > 0 ? (
+        <DataTable<NotificationChannel>
+          columns={columns}
+          data={pagination.pagedItems}
+          fullData={items}
+          page={pagination.page}
+          pageSize={pagination.pageSize}
+          pageCount={pagination.pageCount}
+          total={pagination.total}
+          start={pagination.start}
+          end={pagination.end}
+          onPageChange={pagination.setPage}
+          onPageSizeChange={pagination.setPageSize}
+          keyFn={(item) => item.id}
+        />
+      ) : (
+        <div className="text-center py-12">
+          <Bell className="mx-auto h-10 w-10 text-muted-foreground/50" />
+          <p className="mt-2 text-sm font-medium">暂无渠道</p>
+          <p className="mt-1 text-xs text-muted-foreground">点击右上角"新增渠道"开始配置</p>
+        </div>
+      )}
 
       <Dialog open={form.open} onOpenChange={(o) => !o && closeForm()}>
         <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] sm:w-auto max-h-[90vh] overflow-y-auto">
