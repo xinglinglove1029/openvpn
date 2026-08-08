@@ -44,8 +44,10 @@ FROM alpine:3.23.4
 
 # Ollama 版本，可通过 --build-arg 覆盖
 ARG OLLAMA_VERSION=0.32.5
-# TARGETPLATFORM / BUILDPLATFORM 由 buildx 自动注入，用于跨架构构建
+# buildx 自动注入的平台变量，需显式 ARG 声明才能在 RUN 中使用
 ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG TARGETVARIANT
 ARG BUILDPLATFORM
 
 RUN set -euxo pipefail \
@@ -68,23 +70,25 @@ RUN set -euxo pipefail \
     tzdata \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
-  # 下载 Ollama 二进制（按 TARGETARCH 选择 amd64 / arm64）
-  # 注意：不直接执行 ollama --version 做验证，
-  # 因为在跨架构构建（BUILDPLATFORM != TARGETPLATFORM）下，
-  # 通过 QEMU user + gcompat 模拟执行 glibc 二进制偶现失败，
-  # 改为只校验文件下载成功且非空即可
-  && OLLAMA_ARCH="${TARGETARCH}" \
-  && echo "Downloading Ollama ${OLLAMA_VERSION} for ${TARGETPLATFORM} (arch=${OLLAMA_ARCH})" \
-  && curl -fsSL \
-       --retry 3 \
-       --retry-delay 5 \
-       --connect-timeout 30 \
-       --max-time 600 \
-       "https://ollama.com/download/ollama-linux-${OLLAMA_ARCH}?version=v${OLLAMA_VERSION}" \
-       -o /usr/local/bin/ollama \
-  && chmod +x /usr/local/bin/ollama \
-  && test -s /usr/local/bin/ollama \
-  && echo "Ollama binary downloaded: $(du -h /usr/local/bin/ollama | cut -f1)"
+  # Ollama 仅提供 amd64 和 arm64 二进制；
+  # arm/v6、arm/v7 等无官方二进制的架构创建 stub 脚本占位
+  && if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+       echo "Downloading Ollama ${OLLAMA_VERSION} for ${TARGETPLATFORM}" \
+       && curl -fsSL \
+            --retry 3 \
+            --retry-delay 5 \
+            --connect-timeout 30 \
+            --max-time 600 \
+            "https://ollama.com/download/ollama-linux-${TARGETARCH}?version=v${OLLAMA_VERSION}" \
+            -o /usr/local/bin/ollama \
+       && chmod +x /usr/local/bin/ollama \
+       && test -s /usr/local/bin/ollama \
+       && echo "Ollama binary downloaded: $(du -h /usr/local/bin/ollama | cut -f1)"; \
+     else \
+       echo "Ollama not available for ${TARGETPLATFORM}, creating stub" \
+       && printf '#!/bin/sh\necho "ollama not supported on this architecture"\nexit 0\n' > /usr/local/bin/ollama \
+       && chmod +x /usr/local/bin/ollama; \
+     fi
 
 COPY build/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
 COPY build/openvpn-auth /usr/lib/openvpn/plugins/openvpn-auth
