@@ -1375,6 +1375,7 @@ const PROVIDER_OPTIONS: { value: string; label: string; hint: string }[] = [
 ];
 
 function AISettingsTab({ canSave }: { canSave: boolean }) {
+  const { reloadAiEnabled } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -1472,6 +1473,8 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
       });
       toast.success('AI 配置已保存');
       await loadConfig();
+      // 刷新前端 AI 启用状态，控制 AI 菜单和悬浮按钮的显示/隐藏
+      await reloadAiEnabled();
     } catch (err) {
       toast.error('保存失败: ' + messageOf(err));
     } finally {

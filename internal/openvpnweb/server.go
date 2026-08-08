@@ -1033,28 +1033,28 @@ func Run(info BuildInfo) {
 				}
 
 				session.Set("user", u.Username)
-			session.Save()
+				session.Save()
 
-			resetLoginFail(cip)
+				resetLoginFail(cip)
 
-			userRoleIDs, userRoleNames := user.LoadRoleIDsAndNames(db)
-			c.JSON(200, gin.H{
-				"message":  "登录成功",
-				"redirect": "/",
-				"user": gin.H{
-					"id":           user.ID,
-					"username":     user.Username,
-					"name":         user.Name,
-					"email":        user.Email,
-					"isFirstLogin": *user.IsFirstLogin,
-					"isAdmin":      false,
-					"permissions":  permCodes,
-					"roleIds":      userRoleIDs,
-					"roleNames":    userRoleNames,
-				},
-			})
-			return
-		}
+				userRoleIDs, userRoleNames := user.LoadRoleIDsAndNames(db)
+				c.JSON(200, gin.H{
+					"message":  "登录成功",
+					"redirect": "/",
+					"user": gin.H{
+						"id":           user.ID,
+						"username":     user.Username,
+						"name":         user.Name,
+						"email":        user.Email,
+						"isFirstLogin": *user.IsFirstLogin,
+						"isAdmin":      false,
+						"permissions":  permCodes,
+						"roleIds":      userRoleIDs,
+						"roleNames":    userRoleNames,
+					},
+				})
+				return
+			}
 		}
 
 		setLoginFail(cip)
@@ -1117,6 +1117,11 @@ func Run(info BuildInfo) {
 				return
 			}
 			c.FileAttachment(fullPath, p.Filename)
+		})
+
+		// 公开接口：返回 AI 助手启用状态（无需鉴权，供前端登录前/登录后控制菜单显示）
+		public.GET("/ai-status", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"enabled": viper.GetBool("ai.enabled")})
 		})
 	}
 
@@ -2045,6 +2050,7 @@ func Run(info BuildInfo) {
 				"lastLoginAt":  u.LastLoginAt,
 				"createdAt":    u.CreatedAt,
 				"updatedAt":    u.UpdatedAt,
+				"aiEnabled":    viper.GetBool("ai.enabled"),
 			})
 		})
 
@@ -2202,90 +2208,90 @@ func Run(info BuildInfo) {
 				}
 
 				// 导入用户：角色继承与单用户创建一致
-			// 不再自动继承组角色到 user_role，组角色权限在 LoadPermissionCodes 中动态合并
-			// 此处仅设置默认角色，确保用户有基本权限
-			importDefaultRoleID := GetDefaultRoleID(db)
+				// 不再自动继承组角色到 user_role，组角色权限在 LoadPermissionCodes 中动态合并
+				// 此处仅设置默认角色，确保用户有基本权限
+				importDefaultRoleID := GetDefaultRoleID(db)
 
-			for {
-				record, err := reader.Read()
-				if err == io.EOF {
-					break
+				for {
+					record, err := reader.Read()
+					if err == io.EOF {
+						break
+					}
+
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+						return
+					}
+
+					enable := record[4] == "1"
+					gid64, err := strconv.ParseUint(gid, 10, 64)
+					newUser := User{
+						Username:   record[0],
+						Password:   record[1],
+						Name:       record[2],
+						Email:      record[3],
+						IsEnable:   &enable,
+						ExpireDate: strings.Replace(record[5], "/", " ", 1),
+						IpAddr:     record[6],
+						OvpnConfig: record[7],
+						Gid:        uint(gid64),
+					}
+					// 角色设置：仅设置默认角色（与单用户创建逻辑一致）
+					if importDefaultRoleID > 0 {
+						newUser.RoleIDs = []uint{importDefaultRoleID}
+					}
+
+					err = newUser.Create()
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+						return
+					}
 				}
-
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-					return
-				}
-
-				enable := record[4] == "1"
-			gid64, err := strconv.ParseUint(gid, 10, 64)
-			newUser := User{
-				Username:   record[0],
-				Password:   record[1],
-				Name:       record[2],
-				Email:      record[3],
-				IsEnable:   &enable,
-				ExpireDate: strings.Replace(record[5], "/", " ", 1),
-				IpAddr:     record[6],
-				OvpnConfig: record[7],
-				Gid:        uint(gid64),
-			}
-			// 角色设置：仅设置默认角色（与单用户创建逻辑一致）
-			if importDefaultRoleID > 0 {
-				newUser.RoleIDs = []uint{importDefaultRoleID}
-			}
-
-			err = newUser.Create()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
-		}
 
 				c.JSON(http.StatusOK, gin.H{"message": "导入用户成功"})
 				return
 			}
 
 			if isFirstLogin, ok := c.Request.PostForm["isFirstLogin"]; ok {
-			val := isFirstLogin[0] == "true"
-			u.IsFirstLogin = &val
-		}
-
-		if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
-			u.MfaEnabled = mfaEnabled[0] == "true"
-		}
-
-		// 解析 roleIds（前端可显式指定多角色）
-		if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
-			for _, s := range roleIdsStr {
-				s = strings.TrimSpace(s)
-				if s == "" {
-					continue
-				}
-				rid, convErr := strconv.ParseUint(s, 10, 64)
-				if convErr != nil || rid == 0 {
-					continue
-				}
-				u.RoleIDs = append(u.RoleIDs, uint(rid))
+				val := isFirstLogin[0] == "true"
+				u.IsFirstLogin = &val
 			}
-			if len(u.RoleIDs) > 0 {
-				if err := validateRoleIDs(db, u.RoleIDs); err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-					return
+
+			if mfaEnabled, ok := c.Request.PostForm["mfaEnabled"]; ok {
+				u.MfaEnabled = mfaEnabled[0] == "true"
+			}
+
+			// 解析 roleIds（前端可显式指定多角色）
+			if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
+				for _, s := range roleIdsStr {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
+					}
+					rid, convErr := strconv.ParseUint(s, 10, 64)
+					if convErr != nil || rid == 0 {
+						continue
+					}
+					u.RoleIDs = append(u.RoleIDs, uint(rid))
+				}
+				if len(u.RoleIDs) > 0 {
+					if err := validateRoleIDs(db, u.RoleIDs); err != nil {
+						c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+						return
+					}
 				}
 			}
-		}
 
-		// 未指定角色时：不再自动继承组角色到 user_role
-		// 组角色权限在 LoadPermissionCodes 中动态合并（用户直接角色 ∪ 组角色权限）
-		// 此处仅设置默认角色，确保用户有基本权限
-		if len(u.RoleIDs) == 0 {
-			if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
-				u.RoleIDs = []uint{defaultRoleID}
+			// 未指定角色时：不再自动继承组角色到 user_role
+			// 组角色权限在 LoadPermissionCodes 中动态合并（用户直接角色 ∪ 组角色权限）
+			// 此处仅设置默认角色，确保用户有基本权限
+			if len(u.RoleIDs) == 0 {
+				if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+					u.RoleIDs = []uint{defaultRoleID}
+				}
 			}
-		}
 
-		err = u.Create()
+			err = u.Create()
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 			} else {
@@ -2370,62 +2376,62 @@ func Run(info BuildInfo) {
 		})
 
 		ovpn.PATCH("/user", RequirePermission("user:update"), func(c *gin.Context) {
-		c.Request.ParseForm()
+			c.Request.ParseForm()
 
-		var u User
-		c.ShouldBind(&u)
+			var u User
+			c.ShouldBind(&u)
 
-		// 解析 roleIds（前端可显式指定多角色）
-		// form tag "roleIds" 仅在 PostForm 显式传入时设置；未传入时 u.RoleIDs 保持 nil（不修改）
-		if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
-			for _, s := range roleIdsStr {
-				s = strings.TrimSpace(s)
-				if s == "" {
-					continue
-				}
-				rid, convErr := strconv.ParseUint(s, 10, 64)
-				if convErr != nil || rid == 0 {
-					continue
-				}
-				u.RoleIDs = append(u.RoleIDs, uint(rid))
-			}
-			if err := validateRoleIDs(db, u.RoleIDs); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-				return
-			}
-		}
-
-		// 数据权限校验：普通用户修改目标 gid 时，仅允许迁移到自己所在分组及其下级分组
-		// admin 用户跳过此校验
-		session := sessions.Default(c)
-		currentUsername := ""
-		if user, ok := session.Get("user").(string); ok {
-			currentUsername = user
-		}
-		if adminUsername != "" && currentUsername == adminUsername {
-			// admin 不做数据权限校验
-		} else if currentUsername != "" {
-			currentUser := User{Username: currentUsername}.Info()
-			if currentUser.ID == 0 {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
-				return
-			}
-			// 目标分组必须为当前用户可访问的分组（自己及其下级）
-			if u.Gid != 0 && u.Gid != currentUser.Gid {
-				accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
-				found := false
-				for _, id := range accessibleGroupIDs {
-					if id == u.Gid {
-						found = true
-						break
+			// 解析 roleIds（前端可显式指定多角色）
+			// form tag "roleIds" 仅在 PostForm 显式传入时设置；未传入时 u.RoleIDs 保持 nil（不修改）
+			if roleIdsStr, ok := c.Request.PostForm["roleIds"]; ok {
+				for _, s := range roleIdsStr {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
 					}
+					rid, convErr := strconv.ParseUint(s, 10, 64)
+					if convErr != nil || rid == 0 {
+						continue
+					}
+					u.RoleIDs = append(u.RoleIDs, uint(rid))
 				}
-				if !found {
-					c.JSON(http.StatusForbidden, gin.H{"message": "无权限将用户迁移到该分组"})
+				if err := validateRoleIDs(db, u.RoleIDs); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 					return
 				}
 			}
-		}
+
+			// 数据权限校验：普通用户修改目标 gid 时，仅允许迁移到自己所在分组及其下级分组
+			// admin 用户跳过此校验
+			session := sessions.Default(c)
+			currentUsername := ""
+			if user, ok := session.Get("user").(string); ok {
+				currentUsername = user
+			}
+			if adminUsername != "" && currentUsername == adminUsername {
+				// admin 不做数据权限校验
+			} else if currentUsername != "" {
+				currentUser := User{Username: currentUsername}.Info()
+				if currentUser.ID == 0 {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+					return
+				}
+				// 目标分组必须为当前用户可访问的分组（自己及其下级）
+				if u.Gid != 0 && u.Gid != currentUser.Gid {
+					accessibleGroupIDs := GetSubtreeIDs(currentUser.Gid)
+					found := false
+					for _, id := range accessibleGroupIDs {
+						if id == u.Gid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						c.JSON(http.StatusForbidden, gin.H{"message": "无权限将用户迁移到该分组"})
+						return
+					}
+				}
+			}
 
 			if ipAddr, ok := c.Request.PostForm["ipAddr"]; ok {
 				if ipAddr[0] == "" {
@@ -3187,50 +3193,50 @@ func Run(info BuildInfo) {
 					permCodes = []string{}
 				}
 				c.JSON(http.StatusOK, gin.H{
-				"id":           0,
-				"username":     lu.Username,
-				"name":         "",
-				"email":        "",
-				"ldapAuth":     true,
-				"isFirstLogin": false,
-				"isAdmin":      adminUsername != "" && u.Username == adminUsername,
-				"permissions":  permCodes,
-				"roleIds":      []uint{},
-				"roleNames":    []string{},
-			})
-			return
-		}
+					"id":           0,
+					"username":     lu.Username,
+					"name":         "",
+					"email":        "",
+					"ldapAuth":     true,
+					"isFirstLogin": false,
+					"isAdmin":      adminUsername != "" && u.Username == adminUsername,
+					"permissions":  permCodes,
+					"roleIds":      []uint{},
+					"roleNames":    []string{},
+				})
+				return
+			}
 
-		userInfo := u.Info()
-		// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
-		if userInfo.ID == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
-			return
-		}
-		permCodes, perr := userInfo.LoadPermissionCodes(db)
-		if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
-			c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
-			return
-		}
-		if perr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
-			return
-		}
-		if permCodes == nil {
-			permCodes = []string{}
-		}
-		userRoleIDs, userRoleNames := userInfo.LoadRoleIDsAndNames(db)
-		c.JSON(http.StatusOK, gin.H{
-			"id":           userInfo.ID,
-			"username":     userInfo.Username,
-			"name":         userInfo.Name,
-			"email":        userInfo.Email,
-			"isFirstLogin": userInfo.IsFirstLogin,
-			"isAdmin":      adminUsername != "" && userInfo.Username == adminUsername,
-			"permissions":  permCodes,
-			"roleIds":      userRoleIDs,
-			"roleNames":    userRoleNames,
-		})
+			userInfo := u.Info()
+			// 用户已被删除：session 仍有效但 DB 无记录，返回 401 让前端登出
+			if userInfo.ID == 0 {
+				c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在，请重新登录"})
+				return
+			}
+			permCodes, perr := userInfo.LoadPermissionCodes(db)
+			if errors.Is(perr, ErrRoleDisabled) || errors.Is(perr, ErrRoleNotFound) {
+				c.JSON(http.StatusForbidden, gin.H{"message": "角色已禁用或不存在，请联系管理员"})
+				return
+			}
+			if perr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "权限加载失败，请稍后重试"})
+				return
+			}
+			if permCodes == nil {
+				permCodes = []string{}
+			}
+			userRoleIDs, userRoleNames := userInfo.LoadRoleIDsAndNames(db)
+			c.JSON(http.StatusOK, gin.H{
+				"id":           userInfo.ID,
+				"username":     userInfo.Username,
+				"name":         userInfo.Name,
+				"email":        userInfo.Email,
+				"isFirstLogin": userInfo.IsFirstLogin,
+				"isAdmin":      adminUsername != "" && userInfo.Username == adminUsername,
+				"permissions":  permCodes,
+				"roleIds":      userRoleIDs,
+				"roleNames":    userRoleNames,
+			})
 		})
 
 		client.PUT("/userinfo", func(c *gin.Context) {
@@ -3297,37 +3303,37 @@ func Run(info BuildInfo) {
 			currentPass := c.Request.PostFormValue("currentPass")
 
 			if currentUsername == adminUsername {
-			if currentPass == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "管理员修改密码需要输入当前密码"})
-				return
-			}
-			if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass)) != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
-				return
-			}
-
-			passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
-
-			// 同步到 user 表 admin 用户的 password（struct Updates 触发 BeforeSave AES 加密）
-			adminUser := User{Username: adminUsername}.Info()
-			if adminUser.ID > 0 {
-				if e := db.Model(&User{}).Where("id = ?", adminUser.ID).Updates(User{Password: string(passwd)}).Error; e != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "同步密码到 user 表失败: " + e.Error()})
+				if currentPass == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "管理员修改密码需要输入当前密码"})
 					return
 				}
+				if bcrypt.CompareHashAndPassword([]byte(adminPassword), []byte(currentPass)) != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"message": "当前密码错误"})
+					return
+				}
+
+				passwd, err := bcrypt.GenerateFromPassword([]byte(u.Password), 12)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+
+				// 同步到 user 表 admin 用户的 password（struct Updates 触发 BeforeSave AES 加密）
+				adminUser := User{Username: adminUsername}.Info()
+				if adminUser.ID > 0 {
+					if e := db.Model(&User{}).Where("id = ?", adminUser.ID).Updates(User{Password: string(passwd)}).Error; e != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": "同步密码到 user 表失败: " + e.Error()})
+						return
+					}
+				}
+
+				viper.Set("system.base.admin_password", string(passwd))
+				viper.WriteConfig()
+				adminPassword = string(passwd)
+
+				c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
+				return
 			}
-
-			viper.Set("system.base.admin_password", string(passwd))
-			viper.WriteConfig()
-			adminPassword = string(passwd)
-
-			c.JSON(http.StatusOK, gin.H{"message": "密码修改成功"})
-			return
-		}
 
 			if currentPass != "" {
 				if cu.Info().Password != currentPass {

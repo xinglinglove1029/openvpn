@@ -49,7 +49,7 @@ const RECOMMENDATIONS = [
 export default function AIWidget() {
   const navigate = useNavigate();
   const { theme } = useTheme();
-  const { hasPermission } = useAuth();
+  const { hasPermission, aiEnabled } = useAuth();
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -206,8 +206,8 @@ export default function AIWidget() {
     }
   };
 
-  // 如果没有 AI 聊天权限则不渲染
-  if (!hasPermission('ai:chat')) {
+  // AI 助手未启用或用户无 AI 聊天权限则不渲染
+  if (!aiEnabled || !hasPermission('ai:chat')) {
     return null;
   }
 

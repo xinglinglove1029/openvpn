@@ -25,6 +25,10 @@ interface AuthContextType {
   permissionTree: PermissionTreeNode[];
   /** 重新拉取权限树（权限管理页面保存后调用） */
   reloadPermissionTree: () => Promise<void>;
+  /** AI 助手是否启用（由 /ovpn/public/ai-status 控制，控制 AI 菜单和悬浮按钮显示） */
+  aiEnabled: boolean;
+  /** 重新拉取 AI 助手启用状态（系统设置保存 AI 配置后调用） */
+  reloadAiEnabled: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -51,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ClientUserInfo | null>(() => readStoredUser());
   const [isLoading] = useState(false);
   const [permissionTree, setPermissionTree] = useState<PermissionTreeNode[]>([]);
+  const [aiEnabled, setAiEnabled] = useState<boolean>(false);
 
   // 监听跨标签页的 localStorage 变化，保持登录态一致
   useEffect(() => {
@@ -161,6 +166,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadPermissionTree();
   }, [loadPermissionTree]);
 
+  // 拉取 AI 助手启用状态（公开接口，无需鉴权）
+  // 登录后自动调用，系统设置保存 AI 配置后也调用以刷新菜单
+  const reloadAiEnabled = useCallback(async () => {
+    try {
+      const res = await api.get<{ enabled?: boolean }>('/ovpn/public/ai-status');
+      setAiEnabled(!!res?.enabled);
+    } catch {
+      setAiEnabled(false);
+    }
+  }, []);
+
+  // 登录后自动拉取一次 AI 启用状态
+  useEffect(() => {
+    if (user) {
+      reloadAiEnabled();
+    } else {
+      setAiEnabled(false);
+    }
+  }, [user, reloadAiEnabled]);
+
   const updateUser = (updates: Partial<ClientUserInfo>) => {
     setUser((current) => {
       if (!current) return current;
@@ -201,6 +226,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         updateUser,
         permissionTree,
         reloadPermissionTree,
+        aiEnabled,
+        reloadAiEnabled,
       }}
     >
       {children}
