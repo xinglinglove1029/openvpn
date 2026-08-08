@@ -49,7 +49,6 @@
     "three": "^0.185.1",
     "typescript": "latest",
     "vite": "latest",
-    "yarn": "^1.22.22",
     "zod": "^4.4.3"
   },
   "devDependencies": {
