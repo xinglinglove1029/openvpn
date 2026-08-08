@@ -698,13 +698,40 @@ export default function PermissionsPage() {
                 <dt className="text-muted-foreground">{'\u56fe\u6807'}</dt><dd className="min-w-0 break-words font-mono">{node.icon || '-'}</dd>
                 <dt className="text-muted-foreground">{'\u6392\u5e8f'}</dt><dd>{node.sort}</dd>
               </dl>
-              <HasPermission code="permission:manage"><div className="flex flex-wrap gap-2 border-t pt-2">
-                <Button size="sm" variant="outline" className="min-h-11" onClick={() => moveNode(node, 'up')}><ArrowUp className="mr-1 h-4 w-4" /> {'\u4e0a\u79fb'}</Button>
-                <Button size="sm" variant="outline" className="min-h-11" onClick={() => moveNode(node, 'down')}><ArrowDown className="mr-1 h-4 w-4" /> {'\u4e0b\u79fb'}</Button>
-                {isMenu && <Button size="sm" variant="outline" className="min-h-11" onClick={() => openCreate(node)}><FolderPlus className="mr-1 h-4 w-4" /> {'\u65b0\u589e\u5b50\u8282\u70b9'}</Button>}
-                <Button size="sm" variant="outline" className="min-h-11" onClick={() => openEdit(node)}><Edit className="mr-1 h-4 w-4" /> {'\u7f16\u8f91'}</Button>
-                <Button size="sm" variant="outline" className="min-h-11 text-destructive" disabled={node.isBuiltin} onClick={() => !node.isBuiltin && askDelete(node)}><Trash2 className="mr-1 h-4 w-4" /> {'\u5220\u9664'}</Button>
-              </div></HasPermission>
+              <HasPermission code="permission:manage">
+                <div className="grid grid-cols-2 gap-2 border-t pt-2">
+                  <Button size="sm" variant="outline" className="h-9 w-full" onClick={() => moveNode(node, 'up')}>
+                    <ArrowUp className="mr-1 h-4 w-4" />
+                    上移
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-9 w-full" onClick={() => moveNode(node, 'down')}>
+                    <ArrowDown className="mr-1 h-4 w-4" />
+                    下移
+                  </Button>
+                  {isMenu && (
+                    <Button size="sm" variant="outline" className="h-9 w-full" onClick={() => openCreate(node)}>
+                      <FolderPlus className="mr-1 h-4 w-4" />
+                      子节点
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" className="h-9 w-full" onClick={() => openEdit(node)}>
+                    <Edit className="mr-1 h-4 w-4" />
+                    编辑
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={cn(
+                      'h-9 w-full col-span-2 text-destructive hover:text-destructive',
+                    )}
+                    disabled={node.isBuiltin}
+                    onClick={() => !node.isBuiltin && askDelete(node)}
+                  >
+                    <Trash2 className="mr-1 h-4 w-4" />
+                    {node.isBuiltin ? '内置不可删除' : '删除'}
+                  </Button>
+                </div>
+              </HasPermission>
             </CardContent>
           </Card>
           {hasChildren && isExpanded && renderMobileCards(node.children!, depth + 1)}
@@ -738,20 +765,20 @@ export default function PermissionsPage() {
             <SelectItem value="button">按钮</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+        <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 w-full sm:w-auto sm:ml-auto">
           <HasPermission code="permission:view">
-            <Button size="sm" variant="outline" onClick={reload}>
+            <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={reload}>
               <RefreshCw className="h-3.5 w-3.5 mr-1" />
               刷新
             </Button>
           </HasPermission>
           <HasPermission code="permission:manage">
-            <Button size="sm" onClick={() => openCreate(null)}>
+            <Button size="sm" className="w-full sm:w-auto" onClick={() => openCreate(null)}>
               <Plus className="h-3.5 w-3.5 mr-1" />
               新增菜单
             </Button>
           </HasPermission>
-          <Button size="sm" variant="outline" onClick={toggleExpandAll}>
+          <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={toggleExpandAll}>
             {isAllExpanded ? (
               <>
                 <ChevronsDownUp className="h-3.5 w-3.5 mr-1" />

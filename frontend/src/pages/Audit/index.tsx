@@ -161,7 +161,7 @@ export default function AuditPage() {
       <PageHeader eyebrow="Audit" title="操作审计" description="查看系统操作日志与审计记录" />
 
       {/* 操作工具栏：筛选条件 在左，刷新、导出 在右 */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3">
         <Select value={operator} onValueChange={setOperator}>
           <SelectTrigger className="w-full sm:w-[140px] h-8">
             <SelectValue placeholder="全部操作人" />
@@ -204,12 +204,12 @@ export default function AuditPage() {
           onChange={setDateRange}
           placeholder="选择时间范围"
         />
-        <div className="w-full sm:w-auto sm:ml-auto flex flex-col sm:flex-row items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)}>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
+          <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)} className="w-full sm:w-auto">
             <RefreshCw className="h-3.5 w-3.5 mr-1" />
             刷新
           </Button>
-          <Button size="sm" variant="outline" asChild>
+          <Button size="sm" variant="outline" asChild className="w-full sm:w-auto">
             <a href={exportUrl}>
               <Download className="h-3.5 w-3.5 mr-1" />
               导出 CSV

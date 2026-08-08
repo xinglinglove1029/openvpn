@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsUpDown, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   Table,
@@ -23,6 +23,8 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 export interface Column<T> {
   key: string;
   header: React.ReactNode;
+  /** 移动端卡片中显示的 label；不传时回退为 header。如果 header 是非字符串 ReactNode（如全选 Checkbox），必须设置此项才不会在每张卡片里渲染一个表头组件。 */
+  mobileHeader?: React.ReactNode;
   render: (item: T, index: number) => React.ReactNode;
   className?: string;
   /** Optional class applied only to the mobile key/value row. Desktop width classes never leak into cards. */
@@ -35,6 +37,14 @@ export interface Column<T> {
   sortable?: boolean;
   /** 自定义排序取值；不提供时尝试按 render 输出文本排序 */
   sortAccessor?: (item: T) => string | number | Date | null | undefined;
+  /**
+   * 移动端卡片布局位置：
+   * - body（默认）：正文 key-value 行
+   * - header-left：卡片头部左侧（主标题区），不会出现在正文
+   * - header-right：卡片头部右侧（状态徽章/次要信息），不会出现在正文
+   * - header-action：卡片头部最左侧（操作区，如小 Checkbox），不会出现在正文
+   */
+  cardPlacement?: 'body' | 'header-left' | 'header-right' | 'header-action';
 }
 
 interface DataTableProps<T> {
@@ -56,6 +66,13 @@ interface DataTableProps<T> {
    * 推荐：在用 usePagination 时，把 source items 一并传入。
    */
   fullData?: T[];
+  /**
+   * 移动端卡片列表顶部的工具栏区域（全选 Checkbox 等可放此处）。
+   * 桌面端不渲染。
+   */
+  mobileToolbar?: React.ReactNode;
+  /** 计算每条数据行的卡片是否处于「选中」态，移动端会加强调边框/背景。 */
+  isCardSelected?: (item: T) => boolean;
 }
 
 const pageSizeOptions = [
@@ -105,6 +122,8 @@ export function DataTable<T>({
   onPageSizeChange,
   keyFn,
   fullData,
+  mobileToolbar,
+  isCardSelected,
 }: DataTableProps<T>) {
   const isMobile = useIsMobile();
 
@@ -156,32 +175,104 @@ export function DataTable<T>({
   return (
     <div className="space-y-3">
       {isMobile ? (
-        <div className="space-y-3">
-          {finalData.map((item, index) => (
-            <Card
-              key={keyFn ? keyFn(item, finalStart + index) : finalStart + index}
-              data-testid="data-table-mobile-card"
-            >
-              <CardContent className="p-4 space-y-2">
-                {columns.filter((col) => !col.hideOnMobile).map((col) => (
-                  <div
-                    key={col.key}
-                    className={cn(
-                      'grid grid-cols-[minmax(5.5rem,40%)_minmax(0,1fr)] items-start gap-x-3 gap-y-1',
-                      col.mobileClassName,
-                    )}
-                  >
-                    <span className="min-w-0 text-xs font-medium leading-5 text-muted-foreground">
-                      {col.header}
-                    </span>
-                    <span className="min-w-0 break-words text-right text-sm leading-5 [&_.row-actions]:justify-end [&_.row-actions]:whitespace-normal [&_.row-actions]:flex-wrap [&_button]:min-h-11 [&_button]:min-w-11">
-                      {col.mobileRender ? col.mobileRender(item, finalStart + index) : col.render(item, finalStart + index)}
-                    </span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ))}
+        <div className="space-y-2">
+          {mobileToolbar && (
+            <div className="flex items-center gap-3 rounded-md border bg-card px-3 h-11">
+              {mobileToolbar}
+            </div>
+          )}
+          {finalData.map((item, index) => {
+            const globalIndex = finalStart + index;
+            const selected = isCardSelected ? isCardSelected(item) : false;
+            const actionCols = columns.filter((c) => !c.hideOnMobile && c.cardPlacement === 'header-action');
+            const headerLeftCols = columns.filter((c) => !c.hideOnMobile && c.cardPlacement === 'header-left');
+            const headerRightCols = columns.filter((c) => !c.hideOnMobile && c.cardPlacement === 'header-right');
+            const bodyCols = columns.filter(
+              (c) => !c.hideOnMobile && (c.cardPlacement === 'body' || !c.cardPlacement),
+            );
+            const hasHeader =
+              actionCols.length > 0 || headerLeftCols.length > 0 || headerRightCols.length > 0;
+            return (
+              <Card
+                key={keyFn ? keyFn(item, globalIndex) : globalIndex}
+                data-testid="data-table-mobile-card"
+                className={cn(
+                  'transition-colors duration-150',
+                  selected && 'border-[var(--accent)] ring-1 ring-[var(--accent)]/30 bg-[var(--accent)]/[0.06]',
+                )}
+              >
+                <CardContent className="p-3 sm:p-4 space-y-3">
+                  {hasHeader && (
+                    <div className="flex items-center gap-2 min-w-0">
+                      {actionCols.length > 0 && (
+                        <div className="flex items-center gap-1 shrink-0 [&_button]:h-8 [&_button]:w-8 [&_button]:min-h-0 [&_button]:min-w-0 [&_button]:p-0 [&_span[data-slot]]:h-4 [&_span[data-slot]]:w-4 [&_svg]:h-4 [&_svg]:w-4">
+                          {actionCols.map((col) => (
+                            <React.Fragment key={col.key}>
+                              {col.mobileRender
+                                ? col.mobileRender(item, globalIndex)
+                                : col.render(item, globalIndex)}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      )}
+                      {headerLeftCols.length > 0 && (
+                        <div className="flex flex-col items-start min-w-0 flex-1 gap-0.5">
+                          {headerLeftCols.map((col) => (
+                            <div
+                              key={col.key}
+                              className="min-w-0 truncate text-left"
+                            >
+                              {col.mobileRender
+                                ? col.mobileRender(item, globalIndex)
+                                : col.render(item, globalIndex)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {headerRightCols.length > 0 && (
+                        <div className="flex flex-col items-end gap-1 shrink-0 ml-auto">
+                          {headerRightCols.map((col) => (
+                            <div key={col.key} className="max-w-[45%]">
+                              {col.mobileRender
+                                ? col.mobileRender(item, globalIndex)
+                                : col.render(item, globalIndex)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {hasHeader && bodyCols.length > 0 && (
+                    <div className="h-px bg-border/60 -mx-1" />
+                  )}
+                  {bodyCols.length > 0 && (
+                    <div className="space-y-2">
+                      {bodyCols.map((col) => (
+                        <div
+                          key={col.key}
+                          className={cn(
+                            'grid grid-cols-[minmax(5rem,38%)_minmax(0,1fr)] items-start gap-x-3 gap-y-1',
+                            col.mobileClassName,
+                          )}
+                        >
+                          <span className="min-w-0 text-[11px] sm:text-xs font-medium leading-5 text-muted-foreground/90">
+                            {typeof col.mobileHeader !== 'undefined'
+                              ? col.mobileHeader
+                              : col.header}
+                          </span>
+                          <span className="min-w-0 break-words text-right text-[13px] sm:text-sm leading-5 [&_.row-actions]:justify-end [&_.row-actions]:whitespace-normal [&_.row-actions]:flex-wrap [&_button]:min-h-9 [&_button]:min-w-9">
+                            {col.mobileRender
+                              ? col.mobileRender(item, globalIndex)
+                              : col.render(item, globalIndex)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       ) : (
         <div className="rounded-md border">

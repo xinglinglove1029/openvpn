@@ -193,6 +193,13 @@ export default function NotificationsPage() {
         ),
     },
     {
+      key: 'createdAt',
+      header: '时间',
+      sortable: true,
+      sortAccessor: (item) => (item.createdAt ? new Date(item.createdAt).getTime() : 0),
+      render: (item) => formatTime(item.createdAt),
+    },
+    {
       key: 'actions',
       header: '操作',
       render: (item) => (
@@ -206,13 +213,6 @@ export default function NotificationsPage() {
           详情
         </Button>
       ),
-    },
-    {
-      key: 'createdAt',
-      header: '时间',
-      sortable: true,
-      sortAccessor: (item) => (item.createdAt ? new Date(item.createdAt).getTime() : 0),
-      render: (item) => formatTime(item.createdAt),
     },
   ];
 

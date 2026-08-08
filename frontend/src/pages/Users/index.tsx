@@ -843,6 +843,8 @@ function UserTablePanel({
           onCheckedChange={(checked) => toggleVisibleUsers(!!checked)}
         />
       ),
+      mobileHeader: '选择',
+      cardPlacement: 'header-action',
       render: (user) => (
         <Checkbox
           checked={Boolean(user.id && selectedUserIds.includes(user.id))}
@@ -856,6 +858,19 @@ function UserTablePanel({
       header: '账号',
       sortable: true,
       sortAccessor: (user) => user.username ?? '',
+      cardPlacement: 'header-left',
+      mobileRender: (user) => (
+        <div className="flex flex-col items-start">
+          <div className="flex items-center gap-1.5 min-w-0 max-w-full">
+            <span className="text-sm font-semibold leading-5 truncate">{user.username}</span>
+          </div>
+          {user.name && (
+            <span className="text-xs text-muted-foreground truncate max-w-full">
+              {user.name}
+            </span>
+          )}
+        </div>
+      ),
       render: (user) => <span className="font-medium">{user.username}</span>,
     },
     {
@@ -929,6 +944,7 @@ function UserTablePanel({
       header: '状态',
       sortable: true,
       sortAccessor: (user) => (user.isEnable === false ? 0 : 1),
+      cardPlacement: 'header-right',
       render: (user) => (
         <StatusBadge status={user.isEnable === false ? 'danger' : 'success'}>
           {user.isEnable === false ? '禁用' : '启用'}
@@ -1023,9 +1039,9 @@ function UserTablePanel({
               <Users className="h-4 w-4" />
               VPN 账号
             </CardTitle>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-2 sm:flex sm:flex-nowrap gap-2 w-full sm:w-auto">
               <HasPermission code="user:import">
-                <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" onClick={() => fileInputRef.current?.click()}>
                   <Upload className="mr-1 h-3.5 w-3.5" />
                   导入 CSV
                 </Button>
@@ -1038,7 +1054,7 @@ function UserTablePanel({
                 onChange={(e) => importUsers(e.target.files?.[0])}
               />
               <HasPermission code="user:export">
-                <Button size="sm" variant="outline" asChild>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" asChild>
                   <a href="/user/template">
                     <Download className="mr-1 h-3.5 w-3.5" />
                     模板
@@ -1046,7 +1062,7 @@ function UserTablePanel({
                 </Button>
               </HasPermission>
               <HasPermission code="user:export">
-                <Button size="sm" variant="outline" asChild>
+                <Button size="sm" variant="outline" className="w-full sm:w-auto" asChild>
                   <a href={`/ovpn/user/export?gid=${selectedGroupId}`}>
                     <Download className="mr-1 h-3.5 w-3.5" />
                     导出分组
@@ -1054,7 +1070,7 @@ function UserTablePanel({
                 </Button>
               </HasPermission>
               <HasPermission code="user:create">
-                <Button size="sm" onClick={openAddUser}>
+                <Button size="sm" className="w-full sm:w-auto" onClick={openAddUser}>
                   <Plus className="mr-1 h-3.5 w-3.5" />
                   添加用户
                 </Button>
@@ -1062,7 +1078,7 @@ function UserTablePanel({
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-2 sm:space-y-4">
           {/* 过滤栏 */}
           <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
             <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
@@ -1114,85 +1130,97 @@ function UserTablePanel({
 
           {/* 批量操作栏 */}
           {selectedUserIds.length > 0 && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-md border bg-muted/50 px-4 py-2">
-              <span className="text-sm font-medium">已选择 {selectedUserIds.length} 个账号</span>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent)]/[0.08] px-3 py-2">
+              <span className="text-sm font-semibold text-[var(--accent)] flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4" />
+                已选择 {selectedUserIds.length} 个账号
+              </span>
               <Separator orientation="vertical" className="hidden sm:block h-4" />
-              <HasPermission code="user:enable">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    batchAction(
-                      '批量启用账号',
-                      '确认启用这些账号吗？',
-                      (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: true }),
-                      '批量启用完成',
-                    )
-                  }
-                >
-                  启用
-                </Button>
-              </HasPermission>
-              <HasPermission code="user:disable">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    batchAction(
-                      '批量禁用账号',
-                      '确认禁用这些账号吗？',
-                      (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: false }),
-                      '批量禁用完成',
-                      true,
-                    )
-                  }
-                >
-                  禁用
-                </Button>
-              </HasPermission>
-              {hasSelectedMfaUser && (
-                <HasPermission code="user:reset_mfa">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2 sm:ml-auto w-full sm:w-auto">
+                <HasPermission code="user:enable">
                   <Button
                     size="sm"
                     variant="outline"
+                    className="w-full sm:w-auto"
                     onClick={() =>
                       batchAction(
-                        '批量重置 MFA',
-                        '确认重置这些账号的 MFA 吗？',
-                        (u) => api.delete(`/client/mfa/${u.id}`),
-                        '批量 MFA 重置完成',
+                        '批量启用账号',
+                        '确认启用这些账号吗？',
+                        (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: true }),
+                        '批量启用完成',
+                      )
+                    }
+                  >
+                    <CheckCircle2 className="mr-1 h-3.5 w-3.5 text-emerald-500" />
+                    启用
+                  </Button>
+                </HasPermission>
+                <HasPermission code="user:disable">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={() =>
+                      batchAction(
+                        '批量禁用账号',
+                        '确认禁用这些账号吗？',
+                        (u) => api.patchForm('/ovpn/user', { id: u.id, isEnable: false }),
+                        '批量禁用完成',
                         true,
                       )
                     }
                   >
-                    重置 MFA
+                    <XCircle className="mr-1 h-3.5 w-3.5 text-amber-500" />
+                    禁用
                   </Button>
                 </HasPermission>
-              )}
-              <HasPermission code="user:export">
-                <Button size="sm" variant="outline" onClick={exportSelectedUsers}>
-                  <Download className="mr-1 h-3.5 w-3.5" />
-                  导出选中
-                </Button>
-              </HasPermission>
-              <HasPermission code="user:delete">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() =>
-                    batchAction(
-                      '批量删除账号',
-                      '确认删除这些账号吗？该操作不可恢复。',
-                      (u) => api.delete(`/ovpn/user/${u.id}`),
-                      '批量删除完成',
-                      true,
-                    )
-                  }
-                >
-                  删除
-                </Button>
-              </HasPermission>
+                {hasSelectedMfaUser && (
+                  <HasPermission code="user:reset_mfa">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full sm:w-auto"
+                      onClick={() =>
+                        batchAction(
+                          '批量重置 MFA',
+                          '确认重置这些账号的 MFA 吗？',
+                          (u) => api.delete(`/client/mfa/${u.id}`),
+                          '批量 MFA 重置完成',
+                          true,
+                        )
+                      }
+                    >
+                      <ShieldOff className="mr-1 h-3.5 w-3.5" />
+                      重置 MFA
+                    </Button>
+                  </HasPermission>
+                )}
+                <HasPermission code="user:export">
+                  <Button size="sm" variant="outline" onClick={exportSelectedUsers} className="w-full sm:w-auto">
+                    <Download className="mr-1 h-3.5 w-3.5" />
+                    导出选中
+                  </Button>
+                </HasPermission>
+                <HasPermission code="user:delete">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full sm:w-auto text-destructive hover:text-destructive"
+                    onClick={() =>
+                      batchAction(
+                        '批量删除账号',
+                        '确认删除这些账号吗？该操作不可恢复。',
+                        (u) => api.delete(`/ovpn/user/${u.id}`),
+                        '批量删除完成',
+                        true,
+                      )
+                    }
+                  >
+                    <Trash2 className="mr-1 h-3.5 w-3.5" />
+                    删除
+                  </Button>
+                </HasPermission>
+              </div>
             </div>
           )}
 
@@ -1212,6 +1240,23 @@ function UserTablePanel({
                 onPageChange={userPagination.setPage}
                 onPageSizeChange={userPagination.setPageSize}
                 keyFn={(user) => user.id || user.username}
+                isCardSelected={(user) => Boolean(user.id && selectedUserIds.includes(user.id))}
+                mobileToolbar={
+                  <div className="flex flex-wrap items-center gap-3 w-full">
+                    <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        onCheckedChange={(checked) => toggleVisibleUsers(!!checked)}
+                      />
+                      <span className="text-sm font-medium">全选当前页</span>
+                    </label>
+                    {visibleIds.length > 0 && (
+                      <span className="text-xs text-muted-foreground ml-auto">
+                        已选 {selectedUserIds.filter((id) => visibleIds.includes(id)).length} / {visibleIds.length}
+                      </span>
+                    )}
+                  </div>
+                }
               />
             ) : (
               <div className="rounded-lg border bg-card p-8 text-center">

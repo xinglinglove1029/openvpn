@@ -1398,6 +1398,7 @@ export default function RolesPage() {
         header: '角色',
         sortable: true,
         sortAccessor: (item) => item.name,
+        cardPlacement: 'header-left',
         render: (item) => (
           <div className="flex items-center gap-2.5">
             <span
@@ -1424,6 +1425,35 @@ export default function RolesPage() {
                 )}
               </div>
               <div className="text-xs font-mono text-muted-foreground">{item.code}</div>
+            </div>
+          </div>
+        ),
+        mobileRender: (item) => (
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={cn(
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                item.isBuiltin
+                  ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                  : 'bg-muted text-muted-foreground',
+              )}
+            >
+              <ShieldCheck className="h-4 w-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="font-semibold leading-tight truncate">{item.name}</span>
+                {item.isBuiltin && (
+                  <Badge
+                    variant="outline"
+                    className="bg-[var(--accent)]/10 border-[var(--accent)]/30 text-[var(--accent)] text-[10px] px-1.5 py-0"
+                  >
+                    <Lock className="h-2.5 w-2.5 mr-0.5" />
+                    内置
+                  </Badge>
+                )}
+              </div>
+              <div className="text-xs font-mono text-muted-foreground truncate">{item.code}</div>
             </div>
           </div>
         ),
@@ -1471,6 +1501,7 @@ export default function RolesPage() {
         key: 'isEnable',
         header: '状态',
         className: 'text-center',
+        cardPlacement: 'header-right',
         render: (item) => (
           <StatusBadge status={item.isEnable ? 'success' : 'neutral'}>
             {item.isEnable ? '启用' : '禁用'}
@@ -1488,6 +1519,8 @@ export default function RolesPage() {
       {
         key: 'actions',
         header: '操作',
+        mobileHeader: '',
+        mobileClassName: 'grid-cols-1',
         render: (item) => (
           <div className="flex items-center gap-1">
             <HasPermission code="role:assign_users">
@@ -1553,6 +1586,68 @@ export default function RolesPage() {
             </HasPermission>
           </div>
         ),
+        mobileRender: (item) => (
+          <div className="grid grid-cols-2 gap-2 w-full">
+            <HasPermission code="role:assign_users">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full h-9"
+                onClick={() => openUserAssign(item)}
+              >
+                <Users className="h-4 w-4" />
+                用户
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:assign_groups">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full h-9"
+                onClick={() => openGroupAssign(item)}
+              >
+                <Network className="h-4 w-4" />
+                用户组
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:assign_permissions">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full h-9"
+                onClick={() => openAssign(item)}
+                disabled={item.isBuiltin}
+              >
+                <KeyRound className="h-4 w-4" />
+                权限
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:update">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full h-9"
+                onClick={() => openEdit(item)}
+              >
+                <Edit className="h-4 w-4" />
+                编辑
+              </Button>
+            </HasPermission>
+            <HasPermission code="role:delete">
+              {!item.isBuiltin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-9 col-span-2 text-destructive hover:text-destructive"
+                  onClick={() => askDelete(item)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除角色
+                </Button>
+              )}
+            </HasPermission>
+          </div>
+        ),
       },
     ],
     [],
@@ -1563,8 +1658,8 @@ export default function RolesPage() {
       <PageHeader eyebrow="Access Control" title="角色管理" description="管理角色与权限分配，控制菜单与按钮可见性" />
 
       {/* 操作工具栏：搜索、筛选 在左，刷新、新建 在右 */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-48">
+      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
+        <div className="relative w-full sm:w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={searchText}
@@ -1574,7 +1669,7 @@ export default function RolesPage() {
           />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'enabled' | 'disabled')}>
-          <SelectTrigger className="w-[110px] h-8">
+          <SelectTrigger className="w-full sm:w-[110px] h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1583,15 +1678,15 @@ export default function RolesPage() {
             <SelectItem value="disabled">禁用</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
           <HasPermission code="role:view">
-            <Button size="sm" variant="outline" onClick={reload}>
+            <Button size="sm" variant="outline" onClick={reload} className="w-full sm:w-auto">
               <RefreshCw className="h-3.5 w-3.5 mr-1" />
               刷新
             </Button>
           </HasPermission>
           <HasPermission code="role:create">
-            <Button size="sm" onClick={openCreate}>
+            <Button size="sm" onClick={openCreate} className="w-full sm:w-auto">
               <Plus className="h-3.5 w-3.5 mr-1" />
               新建角色
             </Button>
