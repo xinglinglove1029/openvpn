@@ -50,7 +50,13 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ARG BUILDPLATFORM
 
-RUN set -euxo pipefail \
+# 安装系统依赖 + Ollama
+# 注意：
+# 1. Ollama version 参数不带 v 前缀（参考官方 install.sh），否则 ollama.com 重定向时双 v → 404
+# 2. Ollama 新版下载格式为 .tar.zst 压缩包（含 bin/ollama + lib/ollama/），非裸二进制
+# 3. Alpine busybox ash 不支持 pipefail，用 set -eux 即可
+# 4. arm/v6、arm/v7 无官方 Ollama 二进制，创建 stub 脚本占位
+RUN set -eux \
   && apk add --no-cache \
     bash \
     coreutils \
@@ -68,22 +74,24 @@ RUN set -euxo pipefail \
     sqlite \
     supervisor \
     tzdata \
+    zstd \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
-  # Ollama 仅提供 amd64 和 arm64 二进制；
-  # arm/v6、arm/v7 等无官方二进制的架构创建 stub 脚本占位
   && if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
-       echo "Downloading Ollama ${OLLAMA_VERSION} for ${TARGETPLATFORM}" \
+       mkdir -p /usr/local/lib/ollama \
+       && echo "Downloading Ollama ${OLLAMA_VERSION} for ${TARGETPLATFORM}" \
        && curl -fsSL \
             --retry 3 \
             --retry-delay 5 \
             --connect-timeout 30 \
-            --max-time 600 \
-            "https://ollama.com/download/ollama-linux-${TARGETARCH}?version=v${OLLAMA_VERSION}" \
-            -o /usr/local/bin/ollama \
+            --max-time 1200 \
+            "https://ollama.com/download/ollama-linux-${TARGETARCH}.tar.zst?version=${OLLAMA_VERSION}" \
+            -o /tmp/ollama.tar.zst \
+       && zstd -d /tmp/ollama.tar.zst -o /tmp/ollama.tar \
+       && tar -xf /tmp/ollama.tar -C /usr/local \
+       && rm -f /tmp/ollama.tar.zst /tmp/ollama.tar \
        && chmod +x /usr/local/bin/ollama \
-       && test -s /usr/local/bin/ollama \
-       && echo "Ollama binary downloaded: $(du -h /usr/local/bin/ollama | cut -f1)"; \
+       && echo "Ollama installed: $(du -sh /usr/local/lib/ollama | cut -f1)"; \
      else \
        echo "Ollama not available for ${TARGETPLATFORM}, creating stub" \
        && printf '#!/bin/sh\necho "ollama not supported on this architecture"\nexit 0\n' > /usr/local/bin/ollama \
