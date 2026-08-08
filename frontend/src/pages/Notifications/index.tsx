@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/ui/dialog';
+import MarkdownContent from '@/components/MarkdownContent';
 import {
   Select,
   SelectContent,
@@ -192,27 +193,19 @@ export default function NotificationsPage() {
         ),
     },
     {
-      key: 'message',
-      header: '消息',
-      sortable: true,
-      sortAccessor: (item) => item.message ?? '',
+      key: 'actions',
+      header: '操作',
       render: (item) => (
-        <div
-          className="flex items-center gap-2 cursor-pointer group"
-          onClick={() => item.message && setDetailItem(item)}
-          title={item.message || ''}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => setDetailItem(item)}
         >
-          <span
-            className={`truncate ${item.success ? 'text-muted-foreground' : 'text-red-500/90'}`}
-          >
-            {item.message || '-'}
-          </span>
-          {item.message && (
-            <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-          )}
-        </div>
+          <Eye className="w-3.5 h-3.5 mr-1" />
+          详情
+        </Button>
       ),
-      className: 'max-w-[420px]',
     },
     {
       key: 'createdAt',
@@ -227,55 +220,59 @@ export default function NotificationsPage() {
     <div className="space-y-4">
       <PageHeader eyebrow="Notification" title="站内信" description="查看 Webhook / 邮件等渠道发送的运维通知" />
 
-      {/* 操作工具栏：搜索、筛选 在左，刷新 在右 */}
-      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3">
-        <div className="relative w-full sm:w-44">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            value={searchUser}
-            onChange={(e) => setSearchUser(e.target.value)}
-            placeholder="搜索用户名"
-            className="pl-8 h-11 sm:h-8"
-          />
+      {/* 操作工具栏 */}
+      <div className="space-y-2 sm:space-y-0 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+        {/* 搜索行：移动端并排两个搜索框 */}
+        <div className="flex items-stretch gap-2 sm:flex-1 sm:min-w-0">
+          <div className="relative flex-1 sm:max-w-[170px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={searchUser}
+              onChange={(e) => setSearchUser(e.target.value)}
+              placeholder="用户名"
+              className="pl-8 h-9 sm:h-8 text-sm"
+            />
+          </div>
+          <div className="relative flex-1 sm:max-w-[200px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={searchMessage}
+              onChange={(e) => setSearchMessage(e.target.value)}
+              placeholder="消息内容"
+              className="pl-8 h-9 sm:h-8 text-sm"
+            />
+          </div>
         </div>
-        <div className="relative w-full sm:w-56">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input
-            value={searchMessage}
-            onChange={(e) => setSearchMessage(e.target.value)}
-            placeholder="搜索消息内容"
-            className="pl-8 h-11 sm:h-8"
-          />
-        </div>
-        <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
-          <SelectTrigger className="w-full sm:w-[120px] h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部事件</SelectItem>
-            <SelectItem value="connect">上线</SelectItem>
-            <SelectItem value="disconnect">下线</SelectItem>
-            <SelectItem value="test">测试</SelectItem>
-            <SelectItem value="user_register">用户注册</SelectItem>
-            <SelectItem value="password_reset">密码重置</SelectItem>
-            <SelectItem value="mfa_reset">MFA重置</SelectItem>
-            <SelectItem value="expire_reminder">到期提醒</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-          <SelectTrigger className="w-full sm:w-[110px] h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部结果</SelectItem>
-            <SelectItem value="success">成功</SelectItem>
-            <SelectItem value="failed">失败</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
-          <Button size="sm" variant="outline" onClick={handleReload} disabled={state.loading} className="w-full sm:w-auto">
+        {/* 筛选+刷新行：移动端并排 */}
+        <div className="flex items-center gap-2">
+          <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
+            <SelectTrigger className="flex-1 sm:w-[110px] h-9 sm:h-8 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部事件</SelectItem>
+              <SelectItem value="connect">上线</SelectItem>
+              <SelectItem value="disconnect">下线</SelectItem>
+              <SelectItem value="test">测试</SelectItem>
+              <SelectItem value="user_register">用户注册</SelectItem>
+              <SelectItem value="password_reset">密码重置</SelectItem>
+              <SelectItem value="mfa_reset">MFA重置</SelectItem>
+              <SelectItem value="expire_reminder">到期提醒</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+            <SelectTrigger className="flex-1 sm:w-[100px] h-9 sm:h-8 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部结果</SelectItem>
+              <SelectItem value="success">成功</SelectItem>
+              <SelectItem value="failed">失败</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={handleReload} disabled={state.loading} className="h-9 sm:h-8 shrink-0">
             <RefreshCw className={`h-3.5 w-3.5 mr-1 ${state.loading ? 'animate-spin' : ''}`} />
-            刷新
+            <span className="hidden sm:inline">刷新</span>
           </Button>
         </div>
       </div>
@@ -324,7 +321,7 @@ export default function NotificationsPage() {
       )}
 
       <Dialog open={!!detailItem} onOpenChange={(open) => !open && setDetailItem(null)}>
-        <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] sm:w-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-2rem)] sm:w-auto max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>通知详情</DialogTitle>
             <DialogDescription>
@@ -332,42 +329,42 @@ export default function NotificationsPage() {
             </DialogDescription>
           </DialogHeader>
           {detailItem && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            <div className="space-y-3 sm:space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 text-sm">
                 <div>
-                  <div className="text-muted-foreground mb-1">事件类型</div>
-                  <Badge variant="outline" className="bg-blue-500/15 text-blue-600 border-blue-500/25">
+                  <div className="text-muted-foreground text-xs sm:text-sm mb-1">事件类型</div>
+                  <Badge variant="outline" className="bg-blue-500/15 text-blue-600 border-blue-500/25 text-xs">
                     {eventLabel(detailItem.event)}
                   </Badge>
                 </div>
                 <div>
-                  <div className="text-muted-foreground mb-1">用户</div>
-                  <div className="font-medium">{detailItem.username || '-'}</div>
+                  <div className="text-muted-foreground text-xs sm:text-sm mb-1">用户</div>
+                  <div className="font-medium text-sm">{detailItem.username || '-'}</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground mb-1">渠道类型</div>
+                  <div className="text-muted-foreground text-xs sm:text-sm mb-1">渠道类型</div>
                   <div>
                     {detailItem.provider ? (
                       <StatusBadge status="info">{providerLabel(detailItem.provider)}</StatusBadge>
                     ) : (
-                      <span className="text-muted-foreground">-</span>
+                      <span className="text-muted-foreground text-sm">-</span>
                     )}
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground mb-1">渠道名称</div>
-                  <div className="font-medium">{detailItem.channelName || '-'}</div>
+                  <div className="text-muted-foreground text-xs sm:text-sm mb-1">渠道名称</div>
+                  <div className="font-medium text-sm break-all">{detailItem.channelName || '-'}</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground mb-1">发送结果</div>
+                  <div className="text-muted-foreground text-xs sm:text-sm mb-1">发送结果</div>
                   <div>
                     {detailItem.success ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-500">
+                      <span className="inline-flex items-center gap-1 text-emerald-500 text-sm">
                         <CheckCircle2 className="w-4 h-4" />
                         成功
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-red-500">
+                      <span className="inline-flex items-center gap-1 text-red-500 text-sm">
                         <XCircle className="w-4 h-4" />
                         失败
                       </span>
@@ -376,9 +373,9 @@ export default function NotificationsPage() {
                 </div>
               </div>
               <div>
-                <div className="text-muted-foreground mb-2 text-sm">消息内容</div>
-                <div className="bg-muted/50 rounded-md p-4 whitespace-pre-wrap break-words text-sm">
-                  {detailItem.message || '-'}
+                <div className="text-muted-foreground text-xs sm:text-sm mb-2">消息明细</div>
+                <div className="bg-muted/40 rounded-md p-3 sm:p-4 overflow-x-auto">
+                  <MarkdownContent content={detailItem.message} />
                 </div>
               </div>
             </div>

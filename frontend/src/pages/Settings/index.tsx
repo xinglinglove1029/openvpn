@@ -940,15 +940,15 @@ function ServiceTab({ store }: { store: DraftStore }) {
           <div className="space-y-3">
             <p className="text-sm font-medium">服务控制</p>
             <p className="text-xs text-muted-foreground">重启会向 OpenVPN 进程发送 SIGHUP 信号，重新加载 server.conf。</p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <HasPermission code="settings:service:restart">
-                <Button onClick={() => setRestartConfirm(true)} disabled={restarting}>
+                <Button onClick={() => setRestartConfirm(true)} disabled={restarting} className="w-full sm:w-auto">
                   <RefreshCw className="h-4 w-4 mr-2" />
                   {restarting ? '重启中...' : '重启 OpenVPN'}
                 </Button>
               </HasPermission>
               <HasPermission code="settings:service:config">
-                <Button variant="outline" onClick={openServerConfig} disabled={configLoading}>
+                <Button variant="outline" onClick={openServerConfig} disabled={configLoading} className="w-full sm:w-auto">
                   <FileCode2 className="h-4 w-4 mr-2" />
                   编辑 server.conf
                 </Button>
@@ -1148,7 +1148,7 @@ function ClientPackagesTab() {
   return (
     <>
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0">
           <div>
             <CardTitle>客户端安装包管理</CardTitle>
             <CardDescription>上传各平台的 OpenVPN 客户端安装包，用户开通邮件会自动附带下载链接</CardDescription>

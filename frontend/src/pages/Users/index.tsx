@@ -12,6 +12,9 @@ import {
   FolderTree,
   Eye,
   EyeOff,
+  CheckCircle2,
+  XCircle,
+  ShieldOff,
 } from 'lucide-react';
 import { api } from '@/api';
 import { useAsync } from '@/hooks/useAsync';
@@ -955,38 +958,42 @@ function UserTablePanel({
       key: 'actions',
       header: '操作',
       render: (user) => (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-0.5">
           <HasPermission code="user:update">
-            <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => openEditUser(user)}>
+            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openEditUser(user)}>
               {isMobile ? <Edit className="h-4 w-4" /> : '编辑'}
             </Button>
           </HasPermission>
           <HasPermission
             code={user.isEnable === false ? 'user:enable' : 'user:disable'}
             fallback={
-              <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} disabled>
-                {isMobile ? <KeyRound className="h-4 w-4" /> : (user.isEnable === false ? '启用' : '禁用')}
+              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} disabled>
+                {isMobile ? (
+                  user.isEnable === false ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />
+                ) : (user.isEnable === false ? '启用' : '禁用')}
               </Button>
             }
           >
             <Button
               size="sm"
               variant="ghost"
-              className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')}
+              className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')}
               onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}
             >
-              {isMobile ? <KeyRound className="h-4 w-4" /> : (user.isEnable === false ? '启用' : '禁用')}
+              {isMobile ? (
+                user.isEnable === false ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <XCircle className="h-4 w-4 text-amber-500" />
+              ) : (user.isEnable === false ? '启用' : '禁用')}
             </Button>
           </HasPermission>
           <HasPermission code="user:reset_password">
-            <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => openResetPassword(user)}>
+            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openResetPassword(user)}>
               {isMobile ? <KeyRound className="h-4 w-4" /> : '重置密码'}
             </Button>
           </HasPermission>
           {(user.mfaSecret || user.mfaEnabled) && (
             <HasPermission code="user:reset_mfa">
-              <Button size="sm" variant="ghost" className={cn('h-7 px-2', isMobile && 'h-10 w-10 p-0')} onClick={() => resetMfa(user)}>
-                {isMobile ? <KeyRound className="h-4 w-4" /> : '重置 MFA'}
+              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => resetMfa(user)}>
+                {isMobile ? <ShieldOff className="h-4 w-4" /> : '重置 MFA'}
               </Button>
             </HasPermission>
           )}
@@ -995,7 +1002,7 @@ function UserTablePanel({
               <Button
                 size="sm"
                 variant="ghost"
-                className={cn('h-7 px-2 text-destructive hover:text-destructive', isMobile && 'h-10 w-10 p-0')}
+                className={cn('h-8 px-1.5 sm:h-7 sm:px-2 text-destructive hover:text-destructive', isMobile && 'min-w-[2.25rem] p-0')}
                 onClick={() => deleteUser(user)}
               >
                 {isMobile ? <Trash2 className="h-4 w-4" /> : '删除'}

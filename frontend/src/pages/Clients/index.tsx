@@ -147,37 +147,37 @@ export default function ClientsPage() {
       header: '操作',
       className: 'w-[200px]',
       render: (c) => (
-        <div className="row-actions flex flex-wrap items-center gap-1">
+        <div className="row-actions flex flex-wrap items-center gap-0.5">
           <HasPermission code="client:download">
             {c.file && (
-              <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} asChild>
+              <Button variant="ghost" size="sm" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} asChild>
                 <a href={c.file} download={c.fullName}>
-                  <Download className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+                  <Download className={cn(isMobile ? 'h-4 w-4' : 'h-4 w-4 mr-1')} />
                   {!isMobile && '下载'}
                 </a>
               </Button>
             )}
           </HasPermission>
           <HasPermission code="client:download">
-            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => copyClientFile(c)}>
-              <Copy className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+            <Button variant="ghost" size="sm" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => copyClientFile(c)}>
+              <Copy className={cn(isMobile ? 'h-4 w-4' : 'h-4 w-4 mr-1')} />
               {!isMobile && '复制'}
             </Button>
           </HasPermission>
           <HasPermission code="client:regenerate">
-            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => openEditor(c, 'config')}>
-              <FileText className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+            <Button variant="ghost" size="sm" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openEditor(c, 'config')}>
+              <FileText className={cn(isMobile ? 'h-4 w-4' : 'h-4 w-4 mr-1')} />
               {!isMobile && '配置'}
             </Button>
           </HasPermission>
           <HasPermission code="client:regenerate">
-            <Button variant="ghost" size="sm" className={cn(isMobile && 'h-10 w-10 p-0')} onClick={() => openEditor(c, 'ccd')}>
-              <FolderOpen className={cn('h-4 w-4', !isMobile && 'mr-1')} />
+            <Button variant="ghost" size="sm" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openEditor(c, 'ccd')}>
+              <FolderOpen className={cn(isMobile ? 'h-4 w-4' : 'h-4 w-4 mr-1')} />
               {!isMobile && 'CCD'}
             </Button>
           </HasPermission>
           <HasPermission code="client:delete">
-            <Button variant="ghost" size="sm" className={cn('text-destructive', isMobile && 'h-10 w-10 p-0')} onClick={() => deleteClient(c)}>
+            <Button variant="ghost" size="sm" className={cn('h-8 px-1.5 sm:h-7 sm:px-2 text-destructive hover:text-destructive', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => deleteClient(c)}>
               <Trash2 className="h-4 w-4" />
             </Button>
           </HasPermission>
