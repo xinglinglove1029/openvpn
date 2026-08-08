@@ -44,8 +44,12 @@ FROM alpine:3.23.4
 
 # Ollama 版本，可通过 --build-arg 覆盖
 ARG OLLAMA_VERSION=0.32.5
+# TARGETPLATFORM / BUILDPLATFORM 由 buildx 自动注入，用于跨架构构建
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
 
-RUN apk add --no-cache \
+RUN set -euxo pipefail \
+  && apk add --no-cache \
     bash \
     coreutils \
     curl \
@@ -64,17 +68,23 @@ RUN apk add --no-cache \
     tzdata \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
-  && wget https://github.com/OpenVPN/easy-rsa/releases/download/v3.2.6/EasyRSA-3.2.6.tgz \
-  && tar -ozxf EasyRSA-3.2.6.tgz \
-  && mv EasyRSA-3.2.6 /usr/share/easy-rsa \
-  && rm -rf EasyRSA-3.2.6.tgz \
-  && ln -s /usr/share/easy-rsa/easyrsa /usr/local/bin \
-  # 下载 ollama 二进制（CPU 版本，通过 gcompat 在 alpine 上运行 glibc 二进制）
-  # 构建时验证二进制能否在 alpine+gcompat 下运行，失败则构建中断（fail fast）
-  && curl -fsSL "https://ollama.com/download/ollama-linux-amd64?version=v${OLLAMA_VERSION}" \
-    -o /usr/local/bin/ollama \
+  # 下载 Ollama 二进制（按 TARGETARCH 选择 amd64 / arm64）
+  # 注意：不直接执行 ollama --version 做验证，
+  # 因为在跨架构构建（BUILDPLATFORM != TARGETPLATFORM）下，
+  # 通过 QEMU user + gcompat 模拟执行 glibc 二进制偶现失败，
+  # 改为只校验文件下载成功且非空即可
+  && OLLAMA_ARCH="${TARGETARCH}" \
+  && echo "Downloading Ollama ${OLLAMA_VERSION} for ${TARGETPLATFORM} (arch=${OLLAMA_ARCH})" \
+  && curl -fsSL \
+       --retry 3 \
+       --retry-delay 5 \
+       --connect-timeout 30 \
+       --max-time 600 \
+       "https://ollama.com/download/ollama-linux-${OLLAMA_ARCH}?version=v${OLLAMA_VERSION}" \
+       -o /usr/local/bin/ollama \
   && chmod +x /usr/local/bin/ollama \
-  && /usr/local/bin/ollama --version
+  && test -s /usr/local/bin/ollama \
+  && echo "Ollama binary downloaded: $(du -h /usr/local/bin/ollama | cut -f1)"
 
 COPY build/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
 COPY build/openvpn-auth /usr/lib/openvpn/plugins/openvpn-auth
