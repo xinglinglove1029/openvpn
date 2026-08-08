@@ -108,14 +108,19 @@ run_server() {
 }
 
 renew_cert() {
+	DAYS="${1:-1095}"
+	case "$DAYS" in
+		''|*[!0-9]*) DAYS=1095 ;;
+	esac
+
 	SERVER_NAME=$(jq -r '.system.base.server_name // ""' $SYSTEM_CONFIG)
 
 	#cd $EASYRSA_PKI
-	#openssl x509 -in ca.crt -days $1 -out ca.crt -signkey private/ca.key
-	/usr/share/easy-rsa/easyrsa --batch --days=$1 renew-ca
-	/usr/share/easy-rsa/easyrsa --batch --days=$1 renew $SERVER_NAME
-	/usr/share/easy-rsa/easyrsa --batch revoke-renewed $SERVER_NAME
-	/usr/share/easy-rsa/easyrsa --batch --days=$1 gen-crl
+	#openssl x509 -in ca.crt -days $DAYS -out ca.crt -signkey private/ca.key
+	/usr/share/easy-rsa/easyrsa --batch "--days=$DAYS" renew-ca
+	/usr/share/easy-rsa/easyrsa --batch "--days=$DAYS" renew "$SERVER_NAME"
+	/usr/share/easy-rsa/easyrsa --batch revoke-renewed "$SERVER_NAME"
+	/usr/share/easy-rsa/easyrsa --batch "--days=$DAYS" gen-crl
 }
 
 auth() {
@@ -362,6 +367,9 @@ case $1 in
 		init_pki
 		init_config
 	fi
+
+	# 创建 ollama 模型存储目录（容器内集成 ollama，持久化到 /data/ollama）
+	mkdir -p "${OLLAMA_MODELS:-/data/ollama/models}"
 
 	load_nftconfig
 	check_config

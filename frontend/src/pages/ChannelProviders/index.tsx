@@ -291,9 +291,13 @@ function ConfigFields({
         // switch
         const on = v === true;
         return (
-          <div key={field.key} className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border px-3 py-2">
-            <Label className="cursor-pointer">{field.label}</Label>
-            <Switch checked={on} onCheckedChange={setVal} />
+          <div key={field.key} className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80 cursor-pointer">{field.label}</Label>
+            <div className="space-y-1.5 min-w-0">
+              <div className="h-10 flex items-center">
+                <Switch checked={on} onCheckedChange={setVal} />
+              </div>
+            </div>
           </div>
         );
       })}
@@ -684,18 +688,16 @@ export default function ChannelProvidersPage() {
           <DialogHeader>
             <DialogTitle>{form.mode === 'create' ? '新增通知渠道' : '编辑通知渠道'}</DialogTitle>
             <DialogDescription>
-              {form.mode === 'create'
-                ? '选择渠道类型并填写对应配置，保存后可在列表中启用并测试'
-                : '修改当前渠道的配置，保存后立即生效'}
+              {form.mode === 'create'}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="flex items-center gap-1">
-                  渠道名称<span className="text-red-500">*</span>
-                </Label>
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80 flex items-center justify-start sm:justify-end gap-1">
+                渠道名称<span className="text-red-500">*</span>
+              </Label>
+              <div className="space-y-1.5 min-w-0">
                 <Input
                   value={form.name}
                   onChange={(e) => setForm((p) => ({ ...p, name: e.target.value, errors: { ...p.errors, name: '' } }))}
@@ -704,8 +706,11 @@ export default function ChannelProvidersPage() {
                 />
                 {form.errors.name && <p className="text-xs text-red-500">{form.errors.name}</p>}
               </div>
-              <div className="space-y-1.5">
-                <Label>渠道类型</Label>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">渠道类型</Label>
+              <div className="space-y-1.5 min-w-0">
                 <Select
                   value={form.type}
                   onValueChange={(v) => setForm((p) => ({ ...p, type: v as ChannelType, config: {}, errors: {} }))}
@@ -728,27 +733,27 @@ export default function ChannelProvidersPage() {
               </div>
             </div>
 
-            <div className="rounded-lg border px-3 py-2.5">
-              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <Label className="cursor-pointer">状态</Label>
-                <RadioGroup
-                  className="flex items-center gap-4"
-                  value={form.enabled ? 'enabled' : 'disabled'}
-                  onValueChange={(v) => setForm((p) => ({ ...p, enabled: v === 'enabled' }))}
-                >
-                  <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                    <RadioGroupItem value="enabled" id="channel-enabled-on" />
-                    <span>启用</span>
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                    <RadioGroupItem value="disabled" id="channel-enabled-off" />
-                    <span>禁用</span>
-                  </label>
-                </RadioGroup>
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80 cursor-pointer">状态</Label>
+              <div className="space-y-1.5 min-w-0">
+                <div className="h-10 flex items-center">
+                  <RadioGroup
+                    className="flex items-center gap-5"
+                    value={form.enabled ? 'enabled' : 'disabled'}
+                    onValueChange={(v) => setForm((p) => ({ ...p, enabled: v === 'enabled' }))}
+                  >
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                      <RadioGroupItem value="enabled" id="channel-enabled-on" />
+                      <span>启用</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                      <RadioGroupItem value="disabled" id="channel-enabled-off" />
+                      <span>禁用</span>
+                    </label>
+                  </RadioGroup>
+                </div>
               </div>
             </div>
-
-            <Separator />
 
             <ConfigFields
               type={form.type}

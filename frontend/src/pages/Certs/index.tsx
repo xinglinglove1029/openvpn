@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { RefreshCw, Search, ShieldCheck, RotateCw, CalendarClock } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../api';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { messageOf, normalizeList } from '@/lib/format';
+import { isPositiveInteger } from '@/lib/validators';
 import { PageHeader } from '@/components/PageHeader';
 import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
 import { HasPermission } from '@/components/HasPermission';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
+import { Label } from '@/ui/label';
+import { Checkbox } from '@/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -28,7 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/ui/alert-dialog';
-import type { CertRecord } from '../../types';
+import type { CertRecord, SettingsResponse } from '../../types';
 
 function certStatus(status?: string): 'success' | 'warning' | 'danger' | 'neutral' {
   if (status === '已过期') return 'danger';
@@ -41,6 +44,15 @@ export default function CertsPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [renewOpen, setRenewOpen] = useState(false);
   const [renewing, setRenewing] = useState(false);
+  const [renewDays, setRenewDays] = useState<string>('365');
+  const [selectedCerts, setSelectedCerts] = useState<Set<string>>(new Set());
+
+  // 单证书续签弹窗
+  const [rowRenewOpen, setRowRenewOpen] = useState(false);
+  const [rowRenewing, setRowRenewing] = useState(false);
+  const [rowRenewTarget, setRowRenewTarget] = useState<CertRecord | null>(null);
+  const [rowRenewDays, setRowRenewDays] = useState<string>('365');
+
   // 搜索与筛选
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'normal' | 'expiring' | 'expired'>('all');
@@ -49,6 +61,20 @@ export default function CertsPage() {
     () => api.get<unknown>('/ovpn/certs').then((v) => normalizeList<CertRecord>(v, ['certs', 'data'])),
     [reloadKey],
   );
+
+  const settingsState = useAsync(
+    () => api.get<SettingsResponse>('/ovpn/settings'),
+    [],
+  );
+
+  // 用系统配置的默认续签天数初始化弹窗
+  useEffect(() => {
+    if (settingsState.data?.system?.base?.renew_days && settingsState.data.system.base.renew_days > 0) {
+      const defaultDays = String(settingsState.data.system.base.renew_days);
+      setRenewDays((prev) => (prev === '365' ? defaultDays : prev));
+      setRowRenewDays((prev) => (prev === '365' ? defaultDays : prev));
+    }
+  }, [settingsState.data]);
 
   useEffect(() => {
     if (state.error) {
@@ -79,27 +105,159 @@ export default function CertsPage() {
   const certs = filteredCerts;
   const pagination = usePagination(certs, `certs-${reloadKey}-${searchText}-${filterStatus}`);
 
+  // 可续签的证书：基于搜索过滤结果
+  const renewableCerts = useMemo(() => {
+    return certs.filter((c) => {
+      const status = (c.status ?? '').toLowerCase();
+      return status !== '已过期';
+    });
+  }, [certs]);
+
+  const allRenewSelected = renewableCerts.length > 0 && renewableCerts.every((c) => selectedCerts.has(c.name ?? ''));
+
+  function openRenewDialog() {
+    if (selectedCerts.size === 0) {
+      toast.error('请先在列表中勾选需要续签的证书');
+      return;
+    }
+    setRenewOpen(true);
+  }
+
+  function toggleCert(name: string) {
+    setSelectedCerts((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  function toggleAllCerts() {
+    if (allRenewSelected) {
+      setSelectedCerts(new Set());
+    } else {
+      setSelectedCerts(new Set(renewableCerts.map((c) => c.name ?? '').filter(Boolean)));
+    }
+  }
+
   async function handleRenew() {
+    if (!isPositiveInteger(renewDays)) {
+      toast.error('续签天数必须是大于 0 的整数');
+      return;
+    }
+    const names = Array.from(selectedCerts).filter(Boolean);
+    if (names.length === 0) {
+      toast.error('请至少选择一个证书');
+      return;
+    }
     setRenewing(true);
+    let successCount = 0;
+    const errors: string[] = [];
+    for (const name of names) {
+      try {
+        await api.postForm<{ message: string }>('/ovpn/server', {
+          action: 'renewCertByName',
+          name,
+          day: renewDays,
+        });
+        successCount++;
+      } catch (error) {
+        errors.push(`${name}: ${messageOf(error)}`);
+      }
+    }
+    if (successCount === names.length) {
+      toast.success(`已成功续签 ${successCount} 个证书`);
+    } else if (successCount > 0) {
+      toast.warning(`部分续签成功（${successCount}/${names.length}），失败：${errors.join('；')}`);
+    } else {
+      toast.error(`续签失败：${errors.join('；')}`);
+    }
+    setReloadKey((v) => v + 1);
+    setRenewing(false);
+    setRenewOpen(false);
+    setSelectedCerts(new Set());
+  }
+
+  function openRowRenew(cert: CertRecord) {
+    setRowRenewTarget(cert);
+    if (settingsState.data?.system?.base?.renew_days && settingsState.data.system.base.renew_days > 0) {
+      setRowRenewDays(String(settingsState.data.system.base.renew_days));
+    } else if (!isPositiveInteger(rowRenewDays)) {
+      setRowRenewDays('365');
+    }
+    setRowRenewOpen(true);
+  }
+
+  async function handleRowRenew() {
+    if (!rowRenewTarget) return;
+    if (!isPositiveInteger(rowRenewDays)) {
+      toast.error('续签天数必须是大于 0 的整数');
+      return;
+    }
+    setRowRenewing(true);
     try {
-      const result = await api.postForm<{ message: string }>('/ovpn/server', { action: 'renewCert' });
-      toast.success(result.message || '证书更新任务已触发');
+      const result = await api.postForm<{ message: string }>('/ovpn/server', {
+        action: 'renewCertByName',
+        name: rowRenewTarget.name,
+        day: rowRenewDays,
+      });
+      toast.success(result.message || '续签成功');
       setReloadKey((v) => v + 1);
     } catch (error) {
-      toast.error(`更新失败：${messageOf(error)}`);
+      toast.error(`续签失败：${messageOf(error)}`);
     } finally {
-      setRenewing(false);
-      setRenewOpen(false);
+      setRowRenewing(false);
+      setRowRenewOpen(false);
+      setRowRenewTarget(null);
     }
   }
 
   const columns: Column<CertRecord>[] = useMemo(
     () => [
       {
+        key: 'select',
+        header: (
+          <Checkbox
+            checked={allRenewSelected ? true : selectedCerts.size > 0 ? 'indeterminate' : false}
+            onCheckedChange={toggleAllCerts}
+            aria-label="全选可续签证书"
+          />
+        ),
+        mobileHeader: null,
+        render: (cert) => {
+          const name = cert.name ?? '';
+          const isExpired = (cert.status ?? '').toLowerCase() === '已过期';
+          if (isExpired) return null;
+          return (
+            <Checkbox
+              checked={selectedCerts.has(name)}
+              onCheckedChange={() => toggleCert(name)}
+              aria-label={`选择 ${name}`}
+            />
+          );
+        },
+        mobileRender: (cert) => {
+          const name = cert.name ?? '';
+          const isExpired = (cert.status ?? '').toLowerCase() === '已过期';
+          if (isExpired) return null;
+          return (
+            <Checkbox
+              checked={selectedCerts.has(name)}
+              onCheckedChange={() => toggleCert(name)}
+              aria-label={`选择 ${name}`}
+            />
+          );
+        },
+        sortable: false,
+        cardPlacement: 'header-action',
+        className: 'w-10 text-center',
+      },
+      {
         key: 'name',
         header: '名称',
         sortable: true,
         sortAccessor: (cert) => cert.name ?? '',
+        cardPlacement: 'header-left',
         render: (cert) => cert.name || '-',
       },
       {
@@ -113,6 +271,7 @@ export default function CertsPage() {
         key: 'status',
         header: '状态',
         sortable: true,
+        cardPlacement: 'header-right',
         sortAccessor: (cert) => certStatus(cert.status),
         render: (cert) => (
           <StatusBadge status={certStatus(cert.status)}>
@@ -146,12 +305,51 @@ export default function CertsPage() {
         key: 'expiresIn',
         header: '剩余天数',
         sortable: true,
-        sortAccessor: (cert) => (cert.expiresIn == null ? -Infinity : Number(cert.expiresIn)),
-        render: (cert) =>
-          cert.expiresIn != null ? `${cert.expiresIn} 天` : '-',
+        sortAccessor: (cert) => {
+          if (!cert.notAfter) return -Infinity;
+          const diff = new Date(cert.notAfter).getTime() - Date.now();
+          return Math.floor(diff / (1000 * 60 * 60 * 24));
+        },
+        render: (cert) => cert.expiresIn || '-',
+      },
+      {
+        key: 'actions',
+        header: '操作',
+        mobileHeader: '',
+        mobileClassName: 'grid-cols-1',
+        render: (cert) => (
+          <div className="flex items-center gap-1">
+            <HasPermission code="cert:renew">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2"
+                onClick={() => openRowRenew(cert)}
+                title="续签证书"
+              >
+                <RotateCw className="h-3.5 w-3.5 mr-1" />
+                续签
+              </Button>
+            </HasPermission>
+          </div>
+        ),
+        mobileRender: (cert) => (
+          <HasPermission code="cert:renew">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 w-full"
+              onClick={() => openRowRenew(cert)}
+            >
+              <RotateCw className="mr-1 h-4 w-4" />
+              续签「{cert.name || '-'}」
+            </Button>
+          </HasPermission>
+        ),
       },
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settingsState.data, selectedCerts, allRenewSelected],
   );
 
   return (
@@ -170,7 +368,7 @@ export default function CertsPage() {
           />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | 'normal' | 'expiring' | 'expired')}>
-          <SelectTrigger className="w-full sm:w-[110px] h-8">
+          <SelectTrigger className="w-full sm:w-[110px] h-11 sm:h-8">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -180,7 +378,7 @@ export default function CertsPage() {
             <SelectItem value="expired">已过期</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto">
+        <div className="grid grid-cols-2 sm:flex sm:flex-nowrap items-center gap-2 w-full sm:w-auto sm:ml-auto">
           <HasPermission code="cert:view">
             <Button size="sm" variant="outline" onClick={() => setReloadKey((v) => v + 1)} className="w-full sm:w-auto">
               <RefreshCw className="h-3.5 w-3.5 mr-1" />
@@ -188,9 +386,14 @@ export default function CertsPage() {
             </Button>
           </HasPermission>
           <HasPermission code="cert:renew">
-            <Button size="sm" onClick={() => setRenewOpen(true)} className="w-full sm:w-auto">
+            <Button size="sm" onClick={openRenewDialog} className="w-full sm:w-auto">
               <ShieldCheck className="h-3.5 w-3.5 mr-1" />
               更新证书
+              {selectedCerts.size > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1 rounded-full bg-primary-foreground/20 text-[10px] font-medium leading-none">
+                  {selectedCerts.size}
+                </span>
+              )}
             </Button>
           </HasPermission>
         </div>
@@ -218,6 +421,7 @@ export default function CertsPage() {
           onPageChange={pagination.setPage}
           onPageSizeChange={pagination.setPageSize}
           keyFn={(cert, index) => `${cert.name}-${pagination.start + index}`}
+          isCardSelected={(cert) => selectedCerts.has(cert.name ?? '')}
         />
       )}
 
@@ -233,19 +437,118 @@ export default function CertsPage() {
         </div>
       )}
 
-      {/* 更新证书确认弹窗 */}
-      <AlertDialog open={renewOpen} onOpenChange={setRenewOpen}>
+      {/* 批量续签证书弹窗（基于列表勾选） */}
+      <AlertDialog open={renewOpen} onOpenChange={(open) => !renewing && setRenewOpen(open)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>更新证书</AlertDialogTitle>
-            <AlertDialogDescription>
-              会调用服务端 renewCert 动作，请确认 EasyRSA 数据已挂载且当前环境允许执行证书脚本。
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-[var(--accent)]" />
+              更新证书
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p>
+                即将对选中的 <span className="font-medium text-foreground">{selectedCerts.size}</span> 个证书执行续签，将依次处理。CA 证书续签会自动同步服务器证书和 CRL。
+              </p>
+              {settingsState.data?.system?.base?.renew_days ? (
+                <p className="text-xs text-muted-foreground">
+                  当前系统配置「证书续签默认天数」为{' '}
+                  <span className="font-medium text-foreground">
+                    {settingsState.data.system.base.renew_days}
+                  </span>{' '}
+                  天。你也可以在下方修改本次续签天数。
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  默认续签天数可前往「系统设置 → 基本」页面调整，默认为 1095 天（3 年）。
+                </p>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+
+          <div className="space-y-2 py-2">
+            <Label htmlFor="global-renew-days" className="flex items-center gap-1.5">
+              <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+              本次续签天数
+            </Label>
+            <Input
+              id="global-renew-days"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={renewDays}
+              onChange={(e) => setRenewDays(e.target.value)}
+              placeholder="必须是大于 0 的整数，例如 365"
+            />
+            {renewDays && !isPositiveInteger(renewDays) && (
+              <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
+            )}
+          </div>
+
+          {/* 已选证书清单 */}
+          <div className="max-h-[200px] overflow-y-auto rounded-md border bg-muted/20 px-3 py-2 space-y-1">
+            {Array.from(selectedCerts).map((name) => (
+              <div key={name} className="flex items-center justify-between text-sm">
+                <span className="font-medium break-all">{name}</span>
+              </div>
+            ))}
+          </div>
+
           <AlertDialogFooter>
             <AlertDialogCancel disabled={renewing}>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={handleRenew} disabled={renewing}>
-              {renewing ? '更新中...' : '开始更新'}
+            <AlertDialogAction
+              onClick={handleRenew}
+              disabled={renewing || !isPositiveInteger(renewDays) || selectedCerts.size === 0}
+            >
+              {renewing ? `续签中... (${selectedCerts.size})` : `开始续签 (${selectedCerts.size})`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 单证书续签弹窗 */}
+      <AlertDialog open={rowRenewOpen} onOpenChange={(open) => !rowRenewing && setRowRenewOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCw className="h-5 w-5 text-[var(--accent)]" />
+              续签证书
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <div className="grid grid-cols-[minmax(5rem,32%)_1fr] gap-2 rounded-md border bg-muted/20 px-3 py-2 text-sm">
+                <div className="text-muted-foreground">证书名称</div>
+                <div className="font-medium break-all">{rowRenewTarget?.name || '-'}</div>
+                <div className="text-muted-foreground">类型</div>
+                <div>{rowRenewTarget?.type || '-'}</div>
+                <div className="text-muted-foreground">过期时间</div>
+                <div>{rowRenewTarget?.notAfter || '-'}</div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                续签后该证书将从当前时间起重新计算有效期；内置 CA 续签会自动同步服务器证书和 CRL。
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="row-renew-days" className="flex items-center gap-1.5">
+              <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+              续签天数
+            </Label>
+            <Input
+              id="row-renew-days"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={rowRenewDays}
+              onChange={(e) => setRowRenewDays(e.target.value)}
+              placeholder="必须是大于 0 的整数，例如 365"
+            />
+            {rowRenewDays && !isPositiveInteger(rowRenewDays) && (
+              <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={rowRenewing}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRowRenew} disabled={rowRenewing || !isPositiveInteger(rowRenewDays) || !rowRenewTarget}>
+              {rowRenewing ? '续签中...' : '确认续签'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

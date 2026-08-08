@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@/store/theme';
 import { useAuth } from '@/store/auth';
 import { useAsync } from '@/hooks/useAsync';
@@ -19,6 +20,7 @@ import {
   Sparkles,
   Flame,
   Lightbulb,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -45,6 +47,7 @@ const RECOMMENDATIONS = [
 ];
 
 export default function AIWidget() {
+  const navigate = useNavigate();
   const { theme } = useTheme();
   const { hasPermission } = useAuth();
   const [open, setOpen] = useState(false);
@@ -59,9 +62,10 @@ export default function AIWidget() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 健康检查仅在打开时轮询
-  const { data: health } = useAsync<HealthStatus>(
+  // 健康检查：打开抽屉时或组件首次挂载时刷新
+  const { data: health, loading: healthLoading } = useAsync<HealthStatus>(
     useCallback(() => api.get('/ovpn/ai/health'), []),
+    [open],
   );
 
   useEffect(() => {
@@ -233,6 +237,13 @@ export default function AIWidget() {
         </button>
       )}
 
+      {/* 遮罩层：防止点击穿透背景页面，在抽屉面板打开时始终显示 */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setOpen(false)}
+        />
+      )}
       {/* 抽屉面板 */}
       {open && (
         <div
@@ -241,7 +252,8 @@ export default function AIWidget() {
             transition-all duration-300 ease-out
             ${expanded ? 'right-0 w-full sm:w-[720px]' : 'right-0 w-full sm:w-[440px]'}
             flex flex-col
-            bg-background border-l shadow-2xl
+            bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80
+            border-l shadow-2xl
           `}
         >
           {/* 头部 */}
@@ -323,7 +335,7 @@ export default function AIWidget() {
                         key={q}
                         onClick={() => sendMessage(q)}
                         disabled={!available || loading}
-                        className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm"
+                        className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-card"
                       >
                         {q}
                       </button>
@@ -343,7 +355,7 @@ export default function AIWidget() {
                         key={q}
                         onClick={() => sendMessage(q)}
                         disabled={!available || loading}
-                        className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm"
+                        className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-card"
                       >
                         {q}
                       </button>
@@ -407,69 +419,88 @@ export default function AIWidget() {
 
           {/* 输入区域 */}
           <div className="shrink-0 p-4 border-t bg-card/50">
-            <div className="relative rounded-xl border bg-background shadow-sm">
-              <Textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  available
-                    ? '请您遇到的问题告诉我，使用 Shift + Enter 换行'
-                    : 'AI 服务不可用，请先配置'
-                }
-                disabled={!available || loading}
-                rows={3}
-                className="min-h-[80px] resize-none border-0 bg-transparent pr-12 pb-9 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              <div className="absolute left-2.5 bottom-2 flex items-center gap-2">
-                <button
-                  onClick={() => setDeepThink(!deepThink)}
-                  disabled={!available || loading}
-                  className={`
-                    flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
-                    ${
-                      deepThink
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground hover:bg-accent'
-                    }
-                    disabled:opacity-50
-                  `}
-                >
-                  <Sparkles className="h-3 w-3" />
-                  深度思考
-                </button>
-              </div>
-              <div className="absolute right-2.5 bottom-2">
-                {loading ? (
-                  <Button size="icon" variant="outline" className="h-8 w-8" onClick={cancelStream}>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  </Button>
-                ) : (
+            {!available ? (
+              <div className="rounded-xl border bg-destructive/5 p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-destructive/10 flex items-center justify-center text-destructive shrink-0">
+                    <SettingsIcon className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground">
+                      AI 服务尚未配置或不可用
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {health?.error || '请先在系统设置中配置 AI 服务的 API 密钥与模型参数。'}
+                    </p>
+                  </div>
+                </div>
+                {hasPermission('settings:ai') && (
                   <Button
-                    size="icon"
-                    className="h-8 w-8"
-                    disabled={!input.trim() || !available}
-                    onClick={() => sendMessage()}
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      setOpen(false);
+                      setTimeout(() => navigate('/settings'), 150);
+                    }}
                   >
-                    <Send className="h-4 w-4" />
+                    <SettingsIcon className="h-4 w-4 mr-2" />
+                    前往 AI 助手设置
                   </Button>
                 )}
               </div>
-            </div>
+            ) : (
+              <div className="relative rounded-xl border bg-background shadow-sm">
+                <Textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="请您遇到的问题告诉我，使用 Shift + Enter 换行"
+                  disabled={loading}
+                  rows={3}
+                  className="min-h-[80px] resize-none border-0 bg-transparent pr-12 pb-9 focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-60 disabled:cursor-not-allowed"
+                />
+                <div className="absolute left-2.5 bottom-2 flex items-center gap-2">
+                  <button
+                    onClick={() => setDeepThink(!deepThink)}
+                    disabled={loading}
+                    className={`
+                      flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
+                      ${
+                        deepThink
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted text-muted-foreground hover:bg-accent'
+                      }
+                      disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-muted
+                    `}
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    深度思考
+                  </button>
+                </div>
+                <div className="absolute right-2.5 bottom-2">
+                  {loading ? (
+                    <Button size="icon" variant="outline" className="h-8 w-8" onClick={cancelStream}>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="icon"
+                      className="h-8 w-8"
+                      disabled={!input.trim()}
+                      onClick={() => sendMessage()}
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
             <p className="text-[10px] text-muted-foreground text-center mt-2">
               内容由 AI 生成，仅供参考，请据此所作判断及操作均由您自行承担责任。
             </p>
           </div>
         </div>
-      )}
-
-      {/* 遮罩（仅移动端点击关闭） */}
-      {open && (
-        <div
-          className="fixed inset-0 bg-black/20 z-40 sm:hidden"
-          onClick={() => setOpen(false)}
-        />
       )}
     </>
   );

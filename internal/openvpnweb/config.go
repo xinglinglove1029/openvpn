@@ -19,6 +19,7 @@ type SysBeseConfig struct {
 	AutoUpdateOvpnConfig bool   `json:"auto_update_ovpn_config" mapstructure:"auto_update_ovpn_config"`
 	MaxDuplicateLogin    int    `json:"max_duplicate_login" mapstructure:"max_duplicate_login"`
 	HistoryMaxDays       int    `json:"history_max_days" mapstructure:"history_max_days"`
+	RenewDays            int    `json:"renew_days" mapstructure:"renew_days"`
 	ValidateClientConfig bool   `json:"validate_client_config" mapstructure:"validate_client_config"`
 }
 
@@ -135,6 +136,7 @@ func initConfig() {
 	viper.SetDefault("system.base.max_duplicate_login", 0)
 	viper.SetDefault("system.base.validate_client_config", false)
 	viper.SetDefault("system.base.history_max_days", 90)
+	viper.SetDefault("system.base.renew_days", 365)
 	viper.SetDefault("system.base.nft_table_name", "openvpn-nft")
 	viper.SetDefault("system.ldap.ldap_auth", false)
 	viper.SetDefault("system.ldap.ldap_url", "ldap://example.org:389")
@@ -179,7 +181,7 @@ func initConfig() {
 	// AI 助手配置
 	viper.SetDefault("ai.enabled", false)
 	viper.SetDefault("ai.provider", "ollama")
-	viper.SetDefault("ai.base_url", "http://localhost:11434/v1")
+	viper.SetDefault("ai.base_url", "http://localhost:11434")
 	viper.SetDefault("ai.api_key", "")
 	viper.SetDefault("ai.model", "qwen2.5:7b")
 	viper.SetDefault("ai.system_prompt", "你是 OpenVPN 运维控制台的智能助手。你可以帮助用户了解 OpenVPN 配置、防火墙规则管理、用户管理、日志分析等运维操作。请用简洁专业的中文回答，必要时给出具体操作步骤。")

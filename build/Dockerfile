@@ -42,14 +42,19 @@ RUN case "${TARGETVARIANT}" in \
 
 FROM alpine:3.23.4
 
+# Ollama 版本，可通过 --build-arg 覆盖
+ARG OLLAMA_VERSION=0.32.5
+
 RUN apk add --no-cache \
     bash \
     coreutils \
     curl \
+    gcompat \
     grep \
     iptables \
     iptables-legacy \
     jq \
+    libgomp \
     mailcap \
     nftables \
     openssl \
@@ -63,20 +68,33 @@ RUN apk add --no-cache \
   && tar -ozxf EasyRSA-3.2.6.tgz \
   && mv EasyRSA-3.2.6 /usr/share/easy-rsa \
   && rm -rf EasyRSA-3.2.6.tgz \
-  && ln -s /usr/share/easy-rsa/easyrsa /usr/local/bin
+  && ln -s /usr/share/easy-rsa/easyrsa /usr/local/bin \
+  # 下载 ollama 二进制（CPU 版本，通过 gcompat 在 alpine 上运行 glibc 二进制）
+  # 构建时验证二进制能否在 alpine+gcompat 下运行，失败则构建中断（fail fast）
+  && curl -fsSL "https://ollama.com/download/ollama-linux-amd64?version=v${OLLAMA_VERSION}" \
+    -o /usr/local/bin/ollama \
+  && chmod +x /usr/local/bin/ollama \
+  && /usr/local/bin/ollama --version
 
 COPY build/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
 COPY build/openvpn-auth /usr/lib/openvpn/plugins/openvpn-auth
+COPY build/ollama-bootstrap.sh /usr/local/bin/ollama-bootstrap.sh
 COPY build/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY --from=backend-builder /out/openvpn-web /usr/local/bin/openvpn-web
 
-RUN chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth
+RUN chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth /usr/local/bin/ollama /usr/local/bin/ollama-bootstrap.sh
 
 VOLUME ["/data"]
 
 ENV GIN_MODE=release
 ENV OVPN_DATA=/data
 ENV TZ=Asia/Shanghai
+# Ollama 配置：容器内监听本地端口，模型持久化到 /data/ollama/models
+ENV OLLAMA_HOST=127.0.0.1:11434
+ENV OLLAMA_MODELS=/data/ollama/models
+# 首次启动自动拉取默认模型（设为 false 可禁用）
+ENV OLLAMA_AUTO_PULL=true
+ENV OLLAMA_DEFAULT_MODEL=qwen2.5:7b
 
 EXPOSE 1194/udp 8888
 

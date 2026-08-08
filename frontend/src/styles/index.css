@@ -2723,6 +2723,33 @@ tbody tr:hover {
 
 /* ---- Modal ---- */
 
+/* Modal / Dialog 统一不透明背景变量：基于 page-bg 做一层加厚面板覆盖，确保底部文字不透出 */
+:root {
+  --modal-solid-bg: color-mix(in srgb, var(--page-bg) 96%, #000 4%);
+  --modal-solid-bg-elevated:
+    linear-gradient(160deg, color-mix(in srgb, white 6%, transparent), transparent 40%),
+    linear-gradient(180deg, color-mix(in srgb, var(--page-bg) 98%, #000 2%), color-mix(in srgb, var(--page-bg) 96%, #000 4%));
+}
+
+/* shadcn DialogContent / AlertDialogContent 强制不透明背景，避免玻璃态 --panel-bg 透出底部文字 */
+.dialog-content-solid,
+.alert-dialog-content-solid,
+[role="dialog"]:not(.modal-panel) {
+  background: var(--modal-solid-bg-elevated) !important;
+  background-color: var(--modal-solid-bg) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 兼容 Tailwind bg-background 被透明变量覆盖的场景 */
+.alert-dialog-content-solid {
+  background-color: var(--modal-solid-bg) !important;
+  background-image:
+    linear-gradient(160deg, color-mix(in srgb, white 5%, transparent), transparent 40%),
+    linear-gradient(180deg, var(--modal-solid-bg), var(--modal-solid-bg));
+  background-blend-mode: normal;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2935,6 +2962,37 @@ tbody tr:hover {
   border-radius: 18px;
   background: color-mix(in srgb, var(--page-bg) 92%, transparent);
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+  height: auto !important;
+  top: auto !important;
+  left: auto !important;
+}
+
+/* Sonner Toaster 全局适配：防止与 .toast 样式冲突 */
+[data-sonner-toaster] {
+  position: fixed !important;
+  z-index: 9999 !important;
+  height: auto !important;
+  max-height: none !important;
+  min-height: 0 !important;
+}
+
+[data-sonner-toast] {
+  position: relative !important;
+  height: auto !important;
+  min-height: auto !important;
+  max-height: none !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  max-width: 100% !important;
+  padding: 14px 18px !important;
+  border-radius: 16px !important;
+}
+
+[data-sonner-toast] [data-icon] {
+  flex-shrink: 0 !important;
 }
 
 .toast.success {
@@ -3099,8 +3157,77 @@ tbody tr:hover {
     right: 12px;
     left: 12px;
     bottom: 12px;
+    top: auto !important;
+    width: auto !important;
+    height: auto !important;
     max-width: none;
     border-radius: 16px;
+  }
+
+  /* 移动端 Sonner (sonner toast) 适配：控制尺寸与间距，防止被 .toast 全局样式拉伸 */
+  [data-sonner-toaster] {
+    position: fixed !important;
+    top: 12px !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 12px !important;
+    z-index: 9999 !important;
+    transform: none !important;
+    --width: calc(100vw - 24px) !important;
+  }
+
+  [data-sonner-toaster] > [data-sonner-toast] {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: 100% !important;
+    max-width: calc(100vw - 24px) !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    margin: 0 auto 8px !important;
+    padding: 12px 14px !important;
+    border-radius: 14px !important;
+  }
+
+  [data-sonner-toast] [data-content] {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    padding: 0 !important;
+    min-width: 0 !important;
+    width: auto !important;
+    height: auto !important;
+  }
+
+  [data-sonner-toast] [data-title] {
+    font-size: 14px !important;
+    line-height: 1.4 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+
+  [data-sonner-toast] [data-description] {
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+
+  [data-sonner-toast] [data-icon],
+  [data-sonner-toast] [data-close-button] {
+    flex-shrink: 0 !important;
+    align-self: flex-start !important;
   }
 
   /* 移动端表单字段圆角收缩 */

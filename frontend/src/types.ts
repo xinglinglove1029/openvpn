@@ -10,6 +10,7 @@ export interface SettingsResponse {
       auto_update_ovpn_config: boolean;
       max_duplicate_login: number;
       history_max_days: number;
+      renew_days: number;
       validate_client_config: boolean;
     };
     ldap: {

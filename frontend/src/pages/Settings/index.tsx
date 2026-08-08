@@ -52,6 +52,7 @@ function validateSetting(key: string, value: unknown): string | undefined {
   if (key === 'system.base.admin_username' && !isValidAccount(text)) return '管理员账号不能为空，长度需在 2-64 个字符内';
   if (key === 'system.base.admin_password' && text && !isStrongPassword(text)) return '管理员新密码需至少 12 位，包含大小写字母、数字和特殊字符';
   if (key === 'system.base.history_max_days' && !isNonNegativeInteger(text)) return '历史保留天数必须是非负整数';
+  if (key === 'system.base.renew_days' && !isPositiveInteger(text)) return '续签天数必须是大于 0 的整数';
   if (key === 'system.base.max_duplicate_login' && !isNonNegativeInteger(text)) return '重复登录数必须是非负整数';
   if (key === 'system.ldap.ldap_url' && text && !isValidUrl(text, ['ldap:', 'ldaps:'])) return 'LDAP URL 请输入 ldap:// 或 ldaps:// 地址';
   if (key === 'openvpn.ovpn_port' && !isValidPort(text)) return 'OpenVPN 端口必须是 1-65535 的整数';
@@ -229,6 +230,7 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.admin_password'] = '';
   out['system.base.history_max_days'] = String(base.history_max_days ?? '');
   out['system.base.max_duplicate_login'] = String(base.max_duplicate_login ?? '');
+  out['system.base.renew_days'] = String(base.renew_days ?? 365);
 
   const ldap = settings?.system?.ldap ?? ({} as SettingsResponse['system']['ldap']);
   out['system.ldap.ldap_url'] = String(ldap.ldap_url ?? '');
@@ -532,6 +534,7 @@ export default function SettingsPage() {
                     label="Web 端口"
                     value={base.web_port}
                     settingKey="system.base.web_port"
+                    type="number"
                     placeholder="8080"
                     store={store}
                   />
@@ -555,12 +558,22 @@ export default function SettingsPage() {
                     label="历史保留天数"
                     value={base.history_max_days}
                     settingKey="system.base.history_max_days"
+                    type="number"
                     store={store}
                   />
                   <SettingField
                     label="重复登录数"
                     value={base.max_duplicate_login}
                     settingKey="system.base.max_duplicate_login"
+                    type="number"
+                    store={store}
+                  />
+                  <SettingField
+                    label="证书续签默认天数"
+                    value={base.renew_days}
+                    settingKey="system.base.renew_days"
+                    type="number"
+                    placeholder="例如 365（1 年）"
                     store={store}
                   />
                 </div>
@@ -716,6 +729,7 @@ export default function SettingsPage() {
                     label="最大客户端"
                     value={ovpn.ovpn_max_clients}
                     settingKey="openvpn.ovpn_max_clients"
+                    type="number"
                     store={store}
                   />
                   <SettingField
@@ -1353,7 +1367,8 @@ function ClientPackagesTab() {
 /* ========== AI 助手设置 Tab ========== */
 
 const PROVIDER_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://localhost:11434/v1' },
+  // 注意：Ollama 走 langchaingo 原生 /api/chat 端点，BaseURL 不带 /v1
+  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://localhost:11434' },
   { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1' },
   { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1' },
   { value: 'customize', label: '自定义 (OpenAI 兼容)', hint: 'https://your-api.com/v1' },
@@ -1605,10 +1620,18 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
                 id="ai-base-url"
                 value={baseURL}
                 onChange={(e) => setBaseURL(e.target.value)}
-                placeholder="https://api.deepseek.com/v1"
+                placeholder={
+                  provider === 'ollama'
+                    ? 'http://localhost:11434'
+                    : provider === 'deepseek'
+                    ? 'https://api.deepseek.com/v1'
+                    : provider === 'openai'
+                    ? 'https://api.openai.com/v1'
+                    : 'https://your-api.com/v1'
+                }
               />
               <p className="text-xs text-muted-foreground">
-                {provider === 'ollama' && '默认 Ollama 地址，填写 /v1 结尾'}
+                {provider === 'ollama' && '容器内已集成 ollama，默认 http://127.0.0.1:11434；首次启动自动拉取模型'}
                 {provider === 'deepseek' && 'DeepSeek API 地址'}
                 {provider === 'openai' && 'OpenAI API 地址'}
                 {provider === 'customize' && '你的 OpenAI 兼容 API 地址'}

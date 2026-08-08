@@ -1328,6 +1328,18 @@ func Run(info BuildInfo) {
 							ov.sendCommand("signal SIGHUP")
 						}
 					}
+				case "system.base.renew_days":
+					n, err := strconv.Atoi(val)
+					if err != nil || n <= 0 {
+						c.JSON(http.StatusBadRequest, gin.H{"message": "续签天数必须是大于 0 的整数"})
+						return
+					}
+				case "system.base.history_max_days":
+					n, err := strconv.Atoi(val)
+					if err != nil || n < 0 {
+						c.JSON(http.StatusBadRequest, gin.H{"message": "历史保留天数必须是非负整数"})
+						return
+					}
 				case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
 					_, _, err := net.ParseCIDR(val)
 					if err != nil {
@@ -1637,64 +1649,95 @@ func Run(info BuildInfo) {
 				if !requirePermissionCode(c, "server:manage") {
 					return
 				}
-				day := c.PostForm("day")
-				serverName := viper.GetString("system.base.server_name")
-
-				var out []byte
-				var err error
-
-				if _, statErr := os.Stat("docker-entrypoint.sh"); statErr == nil {
-					cmd := exec.Command("docker-entrypoint.sh", "renewcert", day)
-					cmd.Dir = ovData
-					out, err = cmd.CombinedOutput()
-				} else {
-					easyrsaPath := "easyrsa"
-					if _, statErr2 := os.Stat("/usr/share/easy-rsa/easyrsa"); statErr2 == nil {
-						easyrsaPath = "/usr/share/easy-rsa/easyrsa"
-					}
-					if _, statErr3 := os.Stat("easyrsa"); statErr3 != nil {
-						if _, lookErr := exec.LookPath("easyrsa"); lookErr == nil {
-							easyrsaPath = "easyrsa"
-						}
-					}
-
-					if serverName != "" {
-						cmds := [][]string{
-							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "renew-ca"},
-							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "renew", serverName},
-							{easyrsaPath, "--batch", "revoke-renewed", serverName},
-							{easyrsaPath, "--batch", fmt.Sprintf("--days=%s", day), "gen-crl"},
-						}
-						for _, args := range cmds {
-							cmd := exec.Command(args[0], args[1:]...)
-							cmd.Dir = ovData
-							cmd.Env = append(os.Environ(), "EASYRSA="+ovData)
-							var stepOut []byte
-							stepOut, err = cmd.CombinedOutput()
-							out = append(out, stepOut...)
-							if err != nil {
-								break
-							}
-						}
+				day := strings.TrimSpace(c.PostForm("day"))
+				if day == "" {
+					// 优先使用系统配置的默认续签天数，兜底 365（1 年）
+					if cfgDays := viper.GetInt("system.base.renew_days"); cfgDays > 0 {
+						day = strconv.Itoa(cfgDays)
 					} else {
-						err = fmt.Errorf("server_name 未配置")
+						day = "365"
 					}
 				}
-
-				if err != nil {
-					msg := strings.TrimSpace(string(out))
-					if msg == "" {
-						msg = err.Error()
-					} else {
-						msg = msg + ": " + err.Error()
-					}
-					logger.Error(context.Background(), "更新证书失败: %s", msg)
-					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", msg)})
+				n, err := strconv.Atoi(day)
+				if err != nil || n <= 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("续签天数必须是大于 0 的整数: %s", day)})
 					return
+				}
+				serverName := viper.GetString("system.base.server_name")
+
+				var message string
+				if _, statErr := os.Stat("docker-entrypoint.sh"); statErr == nil {
+					out, runErr := exec.Command("docker-entrypoint.sh", "renewcert", day).CombinedOutput()
+					if runErr != nil {
+						msg := strings.TrimSpace(string(out))
+						if msg == "" {
+							msg = runErr.Error()
+						} else {
+							msg = msg + ": " + runErr.Error()
+						}
+						logger.Error(context.Background(), "更新证书失败: %s", msg)
+						c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", msg)})
+						return
+					}
+					message = "更新证书成功"
+				} else {
+					msgs, runErr := RenewCA(n)
+					if runErr != nil {
+						logger.Error(context.Background(), "更新证书失败: %s", runErr.Error())
+						c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("更新证书失败: %s", runErr.Error())})
+						return
+					}
+					message = strings.Join(msgs, "；")
+					_ = serverName
 				}
 
 				ov.sendCommand("signal SIGHUP")
-				c.JSON(http.StatusOK, gin.H{"message": "更新证书成功"})
+				c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("%s（续签 %s 天）", message, day)})
+
+			case "renewCertByName":
+				// 单证书续签：按证书名称（CN）执行 renew，需要 cert:renew 权限
+				if !requirePermissionCode(c, "cert:renew") {
+					return
+				}
+				name := strings.TrimSpace(c.PostForm("name"))
+				dayStr := strings.TrimSpace(c.PostForm("day"))
+				if name == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "证书名称不能为空"})
+					return
+				}
+				// 名称/CN 安全校验：避免路径穿越与 shell 异常字符
+				if strings.ContainsAny(name, "/\\ \t\n\r\"';$`|&<>()[]{}\x00") {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "证书名称包含非法字符"})
+					return
+				}
+				n, perr := strconv.Atoi(dayStr)
+				if perr != nil || n <= 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"message": "续签天数必须是大于 0 的整数"})
+					return
+				}
+				day := strconv.Itoa(n)
+
+				// CRL 特殊处理：刷新 CRL
+				if strings.EqualFold(name, "crl") {
+					if err := generateCRL(); err != nil {
+						logger.Error(context.Background(), "刷新 CRL 失败: %s", err.Error())
+						c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("刷新 CRL 失败: %s", err.Error())})
+						return
+					}
+					ov.sendCommand("signal SIGHUP")
+					c.JSON(http.StatusOK, gin.H{"message": "CRL 刷新成功"})
+					return
+				}
+
+				summary, runErr := RenewByName(name, n)
+				if runErr != nil {
+					logger.Error(context.Background(), "续签证书[%s]失败: %s", name, runErr.Error())
+					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("续签证书失败: %s", runErr.Error())})
+					return
+				}
+				_ = day
+				ov.sendCommand("signal SIGHUP")
+				c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("续签证书「%s」成功（%s 天）：%s", name, day, summary)})
 			case "restartSrv":
 				// 重启 OpenVPN 服务：需要 settings:service:restart 权限
 				if !requirePermissionCode(c, "settings:service:restart") {
@@ -2469,15 +2512,13 @@ func Run(info BuildInfo) {
 
 			username := user.Username
 
-			// 1. 撤销客户端证书
-			cmd := exec.Command("easyrsa", "--batch", "revoke", username)
-			if out, err := cmd.CombinedOutput(); err == nil {
-				cmd = exec.Command("easyrsa", "gen-crl")
-				if out, err = cmd.CombinedOutput(); err != nil {
-					logger.Error(context.Background(), string(out))
-				}
+			// 1. 撤销客户端证书（纯 Go 实现，不再依赖 easyrsa）
+			if revErr := RevokeByName(username); revErr != nil {
+				// 证书可能不存在（例如用户还未生成过 ovpn 客户端文件），这里只记录警告不阻断删除
+				logger.Warn(context.Background(), "revoke client cert failed (may not exist): "+revErr.Error())
 			} else {
-				logger.Warn(context.Background(), "revoke client cert failed (may not exist): "+string(out))
+				// 吊销成功，发送 SIGHUP 通知 openvpn 重新加载 CRL
+				ov.sendCommand("signal SIGHUP")
 			}
 
 			// 2. 删除客户端配置文件和 ccd 目录
@@ -2799,21 +2840,16 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			cmd := exec.Command("easyrsa", "--batch", "revoke", name)
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				cmd = exec.Command("easyrsa", "gen-crl")
-				if out, err = cmd.CombinedOutput(); err != nil {
-					logger.Error(context.Background(), string(out))
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "更新 CRL 证书失败"})
+			if revErr := RevokeByName(name); revErr != nil {
+				// 如果找不到证书文件，但有 ovpn 文件存在，仍允许删除；证书吊销步骤独立失败
+				if fileExists(filepath.Join(ovData, "clients", fmt.Sprintf("%s.ovpn", name))) || fileExists(clientCertPath(name)) {
+					logger.Error(context.Background(), "吊销客户端证书失败: %s", revErr.Error())
+					c.JSON(http.StatusInternalServerError, gin.H{"message": fmt.Sprintf("吊销客户端证书失败: %s", revErr.Error())})
+					return
 				}
+				logger.Warn(context.Background(), "吊销证书失败，继续清理客户端文件: %s", revErr.Error())
 			} else {
-				if len(out) == 0 {
-					out = []byte(err.Error())
-				}
-				logger.Error(context.Background(), string(out))
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "删除客户端失败"})
-				return
+				ov.sendCommand("signal SIGHUP")
 			}
 
 			dataRoot, err := os.OpenRoot(ovData)

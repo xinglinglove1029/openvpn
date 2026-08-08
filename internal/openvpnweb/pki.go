@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -29,7 +30,64 @@ const (
 	serverCertFile    = "server.crt"
 	serverKeyFile     = "server.key"
 	crlFile           = "crl.pem"
+	revokedListFile   = "revoked.json"
 )
+
+type revokedEntry struct {
+	SerialNumber string    `json:"serial"`
+	Subject      string    `json:"subject"`
+	RevokedAt    time.Time `json:"revoked_at"`
+}
+
+func revokedListPath() string {
+	return filepath.Join(ovData, pkiDirName, revokedListFile)
+}
+
+func loadRevokedList() ([]revokedEntry, error) {
+	var list []revokedEntry
+	data, err := os.ReadFile(revokedListPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return list, nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return list, nil
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func saveRevokedList(list []revokedEntry) error {
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(revokedListPath(), data, 0600)
+}
+
+// appendRevoked 将指定证书追加到吊销列表；若已存在相同序列号则不重复。
+func appendRevoked(cert *x509.Certificate) error {
+	list, err := loadRevokedList()
+	if err != nil {
+		return err
+	}
+	serial := cert.SerialNumber.String()
+	for _, e := range list {
+		if e.SerialNumber == serial {
+			return nil
+		}
+	}
+	list = append(list, revokedEntry{
+		SerialNumber: serial,
+		Subject:      cert.Subject.String(),
+		RevokedAt:    time.Now(),
+	})
+	return saveRevokedList(list)
+}
 
 func pkiDir() string {
 	return filepath.Join(ovData, pkiDirName)
@@ -267,10 +325,41 @@ func generateCRL() error {
 		return err
 	}
 
+	revokedList, err := loadRevokedList()
+	if err != nil {
+		return fmt.Errorf("读取吊销列表失败: %w", err)
+	}
+
+	revokedCerts := make([]pkix.RevokedCertificate, 0, len(revokedList))
+	for _, e := range revokedList {
+		serial, ok := new(big.Int).SetString(e.SerialNumber, 10)
+		if !ok {
+			continue
+		}
+		revokedCerts = append(revokedCerts, pkix.RevokedCertificate{
+			SerialNumber:   serial,
+			RevocationTime: e.RevokedAt,
+		})
+	}
+
+	nextCrlNumber := big.NewInt(1)
+	if fileExists(crlPath()) {
+		old, err := os.ReadFile(crlPath())
+		if err == nil {
+			block, _ := pem.Decode(old)
+			if block != nil {
+				if list, lerr := x509.ParseRevocationList(block.Bytes); lerr == nil && list.Number != nil {
+					nextCrlNumber = new(big.Int).Add(list.Number, big.NewInt(1))
+				}
+			}
+		}
+	}
+
 	crlTemplate := &x509.RevocationList{
-		Number:     big.NewInt(1),
-		ThisUpdate: time.Now(),
-		NextUpdate: time.Now().AddDate(1, 0, 0),
+		Number:              nextCrlNumber,
+		ThisUpdate:          time.Now(),
+		NextUpdate:          time.Now().AddDate(1, 0, 0),
+		RevokedCertificates: revokedCerts,
 	}
 
 	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, caCert, caKey)
@@ -285,6 +374,378 @@ func generateCRL() error {
 	return os.WriteFile(crlPath(), pem.EncodeToMemory(block), 0644)
 }
 
+// RevokeByName 按名称（CN）吊销证书：找到客户端或服务器证书，写入吊销列表并刷新 CRL。
+// 名称匹配：优先级 clientCertPath(name) → serverCertFile（serverName 匹配）。
+// CA 证书不允许被此函数吊销。
+func RevokeByName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("证书名称不能为空")
+	}
+
+	caCertPEM, err := os.ReadFile(caCertPath())
+	if err != nil {
+		return err
+	}
+	caCert, _, err := parseCertAndKey(caCertPEM, []byte{})
+	if err != nil {
+		// 不强制要求加载 CA 私钥
+		caBlock, _ := pem.Decode(caCertPEM)
+		if caBlock == nil {
+			return fmt.Errorf("解析 CA 证书失败")
+		}
+		caCert, err = x509.ParseCertificate(caBlock.Bytes)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 1) 客户端证书
+	certPath := ""
+	if fileExists(clientCertPath(name)) {
+		certPath = clientCertPath(name)
+	} else if name == viperGetString("system.base.server_name", "server") && fileExists(serverCertPath()) {
+		certPath = serverCertPath()
+	}
+
+	if certPath == "" {
+		// 找不到证书文件时，尝试遍历 issued 目录按 Subject CN 匹配
+		entries, derr := os.ReadDir(pkiIssuedDir())
+		if derr == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				fp := filepath.Join(pkiIssuedDir(), entry.Name())
+				data, rerr := os.ReadFile(fp)
+				if rerr != nil {
+					continue
+				}
+				block, _ := pem.Decode(data)
+				if block == nil {
+					continue
+				}
+				c, perr := x509.ParseCertificate(block.Bytes)
+				if perr != nil {
+					continue
+				}
+				if c.Subject.CommonName == name && c.SerialNumber.Cmp(caCert.SerialNumber) != 0 {
+					certPath = fp
+					break
+				}
+			}
+		}
+	}
+	if certPath == "" {
+		return fmt.Errorf("未找到名称为 %q 的证书文件", name)
+	}
+
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return fmt.Errorf("读取证书文件失败: %w", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return fmt.Errorf("无法解析证书 PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("解析证书失败: %w", err)
+	}
+	if cert.SerialNumber.Cmp(caCert.SerialNumber) == 0 {
+		return fmt.Errorf("不能吊销 CA 证书")
+	}
+
+	if err := appendRevoked(cert); err != nil {
+		return fmt.Errorf("写入吊销记录失败: %w", err)
+	}
+	if err := generateCRL(); err != nil {
+		return fmt.Errorf("刷新 CRL 失败: %w", err)
+	}
+	return nil
+}
+
+// renewX509Cert 续签（重新签发）一个证书：
+// - oldCert：原证书（决定 Subject、SAN、KeyUsage 等字段）
+// - oldKey 可以为 nil；为 nil 时重新生成 P-256 密钥对
+// - issuerCert / issuerKey：签发者（自签名 CA 则 issuerCert = 生成模板）
+// - days：新有效期天数
+// 返回新的 PEM 证书字节、私钥 PEM 字节、错误。
+func renewX509Cert(oldCert *x509.Certificate, oldKey *ecdsa.PrivateKey, issuerCert *x509.Certificate, issuerKey *ecdsa.PrivateKey, days int) (certPEM []byte, keyPEM []byte, err error) {
+	if days <= 0 {
+		return nil, nil, fmt.Errorf("续签天数必须大于 0")
+	}
+
+	key := oldKey
+	if key == nil {
+		k, e := generateECKey()
+		if e != nil {
+			return nil, nil, fmt.Errorf("生成私钥失败: %w", e)
+		}
+		key = k
+	}
+
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	isSelfSignedCA := oldCert.IsCA && issuerCert != nil && oldCert.SerialNumber.Cmp(issuerCert.SerialNumber) == 0
+
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               oldCert.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(0, 0, days),
+		KeyUsage:              oldCert.KeyUsage,
+		BasicConstraintsValid: true,
+		IsCA:                  oldCert.IsCA,
+		MaxPathLen:            oldCert.MaxPathLen,
+		MaxPathLenZero:        oldCert.MaxPathLenZero,
+		ExtKeyUsage:           oldCert.ExtKeyUsage,
+		UnknownExtKeyUsage:    oldCert.UnknownExtKeyUsage,
+		DNSNames:              append([]string(nil), oldCert.DNSNames...),
+		IPAddresses:           append([]net.IP(nil), oldCert.IPAddresses...),
+		URIs:                  append([]*neturl.URL(nil), oldCert.URIs...),
+		EmailAddresses:        append([]string(nil), oldCert.EmailAddresses...),
+		PermittedDNSDomains:   append([]string(nil), oldCert.PermittedDNSDomains...),
+		ExcludedDNSDomains:    append([]string(nil), oldCert.ExcludedDNSDomains...),
+		PermittedIPRanges:     append([]*net.IPNet(nil), oldCert.PermittedIPRanges...),
+		ExcludedIPRanges:      append([]*net.IPNet(nil), oldCert.ExcludedIPRanges...),
+	}
+
+	signingCert := issuerCert
+	signingKey := issuerKey
+	if isSelfSignedCA {
+		// CA 自签名续签：签发者就是新证书本身（template），但签名私钥必须是 CA 的私钥（此处由调用方从 caKeyPath 读出后传入，作为 issuerKey）
+		signingCert = template
+		signingKey = issuerKey
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, signingCert, &key.PublicKey, signingKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("签发证书失败: %w", err)
+	}
+
+	keyBytes, err := encodePrivateKeyToPEM(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return encodeCertToPEM(certDER), keyBytes, nil
+}
+
+// writeCertAndKey 将新证书与私钥写入原位置；如果原证书存在则先写入吊销（CA 除外）。
+func writeCertAndKey(certPath, keyPath string, certPEM, keyPEM []byte, oldCert *x509.Certificate) error {
+	if oldCert != nil && !oldCert.IsCA {
+		// revoke-renewed 语义：旧证书列入吊销
+		if err := appendRevoked(oldCert); err != nil {
+			return fmt.Errorf("写入旧证书吊销记录失败: %w", err)
+		}
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		return fmt.Errorf("写入私钥失败: %w", err)
+	}
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		return fmt.Errorf("写入证书失败: %w", err)
+	}
+	return nil
+}
+
+// RenewCA 续签 CA 证书：保持私钥不变，生成新 CA 证书（自签名）。
+// 如存在 server 证书，会同步续签服务器证书（吊销旧服务器证书）并刷新 CRL。
+func RenewCA(days int) (messages []string, err error) {
+	messages = make([]string, 0, 4)
+	if days <= 0 {
+		return messages, fmt.Errorf("续签天数必须大于 0")
+	}
+
+	caCertPEM, err := os.ReadFile(caCertPath())
+	if err != nil {
+		return messages, fmt.Errorf("读取 CA 证书失败: %w", err)
+	}
+	caKeyPEM, err := os.ReadFile(caKeyPath())
+	if err != nil {
+		return messages, fmt.Errorf("读取 CA 私钥失败: %w", err)
+	}
+	caCert, caKey, err := parseCertAndKey(caCertPEM, caKeyPEM)
+	if err != nil {
+		return messages, fmt.Errorf("解析 CA 证书/私钥失败: %w", err)
+	}
+
+	newCaPEM, _, err := renewX509Cert(caCert, caKey, caCert, caKey, days)
+	if err != nil {
+		return messages, fmt.Errorf("续签 CA 失败: %w", err)
+	}
+	// CA 私钥保持不变，私钥文件不重写
+	if err := os.WriteFile(caCertPath(), newCaPEM, 0644); err != nil {
+		return messages, fmt.Errorf("写入 CA 证书失败: %w", err)
+	}
+	messages = append(messages, fmt.Sprintf("CA 证书续签成功（%d 天）", days))
+
+	// 重新加载新 CA 证书作为后续签发者
+	newCaBlock, _ := pem.Decode(newCaPEM)
+	if newCaBlock == nil {
+		return messages, fmt.Errorf("无法解析新 CA PEM")
+	}
+	newCaCert, err := x509.ParseCertificate(newCaBlock.Bytes)
+	if err != nil {
+		return messages, fmt.Errorf("解析新 CA 证书失败: %w", err)
+	}
+
+	// 同步续签服务器证书
+	serverName := viperGetString("system.base.server_name", "server")
+	if serverName != "" && fileExists(serverCertPath()) && fileExists(serverKeyPath()) {
+		oldServPEM, err := os.ReadFile(serverCertPath())
+		if err != nil {
+			return messages, fmt.Errorf("读取服务器证书失败: %w", err)
+		}
+		oldServKeyPEM, err := os.ReadFile(serverKeyPath())
+		if err != nil {
+			return messages, fmt.Errorf("读取服务器私钥失败: %w", err)
+		}
+		oldServCert, oldServKey, err := parseCertAndKey(oldServPEM, oldServKeyPEM)
+		if err != nil {
+			return messages, fmt.Errorf("解析服务器证书失败: %w", err)
+		}
+		servCertPEM, servKeyPEM, err := renewX509Cert(oldServCert, oldServKey, newCaCert, caKey, days)
+		if err != nil {
+			return messages, fmt.Errorf("续签服务器证书失败: %w", err)
+		}
+		if err := writeCertAndKey(serverCertPath(), serverKeyPath(), servCertPEM, servKeyPEM, oldServCert); err != nil {
+			return messages, fmt.Errorf("写入服务器证书失败: %w", err)
+		}
+		messages = append(messages, fmt.Sprintf("服务器证书 %s 续签成功（%d 天）", serverName, days))
+	}
+
+	if err := generateCRL(); err != nil {
+		return messages, fmt.Errorf("刷新 CRL 失败: %w", err)
+	}
+	messages = append(messages, "CRL 刷新成功")
+	return messages, nil
+}
+
+// RenewServer 续签服务器证书（单独调用路径）。
+func RenewServer(days int) (string, error) {
+	if days <= 0 {
+		return "", fmt.Errorf("续签天数必须大于 0")
+	}
+	serverName := viperGetString("system.base.server_name", "server")
+	if serverName == "" || !fileExists(serverCertPath()) || !fileExists(serverKeyPath()) {
+		return "", fmt.Errorf("服务器证书文件不存在")
+	}
+	caCertPEM, err := os.ReadFile(caCertPath())
+	if err != nil {
+		return "", err
+	}
+	caKeyPEM, err := os.ReadFile(caKeyPath())
+	if err != nil {
+		return "", err
+	}
+	caCert, caKey, err := parseCertAndKey(caCertPEM, caKeyPEM)
+	if err != nil {
+		return "", err
+	}
+	oldServPEM, err := os.ReadFile(serverCertPath())
+	if err != nil {
+		return "", err
+	}
+	oldServKeyPEM, err := os.ReadFile(serverKeyPath())
+	if err != nil {
+		return "", err
+	}
+	oldServCert, oldServKey, err := parseCertAndKey(oldServPEM, oldServKeyPEM)
+	if err != nil {
+		return "", err
+	}
+	servCertPEM, servKeyPEM, err := renewX509Cert(oldServCert, oldServKey, caCert, caKey, days)
+	if err != nil {
+		return "", fmt.Errorf("续签服务器证书失败: %w", err)
+	}
+	if err := writeCertAndKey(serverCertPath(), serverKeyPath(), servCertPEM, servKeyPEM, oldServCert); err != nil {
+		return "", fmt.Errorf("写入服务器证书失败: %w", err)
+	}
+	if err := generateCRL(); err != nil {
+		return "", fmt.Errorf("刷新 CRL 失败: %w", err)
+	}
+	return fmt.Sprintf("服务器证书 %s 续签成功（%d 天），CRL 已刷新", serverName, days), nil
+}
+
+// RenewByName 按名称续签证书：支持 CA、服务器证书、客户端证书。
+// 返回操作摘要字符串与错误。
+func RenewByName(name string, days int) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("证书名称不能为空")
+	}
+	if days <= 0 {
+		return "", fmt.Errorf("续签天数必须大于 0")
+	}
+
+	// 加载 CA（签发证书需要）
+	caCertPEM, err := os.ReadFile(caCertPath())
+	if err != nil {
+		return "", err
+	}
+	caKeyPEM, err := os.ReadFile(caKeyPath())
+	if err != nil {
+		return "", err
+	}
+	caCert, caKey, err := parseCertAndKey(caCertPEM, caKeyPEM)
+	if err != nil {
+		return "", err
+	}
+
+	// 匹配目标证书：按传入 CN 与 CA Subject 匹配 → CA；否则按 serverName；否则客户端文件
+	serverName := viperGetString("system.base.server_name", "server")
+	caSubject := caCert.Subject.CommonName
+
+	switch {
+	case name == caSubject:
+		// CA：调用完整续签链路（含服务器联动 + CRL）
+		msgs, err := RenewCA(days)
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(msgs, "；"), nil
+
+	case name == serverName:
+		return RenewServer(days)
+
+	default:
+		// 客户端证书
+		if !fileExists(clientCertPath(name)) {
+			return "", fmt.Errorf("未找到客户端证书: %s", name)
+		}
+		if !fileExists(clientKeyPath(name)) {
+			return "", fmt.Errorf("未找到客户端私钥: %s", name)
+		}
+		oldClientPEM, err := os.ReadFile(clientCertPath(name))
+		if err != nil {
+			return "", err
+		}
+		oldClientKeyPEM, err := os.ReadFile(clientKeyPath(name))
+		if err != nil {
+			return "", err
+		}
+		oldClientCert, oldClientKey, err := parseCertAndKey(oldClientPEM, oldClientKeyPEM)
+		if err != nil {
+			return "", fmt.Errorf("解析客户端证书失败: %w", err)
+		}
+		newCertPEM, newKeyPEM, err := renewX509Cert(oldClientCert, oldClientKey, caCert, caKey, days)
+		if err != nil {
+			return "", fmt.Errorf("续签客户端证书失败: %w", err)
+		}
+		if err := writeCertAndKey(clientCertPath(name), clientKeyPath(name), newCertPEM, newKeyPEM, oldClientCert); err != nil {
+			return "", fmt.Errorf("写入客户端证书失败: %w", err)
+		}
+		if err := generateCRL(); err != nil {
+			return "", fmt.Errorf("刷新 CRL 失败: %w", err)
+		}
+		return fmt.Sprintf("客户端证书 %s 续签成功（%d 天），旧证书已吊销，CRL 已刷新", name, days), nil
+	}
+}
+
 func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil {
@@ -293,6 +754,10 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, *ecdsa.PrivateK
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if len(keyPEM) == 0 {
+		return cert, nil, nil
 	}
 
 	keyBlock, _ := pem.Decode(keyPEM)
