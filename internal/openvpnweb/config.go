@@ -74,6 +74,18 @@ type OvpnConfig struct {
 	OvpnPushDns2   string `json:"ovpn_push_dns2" mapstructure:"ovpn_push_dns2"`
 }
 
+// AIConfig AI 助手配置
+type AIConfig struct {
+	Enabled      bool    `json:"enabled" mapstructure:"enabled"`
+	Provider     string  `json:"provider" mapstructure:"provider"`         // ollama | openai | deepseek | customize
+	BaseURL      string  `json:"base_url" mapstructure:"base_url"`
+	APIKey       string  `json:"api_key" mapstructure:"api_key"`          // API 密钥，GET 时返回脱敏值
+	Model        string  `json:"model" mapstructure:"model"`
+	SystemPrompt string  `json:"system_prompt" mapstructure:"system_prompt"`
+	MaxTokens    int     `json:"max_tokens" mapstructure:"max_tokens"`
+	Temperature  float64 `json:"temperature" mapstructure:"temperature"`
+}
+
 type config struct {
 	System struct {
 		Base   SysBeseConfig   `json:"base" mapstructure:"base"`
@@ -85,6 +97,7 @@ type config struct {
 		ClientUrl ClientUrlConfig `json:"client_url" mapstructure:"client_url"`
 	} `json:"client" mapstructure:"client"`
 	Openvpn OvpnConfig `json:"openvpn" mapstructure:"openvpn"`
+	AI      AIConfig  `json:"ai" mapstructure:"ai"`
 }
 
 var (
@@ -162,6 +175,16 @@ func initConfig() {
 	viper.SetDefault("openvpn.ovpn_subnet6", "fdaf:f178:e916:6dd0::/64")
 	viper.SetDefault("openvpn.ovpn_push_dns1", "8.8.8.8")
 	viper.SetDefault("openvpn.ovpn_push_dns2", "2001:4860:4860::8888")
+
+	// AI 助手配置
+	viper.SetDefault("ai.enabled", false)
+	viper.SetDefault("ai.provider", "ollama")
+	viper.SetDefault("ai.base_url", "http://localhost:11434/v1")
+	viper.SetDefault("ai.api_key", "")
+	viper.SetDefault("ai.model", "qwen2.5:7b")
+	viper.SetDefault("ai.system_prompt", "你是 OpenVPN 运维控制台的智能助手。你可以帮助用户了解 OpenVPN 配置、防火墙规则管理、用户管理、日志分析等运维操作。请用简洁专业的中文回答，必要时给出具体操作步骤。")
+	viper.SetDefault("ai.max_tokens", 4096)
+	viper.SetDefault("ai.temperature", 0.7)
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")

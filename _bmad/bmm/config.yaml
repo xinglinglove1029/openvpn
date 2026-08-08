@@ -9,6 +9,6 @@ implementation_artifacts: "{project-root}/_bmad-output/implementation-artifacts"
 project_knowledge: research
 user_name: "19033"
 project_name: openvpn
-communication_language: English
-document_output_language: English
+communication_language: Chinese
+document_output_language: Chinese
 output_folder: _bmad-output

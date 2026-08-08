@@ -40,6 +40,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	gLogger "gorm.io/gorm/logger"
+
+	"openvpn-web/internal/openvpnweb/ai"
 )
 
 type ClientData struct {
@@ -778,6 +780,41 @@ func Run(info BuildInfo) {
 	// 概览页所有卡片均通过 dashboard:stats topic 实时更新，无需前端定时器或手动刷新
 	StartDashboardStatsCollector(&ov, 5*time.Second)
 
+	// 初始化 AI 助手模块（可选，通过 ai.enabled 控制）
+	var chatMgr *ai.ChatSessionManager
+	aiClient := ai.NewAtomicClient(nil)
+	if viper.GetBool("ai.enabled") {
+		var initErr error
+		llmCfg := ai.LLMConfig{
+			Provider:    viper.GetString("ai.provider"),
+			BaseURL:     viper.GetString("ai.base_url"),
+			APIKey:      viper.GetString("ai.api_key"),
+			Model:       viper.GetString("ai.model"),
+			MaxTokens:   viper.GetInt("ai.max_tokens"),
+			Temperature: viper.GetFloat64("ai.temperature"),
+		}
+		client, initErr := ai.NewLLMClient(llmCfg)
+		if initErr != nil {
+			log.Printf("⚠ AI 助手初始化失败: %v（将禁用 AI 功能）", initErr)
+		} else {
+			aiClient.Set(client)
+			chatMgr = ai.NewChatSessionManager(viper.GetString("ai.system_prompt"))
+			// 启动会话清理定时器（每 10 分钟清理空闲超过 30 分钟的会话）
+			go func() {
+				ticker := time.NewTicker(10 * time.Minute)
+				defer ticker.Stop()
+				for range ticker.C {
+					n := chatMgr.Cleanup(30 * time.Minute)
+					if n > 0 {
+						log.Printf("AI 会话清理: 已清理 %d 个空闲会话", n)
+					}
+				}
+			}()
+			log.Printf("✅ AI 助手已就绪（Provider: %s, 模型: %s, 端点: %s）",
+				viper.GetString("ai.provider"), viper.GetString("ai.model"), viper.GetString("ai.base_url"))
+		}
+	}
+
 	r := gin.New()
 	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
 
@@ -1207,6 +1244,16 @@ func Run(info BuildInfo) {
 			if !hasPerm("settings:openvpn") {
 				filtered.Openvpn = OvpnConfig{}
 			}
+			if !hasPerm("settings:ai") {
+				filtered.AI = AIConfig{}
+			} else {
+				// 脱敏 API Key（只显示前后各4位）
+				if len(filtered.AI.APIKey) > 8 {
+					filtered.AI.APIKey = filtered.AI.APIKey[:4] + "****" + filtered.AI.APIKey[len(filtered.AI.APIKey)-4:]
+				} else if filtered.AI.APIKey != "" {
+					filtered.AI.APIKey = "****"
+				}
+			}
 
 			c.JSON(http.StatusOK, filtered)
 		})
@@ -1317,6 +1364,118 @@ func Run(info BuildInfo) {
 			}
 
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
+		})
+
+		// AI 设置接口
+		// GET  /ovpn/settings/ai - 获取 AI 配置（需要 settings:ai 权限，API Key 脱敏）
+		ovpn.GET("/settings/ai", RequirePermission("settings:ai"), func(c *gin.Context) {
+			aiCfg := AIConfig{
+				Enabled:      viper.GetBool("ai.enabled"),
+				Provider:     viper.GetString("ai.provider"),
+				BaseURL:      viper.GetString("ai.base_url"),
+				APIKey:       viper.GetString("ai.api_key"),
+				Model:        viper.GetString("ai.model"),
+				SystemPrompt: viper.GetString("ai.system_prompt"),
+				MaxTokens:    viper.GetInt("ai.max_tokens"),
+				Temperature:  viper.GetFloat64("ai.temperature"),
+			}
+			// 脱敏 API Key
+			if len(aiCfg.APIKey) > 8 {
+				aiCfg.APIKey = aiCfg.APIKey[:4] + "****" + aiCfg.APIKey[len(aiCfg.APIKey)-4:]
+			} else if aiCfg.APIKey != "" {
+				aiCfg.APIKey = "****"
+			}
+			// 返回当前 provider 和连接状态
+			provider := aiClient.Provider()
+			model := aiClient.Model()
+			c.JSON(http.StatusOK, gin.H{
+				"config":   aiCfg,
+				"provider": provider,
+				"model":    model,
+			})
+		})
+
+		// PUT /ovpn/settings/ai - 保存 AI 配置（需要 settings:ai:update 权限）
+		ovpn.PUT("/settings/ai", RequirePermission("settings:ai:update"), func(c *gin.Context) {
+			var req AIConfig
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "请求参数无效", "detail": err.Error()})
+				return
+			}
+
+			// 验证 provider
+			validProviders := map[string]bool{"ollama": true, "openai": true, "deepseek": true, "customize": true}
+			if req.Provider != "" && !validProviders[req.Provider] {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"message": "不支持的 provider，可选值: ollama, openai, deepseek, customize",
+				})
+				return
+			}
+
+			// 如果 API Key 是脱敏值（包含****），保留原有值
+			if strings.Contains(req.APIKey, "****") {
+				req.APIKey = viper.GetString("ai.api_key")
+			}
+
+			// 设置默认值
+			if req.MaxTokens <= 0 {
+				req.MaxTokens = 4096
+			}
+			if req.Temperature <= 0 {
+				req.Temperature = 0.7
+			}
+
+			// 保存到 viper
+			viper.Set("ai.enabled", req.Enabled)
+			viper.Set("ai.provider", req.Provider)
+			viper.Set("ai.base_url", req.BaseURL)
+			viper.Set("ai.api_key", req.APIKey)
+			viper.Set("ai.model", req.Model)
+			viper.Set("ai.system_prompt", req.SystemPrompt)
+			viper.Set("ai.max_tokens", req.MaxTokens)
+			viper.Set("ai.temperature", req.Temperature)
+
+			if err := viper.WriteConfig(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "配置保存失败: " + err.Error()})
+				return
+			}
+
+			// 重新初始化 LLM 客户端
+			if req.Enabled {
+				llmCfg := ai.LLMConfig{
+					Provider:    req.Provider,
+					BaseURL:     req.BaseURL,
+					APIKey:      req.APIKey,
+					Model:       req.Model,
+					MaxTokens:   req.MaxTokens,
+					Temperature: req.Temperature,
+				}
+				newClient, err := ai.NewLLMClient(llmCfg)
+				if err != nil {
+					log.Printf("⚠ AI 配置更新后初始化失败: %v", err)
+					c.JSON(http.StatusOK, gin.H{
+						"message": "配置已保存，但 AI 服务初始化失败: " + err.Error(),
+					})
+					return
+				}
+				aiClient.Set(newClient)
+				// 更新会话系统提示词，清理旧会话
+				if chatMgr != nil {
+					newChatMgr := ai.NewChatSessionManager(req.SystemPrompt)
+					chatMgr = newChatMgr
+				} else {
+					chatMgr = ai.NewChatSessionManager(req.SystemPrompt)
+				}
+				log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
+					req.Provider, req.Model)
+			} else {
+				// 禁用时清空 LLM 客户端
+				aiClient.Set(nil)
+				log.Printf("ℹ AI 已禁用")
+			}
+
+			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", req.Provider, req.Model))
+			c.JSON(http.StatusOK, gin.H{"message": "AI 配置更新成功"})
 		})
 
 		// 客户端安装包管理
@@ -2670,6 +2829,11 @@ func Run(info BuildInfo) {
 
 			c.JSON(http.StatusOK, gin.H{"message": "删除客户端成功"})
 		})
+
+		// AI 助手路由（需要 ai:chat 权限）
+		if chatMgr != nil && aiClient.Get() != nil {
+			ai.RegisterAIRoutes(ovpn.Group("/ai", RequirePermission("ai:chat")), chatMgr, aiClient)
+		}
 
 		ovpn.GET("/history", RequirePermission("history:view"), func(c *gin.Context) {
 			var h History

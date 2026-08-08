@@ -5,6 +5,7 @@ import { TopBar } from './TopBar';
 import { BackgroundScene } from '@/components/BackgroundScene';
 import { useAuth } from '@/store/auth';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import AIWidget from '@/components/AIWidget';
 
 export function Layout() {
   const { user, isLoading, hasPermission, permissionTree } = useAuth();
@@ -186,6 +187,9 @@ export function Layout() {
           </div>
         </main>
       </div>
+
+      {/* 全局 AI 助手入口 */}
+      <AIWidget />
     </div>
   );
 }

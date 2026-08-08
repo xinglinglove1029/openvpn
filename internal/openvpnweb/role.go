@@ -109,6 +109,7 @@ var menuPermissions = []permissionSeedItem{
 	{"", "menu:notifications", "站内信", "menu", "/notifications", "Bell", 11},
 	{"", "menu:settings", "系统设置", "menu", "/settings", "Settings", 12},
 	{"", "menu:profile", "个人中心", "menu", "/profile", "User", 13},
+	{"menu:overview", "ai:chat", "AI 助手", "button", "", "", 3},
 }
 
 // 按钮权限（按资源分组）
@@ -158,6 +159,7 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:settings", "settings:openvpn", "OpenVPN参数Tab", "button", "", "", 4},
 	{"menu:settings", "settings:service", "服务管理Tab", "button", "", "", 5},
 	{"menu:settings", "settings:packages", "客户端安装包Tab", "button", "", "", 6},
+	{"menu:settings", "settings:ai", "AI助手Tab", "button", "", "", 7},
 	// 系统设置按钮级权限（8）：各Tab操作按钮的独立权限码
 	{"settings:base", "settings:base:update", "保存基础控制", "button", "", "", 1},
 	{"settings:ldap", "settings:ldap:update", "保存LDAP认证", "button", "", "", 2},
@@ -167,6 +169,7 @@ var buttonPermissions = []permissionSeedItem{
 	{"settings:packages", "settings:packages:upload", "上传安装包", "button", "", "", 1},
 	{"settings:packages", "settings:packages:delete", "删除安装包", "button", "", "", 2},
 	{"settings:packages", "settings:packages:enable", "启用安装包", "button", "", "", 3},
+	{"settings:ai", "settings:ai:update", "保存AI配置", "button", "", "", 1},
 	// 通知渠道（5）
 	{"menu:channels", "channel:view", "查看渠道", "button", "", "", 1},
 	{"menu:channels", "channel:create", "创建渠道", "button", "", "", 2},

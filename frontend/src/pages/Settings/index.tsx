@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff } from 'lucide-react';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff, Bot, Zap, AlertCircle, Loader2 } from 'lucide-react';
 
 import { api } from '@/api';
-import type { SettingsResponse } from '@/types';
+import type { SettingsResponse, AISettingsResponse } from '@/types';
 import { messageOf } from '@/lib/format';
 import { useAuth } from '@/store/auth';
 import {
@@ -269,6 +269,8 @@ export default function SettingsPage() {
   const canViewOpenvpn = hasPermission('settings:openvpn');
   const canViewService = hasPermission('settings:service');
   const canViewPackages = hasPermission('settings:packages');
+  const canViewAI = hasPermission('settings:ai');
+  const canSaveAI = hasPermission('settings:ai:update');
 
   // 检查各 Tab 的保存权限
   const canSaveBase = hasPermission('settings:base:update');
@@ -276,11 +278,11 @@ export default function SettingsPage() {
   const canSaveOvpn = hasPermission('settings:openvpn:update');
   // service.auth_user 的保存需要 server:manage 权限
   const canSaveServiceAuth = hasPermission('server:manage');
-  // SaveBar 仅在用户拥有至少一个 Tab 的保存权限时显示
-  const canShowSaveBar = !activeTab.startsWith('packages') && (canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth);
+  // SaveBar 仅在用户拥有至少一个 Tab 的保存权限时显示（AI 有独立保存按钮，不参与 SaveBar）
+  const canShowSaveBar = !activeTab.startsWith('packages') && activeTab !== 'ai' && (canSaveBase || canSaveLdap || canSaveOvpn || canSaveServiceAuth);
 
   // 检查是否至少有一个 Tab 权限，否则重定向到概览页
-  const hasAnyTabPermission = canViewBase || canViewLdap || canViewOpenvpn || canViewService || canViewPackages;
+  const hasAnyTabPermission = canViewBase || canViewLdap || canViewOpenvpn || canViewService || canViewPackages || canViewAI;
 
   useEffect(() => {
     if (!loading && !hasAnyTabPermission) {
@@ -451,7 +453,7 @@ export default function SettingsPage() {
   };
 
   // 确定默认 Tab 值：取第一个有权限的 Tab
-  const defaultTab = canViewBase ? 'base' : canViewLdap ? 'ldap' : canViewOpenvpn ? 'openvpn' : canViewService ? 'service' : canViewPackages ? 'packages' : 'base';
+  const defaultTab = canViewBase ? 'base' : canViewLdap ? 'ldap' : canViewOpenvpn ? 'openvpn' : canViewService ? 'service' : canViewPackages ? 'packages' : canViewAI ? 'ai' : 'base';
 
   return (
     <div className="space-y-6">
@@ -492,6 +494,12 @@ export default function SettingsPage() {
             <TabsTrigger value="packages" className="gap-1.5">
               <Package className="h-4 w-4" />
               客户端安装包
+            </TabsTrigger>
+          )}
+          {canViewAI && (
+            <TabsTrigger value="ai" className="gap-1.5">
+              <Bot className="h-4 w-4" />
+              AI助手
             </TabsTrigger>
           )}
         </TabsList>
@@ -774,6 +782,13 @@ export default function SettingsPage() {
         {canViewPackages && (
           <TabsContent value="packages">
             <ClientPackagesTab />
+          </TabsContent>
+        )}
+
+        {/* ====== Tab 6: AI 助手 ====== */}
+        {canViewAI && (
+          <TabsContent value="ai">
+            <AISettingsTab canSave={canSaveAI} />
           </TabsContent>
         )}
       </Tabs>
@@ -1332,5 +1347,410 @@ function ClientPackagesTab() {
         />
       )}
     </>
+  );
+}
+
+/* ========== AI 助手设置 Tab ========== */
+
+const PROVIDER_OPTIONS: { value: string; label: string; hint: string }[] = [
+  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://localhost:11434/v1' },
+  { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1' },
+  { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1' },
+  { value: 'customize', label: '自定义 (OpenAI 兼容)', hint: 'https://your-api.com/v1' },
+];
+
+function AISettingsTab({ canSave }: { canSave: boolean }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // 表单状态
+  const [enabled, setEnabled] = useState(false);
+  const [provider, setProvider] = useState('ollama');
+  const [baseURL, setBaseURL] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [maxTokens, setMaxTokens] = useState(4096);
+  const [temperature, setTemperature] = useState(0.7);
+  const [showKey, setShowKey] = useState(false);
+
+  // 当前运行状态
+  const [currentProvider, setCurrentProvider] = useState('');
+  const [currentModel, setCurrentModel] = useState('');
+
+  // 原始值（用于判断是否有修改）
+  const [originals, setOriginals] = useState<Record<string, string>>({});
+
+  const isDirty = useMemo(() => {
+    return (
+      String(enabled) !== originals.enabled ||
+      provider !== originals.provider ||
+      baseURL !== originals.baseURL ||
+      apiKey !== originals.apiKey ||
+      model !== originals.model ||
+      systemPrompt !== originals.systemPrompt ||
+      String(maxTokens) !== originals.maxTokens ||
+      String(temperature) !== originals.temperature
+    );
+  }, [enabled, provider, baseURL, apiKey, model, systemPrompt, maxTokens, temperature, originals]);
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  useEffect(() => {
+    // 切换 provider 时自动填充默认 BaseURL
+    const opt = PROVIDER_OPTIONS.find((o) => o.value === provider);
+    if (opt && (!baseURL || baseURL === PROVIDER_OPTIONS.find((o) => o.value === originals.provider)?.hint)) {
+      setBaseURL(opt.hint);
+    }
+  }, [provider]);
+
+  async function loadConfig() {
+    setLoading(true);
+    try {
+      const data = await api.get<AISettingsResponse>('/ovpn/settings/ai');
+      const c = data.config;
+      setEnabled(c.enabled);
+      setProvider(c.provider || 'ollama');
+      setBaseURL(c.base_url || '');
+      setApiKey(c.api_key || '');
+      setModel(c.model || '');
+      setSystemPrompt(c.system_prompt || '');
+      setMaxTokens(c.max_tokens || 4096);
+      setTemperature(c.temperature || 0.7);
+      setCurrentProvider(data.provider || '');
+      setCurrentModel(data.model || '');
+      setOriginals({
+        enabled: String(c.enabled),
+        provider: c.provider || 'ollama',
+        baseURL: c.base_url || '',
+        apiKey: c.api_key || '',
+        model: c.model || '',
+        systemPrompt: c.system_prompt || '',
+        maxTokens: String(c.max_tokens || 4096),
+        temperature: String(c.temperature || 0.7),
+      });
+    } catch (err) {
+      toast.error('加载 AI 配置失败: ' + messageOf(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!isDirty || saving) return;
+    setSaving(true);
+    setTestResult(null);
+    try {
+      await api.putJson<{ message: string }>('/ovpn/settings/ai', {
+        enabled,
+        provider,
+        base_url: baseURL,
+        api_key: apiKey,
+        model,
+        system_prompt: systemPrompt,
+        max_tokens: maxTokens,
+        temperature,
+      });
+      toast.success('AI 配置已保存');
+      await loadConfig();
+    } catch (err) {
+      toast.error('保存失败: ' + messageOf(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      // 通过 AI 健康检查接口测试连通性
+      const data = await api.get<{ available: boolean; model: string; error?: string }>('/ovpn/ai/health');
+      if (data.available) {
+        setTestResult({ ok: true, message: `连接成功！当前模型: ${data.model}` });
+      } else {
+        setTestResult({ ok: false, message: data.error || '连接失败，请检查配置' });
+      }
+    } catch (err) {
+      setTestResult({ ok: false, message: '请求失败: ' + messageOf(err) });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function handleReset() {
+    setEnabled(originals.enabled === 'true');
+    setProvider(originals.provider);
+    setBaseURL(originals.baseURL);
+    setApiKey(originals.apiKey);
+    setModel(originals.model);
+    setSystemPrompt(originals.systemPrompt);
+    setMaxTokens(Number(originals.maxTokens) || 4096);
+    setTemperature(Number(originals.temperature) || 0.7);
+    setTestResult(null);
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center text-muted-foreground">正在加载 AI 配置…</CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 当前状态卡片 */}
+      {enabled && currentProvider && (
+        <Card className="border-[color-mix(in_srgb,var(--accent)_20%,transparent)]">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div
+                className={cn(
+                  'flex h-8 w-8 items-center justify-center rounded-full',
+                  'bg-[color-mix(in_srgb,var(--success)_15%,transparent)]',
+                )}
+              >
+                <Zap className="h-4 w-4 text-[var(--success)]" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">
+                  AI 助手运行中
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {currentProvider} · {currentModel}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleTest}
+                disabled={testing}
+                className="ml-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-60"
+              >
+                {testing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                测试连接
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 测试结果提示 */}
+      {testResult && (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-lg border p-3 text-sm',
+            testResult.ok
+              ? 'border-[color-mix(in_srgb,var(--success)_30%,transparent)] bg-[color-mix(in_srgb,var(--success)_8%,transparent)] text-[var(--success)]'
+              : 'border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] text-[var(--danger)]',
+          )}
+        >
+          {testResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+          <span>{testResult.message}</span>
+        </div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>AI 助手配置</CardTitle>
+          <CardDescription>
+            配置大模型接入，支持 Ollama 内置模型、DeepSeek、OpenAI 及任意 OpenAI 兼容接口
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* 启用开关 */}
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div>
+              <p className="font-medium">启用 AI 助手</p>
+              <p className="text-sm text-muted-foreground">开启后 AI 助手菜单和功能将可用</p>
+            </div>
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+
+          <Separator />
+
+          {/* Provider 选择 */}
+          <div className="space-y-2">
+            <Label>模型提供商</Label>
+            <Select value={provider} onValueChange={setProvider}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="选择提供商" />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDER_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Ollama 适合离线/内网环境；DeepSeek 性价比高；OpenAI 生态完善；自定义支持任意兼容接口
+            </p>
+          </div>
+
+          <div className="grid gap-6 sm:grid-cols-2">
+            {/* Base URL */}
+            <div className="space-y-2">
+              <Label htmlFor="ai-base-url">接口地址 (Base URL)</Label>
+              <Input
+                id="ai-base-url"
+                value={baseURL}
+                onChange={(e) => setBaseURL(e.target.value)}
+                placeholder="https://api.deepseek.com/v1"
+              />
+              <p className="text-xs text-muted-foreground">
+                {provider === 'ollama' && '默认 Ollama 地址，填写 /v1 结尾'}
+                {provider === 'deepseek' && 'DeepSeek API 地址'}
+                {provider === 'openai' && 'OpenAI API 地址'}
+                {provider === 'customize' && '你的 OpenAI 兼容 API 地址'}
+              </p>
+            </div>
+
+            {/* API Key */}
+            <div className="space-y-2">
+              <Label htmlFor="ai-api-key">API 密钥</Label>
+              <div className="relative">
+                <Input
+                  id="ai-api-key"
+                  type={showKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={provider === 'ollama' ? 'Ollama 无需 API Key' : 'sk-xxx...'}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                密钥以密文保存，加载时自动脱敏（显示为 ****）
+              </p>
+            </div>
+
+            {/* Model */}
+            <div className="space-y-2">
+              <Label htmlFor="ai-model">模型名称</Label>
+              <Input
+                id="ai-model"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={
+                  provider === 'ollama'
+                    ? 'qwen2.5:7b'
+                    : provider === 'deepseek'
+                    ? 'deepseek-chat'
+                    : 'gpt-4o-mini'
+                }
+              />
+            </div>
+
+            {/* Max Tokens */}
+            <div className="space-y-2">
+              <Label htmlFor="ai-max-tokens">最大 Token 数</Label>
+              <Input
+                id="ai-max-tokens"
+                type="number"
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(Number(e.target.value) || 4096)}
+                min={256}
+                max={128000}
+              />
+            </div>
+          </div>
+
+          {/* Temperature */}
+          <div className="space-y-2">
+            <Label>温度参数: {temperature.toFixed(1)}</Label>
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.1}
+              value={temperature}
+              onChange={(e) => setTemperature(Number(e.target.value))}
+              className="w-full accent-[var(--accent)]"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>精确 (0)</span>
+              <span>平衡 (1)</span>
+              <span>创意 (2)</span>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* System Prompt */}
+          <div className="space-y-2">
+            <Label htmlFor="ai-system-prompt">系统提示词</Label>
+            <Textarea
+              id="ai-system-prompt"
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              placeholder="你是 OpenVPN 运维控制台的智能助手..."
+              rows={4}
+            />
+            <p className="text-xs text-muted-foreground">
+              定义 AI 的角色和行为，修改后新会话生效
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 操作按钮 */}
+      {canSave && (
+        <div
+          className={cn(
+            'sticky bottom-4 z-30 flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md',
+            'border-[color-mix(in_srgb,var(--accent)_30%,transparent)]',
+            'bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)]',
+          )}
+        >
+          <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground w-full sm:w-auto">
+            {isDirty ? (
+              <span>
+                有未保存的<strong className="text-[var(--accent)]"> AI 配置</strong>修改
+              </span>
+            ) : (
+              <span>AI 配置已是最新</span>
+            )}
+          </div>
+          <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={!isDirty || saving}
+              className="secondary-action"
+            >
+              <RotateCcw className="h-4 w-4" />
+              撤销
+            </button>
+            <GlowButton
+              type="button"
+              onClick={handleSave}
+              loading={saving}
+              loadingText="保存中…"
+              disabled={!isDirty}
+              icon={<Save className="h-4 w-4" />}
+            >
+              保存 AI 配置
+            </GlowButton>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

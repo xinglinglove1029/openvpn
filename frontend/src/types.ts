@@ -62,6 +62,32 @@ export interface SettingsResponse {
     ovpn_push_dns1: string;
     ovpn_push_dns2: string;
   };
+  ai?: {
+    enabled: boolean;
+    provider: string;       // ollama | openai | deepseek | customize
+    base_url: string;
+    api_key: string;        // 脱敏后的值
+    model: string;
+    system_prompt: string;
+    max_tokens: number;
+    temperature: number;
+  };
+}
+
+/** AI 配置详情（来自 /settings/ai 独立接口） */
+export interface AISettingsResponse {
+  config: {
+    enabled: boolean;
+    provider: string;
+    base_url: string;
+    api_key: string;
+    model: string;
+    system_prompt: string;
+    max_tokens: number;
+    temperature: number;
+  };
+  provider: string;   // 当前激活的 provider
+  model: string;      // 当前激活的模型
 }
 
 export interface OnlineClient {

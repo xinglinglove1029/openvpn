@@ -71,7 +71,7 @@ export function Sidebar({ collapsed = false }: SidebarProps) {
   // - 仅展示用户拥有对应 menu 权限的节点
   // - settings 菜单特殊处理：需检查至少有一个 Tab 权限（子节点中 type=button 的权限）
   const navItems: NavItem[] = (permissionTree || [])
-    .filter((node) => node.type === 'menu' && node.code !== 'menu:profile')
+    .filter((node) => node.type === 'menu' && node.code !== 'menu:profile' && node.code !== 'ai:chat')
     .sort((a, b) => a.sort - b.sort)
     .map((node) => ({
       path: node.path || `/${node.code.split(':')[1] || node.code}`,
