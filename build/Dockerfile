@@ -40,7 +40,9 @@ RUN case "${TARGETVARIANT}" in \
     -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE} -X main.builtBy=docker" \
     -o /out/openvpn-web ./cmd/openvpn-web
 
-FROM alpine:3.23.4
+# 运行时必须使用 glibc 发行版：官方 Ollama Linux 二进制依赖 fcntl64 等 glibc 符号，
+# 在 Alpine/musl（即使安装 gcompat）中会启动失败。
+FROM debian:bookworm-slim
 
 # Ollama 版本，可通过 --build-arg 覆盖
 ARG OLLAMA_VERSION=0.32.5
@@ -50,31 +52,32 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ARG BUILDPLATFORM
 
-# 安装系统依赖 + Ollama
-# 注意：
-# 1. Ollama version 参数不带 v 前缀（参考官方 install.sh），否则 ollama.com 重定向时双 v → 404
-# 2. Ollama 新版下载格式为 .tar.zst 压缩包（含 bin/ollama + lib/ollama/），非裸二进制
-# 3. Alpine busybox ash 不支持 pipefail，用 set -eux 即可
-# 4. arm/v6、arm/v7 无官方 Ollama 二进制，创建 stub 脚本占位
+# 安装系统依赖 + Ollama。
+# Debian 提供 glibc，避免官方 Ollama 在 Alpine/musl 中出现
+# “fcntl64: symbol not found”并导致 supervisor 反复重启。
+# arm/v6、arm/v7 无官方 Ollama 二进制，创建明确失败的 stub。
 RUN set -eux \
-  && apk add --no-cache \
+  && apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bash \
+    ca-certificates \
     coreutils \
     curl \
-    gcompat \
+    easy-rsa \
     grep \
+    iproute2 \
     iptables \
-    iptables-legacy \
     jq \
-    libgomp \
+    libgomp1 \
     mailcap \
     nftables \
     openssl \
     openvpn \
-    sqlite \
+    sqlite3 \
     supervisor \
     tzdata \
     zstd \
+  && rm -rf /var/lib/apt/lists/* \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
   && if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
@@ -94,7 +97,7 @@ RUN set -eux \
        && echo "Ollama installed: $(du -sh /usr/local/lib/ollama | cut -f1)"; \
      else \
        echo "Ollama not available for ${TARGETPLATFORM}, creating stub" \
-       && printf '#!/bin/sh\necho "ollama not supported on this architecture"\nexit 0\n' > /usr/local/bin/ollama \
+       && printf '#!/bin/sh\necho "ollama not supported on this architecture" >&2\nexit 1\n' > /usr/local/bin/ollama \
        && chmod +x /usr/local/bin/ollama; \
      fi
 

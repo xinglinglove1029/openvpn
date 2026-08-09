@@ -11,14 +11,16 @@ import (
 	"openvpn-web/internal/openvpnweb/ai"
 )
 
-// AIToolService 实现 ai.ToolService 接口
+// AIToolService 实现 ai.ToolService 接口。
 // 由 openvpnweb 包实现，注入到 ai 包的业务工具中，避免循环依赖。
 // 所有方法都会校验 operator 的权限，确保 AI Agent 不会越权操作。
-type AIToolService struct{}
+type AIToolService struct {
+	ov *ovpn
+}
 
-// NewAIToolService 创建业务工具服务实例
-func NewAIToolService() *AIToolService {
-	return &AIToolService{}
+// NewAIToolService 创建业务工具服务实例。ov 用于读取 OpenVPN 管理接口的在线客户端统计。
+func NewAIToolService(ov *ovpn) *AIToolService {
+	return &AIToolService{ov: ov}
 }
 
 // hasPermission 检查指定用户是否拥有某权限 code
@@ -80,12 +82,16 @@ func (s *AIToolService) CreateUser(ctx agent.ToolContext, operator string, req a
 
 	enabled := true
 	u := User{
-		Username: req.Username,
+		Username: strings.TrimSpace(req.Username),
 		Password: password,
-		Name:     req.Name,
-		Email:    req.Email,
+		Name:     strings.TrimSpace(req.Name),
+		Email:    strings.TrimSpace(req.Email),
 		IsEnable: &enabled,
 		Gid:      1, // 默认分组
+	}
+	// 与网页“新增用户”保持一致：未指定角色时绑定普通用户默认角色。
+	if defaultRoleID := GetDefaultRoleID(db); defaultRoleID > 0 {
+		u.RoleIDs = []uint{defaultRoleID}
 	}
 
 	if err := u.Create(); err != nil {
@@ -175,6 +181,36 @@ func (s *AIToolService) ListUsers(ctx agent.ToolContext, operator string, req ai
 }
 
 // BindRole 给用户绑定角色（实现 ai.ToolService 接口）
+// GetSystemCounts 返回 AI 运维所需的最小统计集。
+// 用户统计与客户端配置分别受 user:view、client:view 控制；在线数额外要求 client:view_online。
+// 管理接口不可达不是工具失败，而是通过 ManagementOK 告知模型真实状态。
+func (s *AIToolService) GetSystemCounts(ctx agent.ToolContext, operator string) (ai.SystemCountsResult, error) {
+	if !s.hasPermission(ctx, operator, "user:view") {
+		return ai.SystemCountsResult{}, fmt.Errorf("权限不足: 需要 user:view 权限")
+	}
+	if !s.hasPermission(ctx, operator, "client:view") {
+		return ai.SystemCountsResult{}, fmt.Errorf("权限不足: 需要 client:view 权限")
+	}
+
+	result := ai.SystemCountsResult{ClientConfigs: countClientConfigs()}
+	if err := db.WithContext(ctx).Model(&User{}).Count(&result.TotalUsers).Error; err != nil {
+		return ai.SystemCountsResult{}, fmt.Errorf("查询用户总数失败: %w", err)
+	}
+	if err := db.WithContext(ctx).Model(&User{}).Where("is_enable = ?", true).Count(&result.EnabledUsers).Error; err != nil {
+		return ai.SystemCountsResult{}, fmt.Errorf("查询启用用户数失败: %w", err)
+	}
+
+	if s.hasPermission(ctx, operator, "client:view_online") {
+		if s.ov == nil {
+			return ai.SystemCountsResult{}, fmt.Errorf("OpenVPN 运行时未初始化")
+		}
+		clients, managementOK := s.ov.safeOnlineClients()
+		result.OnlineClients = len(clients)
+		result.ManagementOK = managementOK
+	}
+	return result, nil
+}
+
 func (s *AIToolService) BindRole(ctx agent.ToolContext, operator string, req ai.BindRoleRequest) (ai.BindRoleResult, error) {
 	// 权限校验
 	if !s.hasPermission(ctx, operator, "role:assign") {

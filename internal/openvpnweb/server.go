@@ -803,7 +803,7 @@ func Run(info BuildInfo) {
 	WsHubInstance().SubscribeTopic("ai:session_reset")
 
 	// 构建 AI 业务工具服务（实现 ai.ToolService 接口，注入到 Agent 工具中）
-	aiToolSvc := NewAIToolService()
+	aiToolSvc := NewAIToolService(&ov)
 
 	if viper.GetBool("ai.enabled") {
 		var initErr error
@@ -1517,10 +1517,13 @@ func Run(info BuildInfo) {
 					return
 				}
 				aiClient.Set(newClient)
-			// 重建 ADK Agent + Runner（含业务工具），热切换到新配置
-			// operator 通过 ADK ToolContext.UserID() 获取，无需 operatorResolver
-			tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
-			if toolErr != nil {
+				// 配置热切换后立即刷新健康缓存，避免设置页和 WebSocket
+				// 在下一个 60 秒周期前继续显示旧模型/旧错误。
+				healthChecker.CheckOnce(c.Request.Context())
+				// 重建 ADK Agent + Runner（含业务工具），热切换到新配置
+				// operator 通过 ADK ToolContext.UserID() 获取，无需 operatorResolver
+				tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
+				if toolErr != nil {
 					log.Printf("⚠ AI 业务工具重建失败: %v（将仅支持对话模式）", toolErr)
 					tools = nil
 				}
@@ -1537,28 +1540,28 @@ func Run(info BuildInfo) {
 					return
 				}
 				// 更新 chatMgr 的 AgentRunner 引用（旧会话上下文丢失，新会话将使用新配置）
-			chatMgr.SetAgentRunner(newRunner)
-			// 确保后台自检已启动（首次启用时启动，已启动则幂等）
-			healthChecker.Start()
-			// 热切换后旧 sessionID 在新 session.Service 中不存在，通过 WS 推送 ai:session_reset 事件
-			// 通知前端清空 sessionID 和历史消息，避免下次发消息时才知道 session 失效
-			Bus().Publish("ai:session_reset", map[string]any{
-				"reason":  "config_changed",
-				"message": "AI 配置已更新，会话已重置，请重新开始对话",
-			})
-			log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
-				req.Provider, req.Model)
-		} else {
-			// 禁用时清空 LLM 客户端和 AgentRunner
-			aiClient.Set(nil)
-			chatMgr.SetAgentRunner(nil)
-			// 禁用同样需要通知前端清空会话
-			Bus().Publish("ai:session_reset", map[string]any{
-				"reason":  "ai_disabled",
-				"message": "AI 已禁用，会话已重置",
-			})
-			log.Printf("ℹ AI 已禁用")
-		}
+				chatMgr.SetAgentRunner(newRunner)
+				// 确保后台自检已启动（首次启用时启动，已启动则幂等）
+				healthChecker.Start()
+				// 热切换后旧 sessionID 在新 session.Service 中不存在，通过 WS 推送 ai:session_reset 事件
+				// 通知前端清空 sessionID 和历史消息，避免下次发消息时才知道 session 失效
+				Bus().Publish("ai:session_reset", map[string]any{
+					"reason":  "config_changed",
+					"message": "AI 配置已更新，会话已重置，请重新开始对话",
+				})
+				log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
+					req.Provider, req.Model)
+			} else {
+				// 禁用时清空 LLM 客户端和 AgentRunner
+				aiClient.Set(nil)
+				chatMgr.SetAgentRunner(nil)
+				// 禁用同样需要通知前端清空会话
+				Bus().Publish("ai:session_reset", map[string]any{
+					"reason":  "ai_disabled",
+					"message": "AI 已禁用，会话已重置",
+				})
+				log.Printf("ℹ AI 已禁用")
+			}
 
 			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", req.Provider, req.Model))
 			c.JSON(http.StatusOK, gin.H{"message": "AI 配置更新成功"})

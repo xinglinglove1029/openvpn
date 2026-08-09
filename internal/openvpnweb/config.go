@@ -181,7 +181,7 @@ func initConfig() {
 	// AI 助手配置
 	viper.SetDefault("ai.enabled", false)
 	viper.SetDefault("ai.provider", "ollama")
-	viper.SetDefault("ai.base_url", "http://localhost:11434")
+	viper.SetDefault("ai.base_url", "http://127.0.0.1:11434")
 	viper.SetDefault("ai.api_key", "")
 	viper.SetDefault("ai.model", "qwen2.5:7b")
 	viper.SetDefault("ai.system_prompt", "你是 OpenVPN 运维控制台的智能助手。你可以帮助用户了解 OpenVPN 配置、防火墙规则管理、用户管理、日志分析等运维操作。请用简洁专业的中文回答，必要时给出具体操作步骤。")

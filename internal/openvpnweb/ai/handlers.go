@@ -21,8 +21,8 @@ func RegisterAIRoutes(rg *gin.RouterGroup,
 	healthChecker *HealthChecker) {
 
 	handler := &AIHandler{
-		chatMgr:      chatMgr,
-		llmClient:    llmClient,
+		chatMgr:       chatMgr,
+		llmClient:     llmClient,
 		healthChecker: healthChecker,
 	}
 
@@ -214,12 +214,25 @@ func (h *AIHandler) Chat(c *gin.Context) {
 	flusher.Flush()
 }
 
-// Health AI 服务健康检查
-// 优先读取后台自检缓存（毫秒级响应），无缓存时触发一次即时检查。
-// GET /ovpn/ai/health
+// Health AI 服务健康检查。
+// 默认读取后台缓存；传入 ?refresh=true 时强制执行一次真实探测并更新缓存，
+// 供设置页“测试连接”和配置热切换后的即时状态确认使用。
+// GET /ovpn/ai/health?refresh=true
 func (h *AIHandler) Health(c *gin.Context) {
-	// 优先读缓存
 	if h.healthChecker != nil {
+		if c.Query("refresh") == "true" {
+			status := h.healthChecker.CheckOnce(c.Request.Context())
+			c.JSON(http.StatusOK, HealthResponse{
+				Available: status.Available,
+				Model:     status.Model,
+				Provider:  status.Provider,
+				Error:     status.Error,
+				CheckedAt: status.CheckedAt,
+			})
+			return
+		}
+
+		// 默认优先读缓存
 		if status, ok := h.healthChecker.GetCachedStatus(); ok {
 			c.JSON(http.StatusOK, HealthResponse{
 				Available: status.Available,

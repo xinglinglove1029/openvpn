@@ -1367,8 +1367,8 @@ function ClientPackagesTab() {
 /* ========== AI 助手设置 Tab ========== */
 
 const PROVIDER_OPTIONS: { value: string; label: string; hint: string }[] = [
-  // 注意：Ollama 走 langchaingo 原生 /api/chat 端点，BaseURL 不带 /v1
-  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://localhost:11434' },
+  // Ollama 使用 OpenAI 兼容 /v1/chat/completions；容器内仅监听 IPv4，避免 localhost 解析到 ::1。
+  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://127.0.0.1:11434' },
   { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1' },
   { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1' },
   { value: 'customize', label: '自定义 (OpenAI 兼容)', hint: 'https://your-api.com/v1' },
@@ -1486,8 +1486,8 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
     setTesting(true);
     setTestResult(null);
     try {
-      // 通过 AI 健康检查接口测试连通性
-      const data = await api.get<{ available: boolean; model: string; error?: string }>('/ovpn/ai/health');
+      // 设置页测试必须强制探测当前热切换后的客户端，不能复用上一轮健康缓存。
+      const data = await api.get<{ available: boolean; model: string; error?: string }>('/ovpn/ai/health?refresh=true');
       if (data.available) {
         setTestResult({ ok: true, message: `连接成功！当前模型: ${data.model}` });
       } else {
@@ -1625,7 +1625,7 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
                 onChange={(e) => setBaseURL(e.target.value)}
                 placeholder={
                   provider === 'ollama'
-                    ? 'http://localhost:11434'
+                    ? 'http://127.0.0.1:11434'
                     : provider === 'deepseek'
                     ? 'https://api.deepseek.com/v1'
                     : provider === 'openai'

@@ -62,12 +62,19 @@ func NewLLMClient(cfg LLMConfig) (*OpenAIModel, error) {
 		return nil, fmt.Errorf("Temperature 超出范围 [0,2]: %f", cfg.Temperature)
 	}
 
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	// 容器内 Ollama 只监听 IPv4。Go 在部分环境中会优先将 localhost
+	// 解析为 IPv6 ::1，导致明明服务可用却连接被拒绝。
+	if cfg.Provider == "ollama" && (baseURL == "http://localhost:11434" || baseURL == "https://localhost:11434") {
+		baseURL = strings.Replace(baseURL, "localhost", "127.0.0.1", 1)
+	}
+
 	c := &OpenAIModel{
 		provider: cfg.Provider,
 		// httpClient 不设置整体 Timeout，依赖调用方 context 控制总时长
 		// （流式响应可能持续较长时间，整体 Timeout 会截断流）
 		httpClient:  &http.Client{},
-		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
+		baseURL:     baseURL,
 		apiKey:      cfg.APIKey,
 		model:       cfg.Model,
 		maxTokens:   cfg.MaxTokens,
@@ -101,6 +108,12 @@ func (c *OpenAIModel) Name() string {
 // 将 genai.Content 转为 OpenAI 格式，调用 API，返回 iter.Seq2 流
 func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
+		// iter.Seq 的消费者提前退出时 yield 会返回 false。必须立即停止生产，
+		// 否则 Go runtime 会触发 “range function continued iteration” panic。
+		emit := func(response *model.LLMResponse, err error) bool {
+			return yield(response, err)
+		}
+
 		c.mu.RLock()
 		baseURL := c.baseURL
 		apiKey := c.apiKey
@@ -138,14 +151,14 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 		body, err := json.Marshal(payload)
 		if err != nil {
-			yield(nil, fmt.Errorf("序列化请求失败: %w", err))
+			emit(nil, fmt.Errorf("序列化请求失败: %w", err))
 			return
 		}
 
 		url := baseURL + "/chat/completions"
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
-			yield(nil, fmt.Errorf("创建请求失败: %w", err))
+			emit(nil, fmt.Errorf("创建请求失败: %w", err))
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -155,14 +168,14 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 		resp, err := httpClient.Do(httpReq)
 		if err != nil {
-			yield(nil, fmt.Errorf("请求 API 失败: %w", err))
+			emit(nil, fmt.Errorf("请求 API 失败: %w", err))
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			respBytes, _ := io.ReadAll(resp.Body)
-			yield(nil, fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes))))
+			emit(nil, fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes))))
 			return
 		}
 
@@ -170,10 +183,10 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			// 非流式：解析完整响应
 			llmResp, err := parseNonStreamOpenAIResponse(resp.Body)
 			if err != nil {
-				yield(nil, err)
+				emit(nil, err)
 				return
 			}
-			yield(llmResp, nil)
+			emit(llmResp, nil)
 			return
 		}
 
@@ -184,10 +197,10 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		// tool_calls 跨 chunk 累积器：按 index 累积 id/name/arguments 片段
 		toolCallAccum := make(map[int]*toolCallAccumulator)
 
-		flushToolCalls := func() {
+		flushToolCalls := func() bool {
 			// 按 index 顺序组装完整的 FunctionCall 并 yield
 			if len(toolCallAccum) == 0 {
-				return
+				return true
 			}
 			// 收集并排序 index
 			indices := make([]int, 0, len(toolCallAccum))
@@ -220,12 +233,13 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			}
 			// 清空累积器
 			toolCallAccum = make(map[int]*toolCallAccumulator)
-			if len(content.Parts) > 0 {
-				yield(&model.LLMResponse{
-					Content:      content,
-					TurnComplete: true,
-				}, nil)
+			if len(content.Parts) > 0 && !emit(&model.LLMResponse{
+				Content:      content,
+				TurnComplete: true,
+			}, nil) {
+				return false
 			}
+			return true
 		}
 
 		for scanner.Scan() {
@@ -235,10 +249,12 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
-				// 先 flush 残留的 tool_calls
-				flushToolCalls()
+				// 先 flush 残留的 tool_calls；消费者已退出时立即停止。
+				if !flushToolCalls() {
+					return
+				}
 				// 最终事件
-				yield(&model.LLMResponse{
+				emit(&model.LLMResponse{
 					Content: &genai.Content{
 						Role:  "model",
 						Parts: []*genai.Part{{Text: fullText.String()}},
@@ -258,13 +274,15 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				// 处理文本 token
 				if choice.Delta.Content != "" {
 					fullText.WriteString(choice.Delta.Content)
-					yield(&model.LLMResponse{
+					if !emit(&model.LLMResponse{
 						Content: &genai.Content{
 							Role:  "model",
 							Parts: []*genai.Part{{Text: choice.Delta.Content}},
 						},
 						Partial: true,
-					}, nil)
+					}, nil) {
+						return
+					}
 				}
 
 				// 处理 tool_calls：按 index 累积
@@ -286,22 +304,23 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				}
 
 				// finish_reason=tool_calls 时 flush 累积的 tool_calls
-				if choice.FinishReason == "tool_calls" {
-					flushToolCalls()
+				if choice.FinishReason == "tool_calls" && !flushToolCalls() {
+					return
 				}
 			}
 		}
 
 		if err := scanner.Err(); err != nil {
-			yield(nil, fmt.Errorf("读取流式响应失败: %w", err))
+			emit(nil, fmt.Errorf("读取流式响应失败: %w", err))
 			return
 		}
 
-		// 如果没有收到 [DONE] 但有内容，也发送完成事件
-		// 先 flush 残留的 tool_calls
-		flushToolCalls()
+		// 如果没有收到 [DONE] 但有内容，也发送完成事件。
+		if !flushToolCalls() {
+			return
+		}
 		if fullText.Len() > 0 {
-			yield(&model.LLMResponse{
+			emit(&model.LLMResponse{
 				Content: &genai.Content{
 					Role:  "model",
 					Parts: []*genai.Part{{Text: fullText.String()}},
@@ -354,10 +373,10 @@ type openAIChatReq struct {
 }
 
 type openAIMessage struct {
-	Role       string             `json:"role"`
-	Content    string             `json:"content,omitempty"`
-	ToolCalls  []openAIToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAITool struct {

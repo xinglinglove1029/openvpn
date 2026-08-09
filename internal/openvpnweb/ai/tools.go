@@ -18,6 +18,8 @@ type ToolService interface {
 	ListUsers(ctx agent.ToolContext, operator string, req ListUsersRequest) (ListUsersResult, error)
 	// BindRole 给用户绑定角色（要求 role:assign 权限）
 	BindRole(ctx agent.ToolContext, operator string, req BindRoleRequest) (BindRoleResult, error)
+	// GetSystemCounts 查询系统用户、客户端配置和在线客户端数量（需要相应查看权限）
+	GetSystemCounts(ctx agent.ToolContext, operator string) (SystemCountsResult, error)
 }
 
 // CreateUserRequest 创建用户工具入参
@@ -57,6 +59,16 @@ type UserInfo struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Enabled  bool   `json:"enabled"`
+}
+
+// SystemCountsResult 供 AI 回答“当前多少用户、多少客户端”的精简统计结果。
+// ClientConfigs 是已生成的 .ovpn 配置数量，OnlineClients 是管理接口当前在线数。
+type SystemCountsResult struct {
+	TotalUsers    int64 `json:"totalUsers"`
+	EnabledUsers  int64 `json:"enabledUsers"`
+	ClientConfigs int   `json:"clientConfigs"`
+	OnlineClients int   `json:"onlineClients"`
+	ManagementOK  bool  `json:"managementOk"`
 }
 
 // BindRoleRequest 绑定角色工具入参
@@ -107,6 +119,19 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("创建 list_users 工具失败: %w", err)
 	}
 
+	getSystemCountsTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "get_system_counts",
+			Description: "查询系统中的用户总数、启用用户数、已生成客户端配置数量和当前在线客户端数。当用户询问“多少用户”“多少客户端”“系统概况”时调用。需要 user:view 和 client:view 权限；若无查看在线客户端权限则只返回可安全读取的配置数量。",
+		},
+		func(ctx agent.ToolContext, _ struct{}) (SystemCountsResult, error) {
+			return svc.GetSystemCounts(ctx, ctx.UserID())
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 get_system_counts 工具失败: %w", err)
+	}
+
 	bindRoleTool, err := functiontool.New(
 		functiontool.Config{
 			Name:                "bind_role",
@@ -121,5 +146,5 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("创建 bind_role 工具失败: %w", err)
 	}
 
-	return []tool.Tool{createUserTool, listUsersTool, bindRoleTool}, nil
+	return []tool.Tool{createUserTool, listUsersTool, getSystemCountsTool, bindRoleTool}, nil
 }
