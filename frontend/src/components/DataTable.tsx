@@ -298,7 +298,7 @@ export function DataTable<T>({
                       )}
                       onClick={() => handleSort(col)}
                     >
-                      <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                         {col.header}
                         {SortIcon && (
                           <SortIcon

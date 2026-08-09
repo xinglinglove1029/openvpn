@@ -22,16 +22,49 @@ interface HealthStatus {
   error?: string;
 }
 
+const CHAT_STORAGE_KEY = 'openvpn-ai-chat';
+
+interface PersistedChat {
+  messages: ChatMessage[];
+  sessionID: string;
+}
+
+/** 从 localStorage 恢复聊天记录 */
+function loadPersistedChat(): PersistedChat {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return { messages: [], sessionID: '' };
+    const parsed = JSON.parse(raw) as PersistedChat;
+    if (!Array.isArray(parsed.messages)) return { messages: [], sessionID: '' };
+    return { messages: parsed.messages, sessionID: parsed.sessionID || '' };
+  } catch {
+    return { messages: [], sessionID: '' };
+  }
+}
+
 export default function AIAssistant() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [initial] = useState(loadPersistedChat);
+  const [messages, setMessages] = useState<ChatMessage[]>(initial.messages);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [sessionID, setSessionID] = useState<string>('');
+  const [sessionID, setSessionID] = useState<string>(initial.sessionID);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 持久化聊天记录到 localStorage（刷新页面后可恢复）
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        CHAT_STORAGE_KEY,
+        JSON.stringify({ messages, sessionID } satisfies PersistedChat),
+      );
+    } catch {
+      // localStorage 满或不可用时静默忽略
+    }
+  }, [messages, sessionID]);
 
   // 健康状态订阅：
   // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）

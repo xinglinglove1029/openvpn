@@ -892,6 +892,7 @@ function UserTablePanel({
       header: '固定 IP',
       sortable: true,
       sortAccessor: (user) => user.ipAddr ?? '',
+      className: 'min-w-[5.5rem] whitespace-nowrap',
       render: (user) => user.ipAddr || '-',
     },
     {
@@ -899,6 +900,7 @@ function UserTablePanel({
       header: 'IP 归属地',
       sortable: true,
       sortAccessor: (user) => user.ipRegion ?? '',
+      className: 'min-w-[5.5rem] whitespace-nowrap',
       render: (user) => user.ipRegion || '-',
     },
     {
@@ -906,35 +908,18 @@ function UserTablePanel({
       header: '配置文件',
       sortable: true,
       sortAccessor: (user) => user.ovpnConfig ?? '',
+      className: 'min-w-[6rem] whitespace-nowrap',
       render: (user) => user.ovpnConfig || '-',
     },
     {
-      key: 'roles',
-      header: '角色',
-      sortable: true,
-      sortAccessor: (user) => (user.roleNames && user.roleNames.length ? user.roleNames[0] : ''),
-      render: (user) => {
-        const names = user.roleNames ?? [];
-        if (!names.length) return <span className="text-muted-foreground">-</span>;
-        return (
-          <div className="flex flex-wrap gap-1">
-            {names.map((n, idx) => (
-              <Badge key={`${n}-${idx}`} variant="secondary" className="text-[10px]">
-                {n}
-              </Badge>
-            ))}
-          </div>
-        );
-      },
-    },
-    {
       key: 'mfa',
-      header: 'MFA',
+      header: 'MFA 状态',
       sortable: true,
       sortAccessor: (user) => (user.mfaSecret || user.mfaEnabled ? 1 : 0),
+      className: 'min-w-[4.5rem] whitespace-nowrap',
       render: (user) =>
         user.mfaSecret || user.mfaEnabled ? (
-          <Badge variant="secondary">开启</Badge>
+          <Badge variant="secondary" className="whitespace-nowrap">开启</Badge>
         ) : (
           <span className="text-muted-foreground">-</span>
         ),
@@ -945,8 +930,9 @@ function UserTablePanel({
       sortable: true,
       sortAccessor: (user) => (user.isEnable === false ? 0 : 1),
       cardPlacement: 'header-right',
+      className: 'min-w-[4rem] whitespace-nowrap',
       render: (user) => (
-        <StatusBadge status={user.isEnable === false ? 'danger' : 'success'}>
+        <StatusBadge status={user.isEnable === false ? 'danger' : 'success'} className="whitespace-nowrap">
           {user.isEnable === false ? '禁用' : '启用'}
         </StatusBadge>
       ),
@@ -960,11 +946,12 @@ function UserTablePanel({
         const ts = new Date(user.expireDate).getTime();
         return Number.isNaN(ts) ? Number.MAX_SAFE_INTEGER : ts;
       },
+      className: 'min-w-[6rem] whitespace-nowrap',
       render: (user) => {
         const expire = expiryStatus(user);
         const statusType = expire.className as 'success' | 'warning' | 'danger' | 'neutral';
         return (
-          <StatusBadge status={statusType}>
+          <StatusBadge status={statusType} className="whitespace-nowrap">
             {user.expireDate || expire.label}
           </StatusBadge>
         );
@@ -974,16 +961,18 @@ function UserTablePanel({
       key: 'actions',
       header: '操作',
       render: (user) => (
-        <div className="flex flex-wrap items-center gap-0.5">
+        // 桌面（pc）模式强制单行不换行：紧凑 padding + 较小 gap + whitespace-nowrap。
+        // 仅极窄屏（移动端）才允许 wrap 兜底，避免被裁切隐藏。
+        <div className="flex flex-wrap items-center gap-0.5 sm:flex-nowrap sm:gap-1">
           <HasPermission code="user:update">
-            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openEditUser(user)}>
+            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openEditUser(user)}>
               {isMobile ? <Edit className="h-4 w-4" /> : '编辑'}
             </Button>
           </HasPermission>
           <HasPermission
             code={user.isEnable === false ? 'user:enable' : 'user:disable'}
             fallback={
-              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} disabled>
+              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5', isMobile && 'min-w-[2.25rem] p-0')} disabled>
                 {isMobile ? (
                   user.isEnable === false ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />
                 ) : (user.isEnable === false ? '启用' : '禁用')}
@@ -993,7 +982,7 @@ function UserTablePanel({
             <Button
               size="sm"
               variant="ghost"
-              className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')}
+              className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5', isMobile && 'min-w-[2.25rem] p-0')}
               onClick={() => patchUser(user, { isEnable: user.isEnable === false }, '状态已更新')}
             >
               {isMobile ? (
@@ -1002,13 +991,13 @@ function UserTablePanel({
             </Button>
           </HasPermission>
           <HasPermission code="user:reset_password">
-            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openResetPassword(user)}>
+            <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => openResetPassword(user)}>
               {isMobile ? <KeyRound className="h-4 w-4" /> : '重置密码'}
             </Button>
           </HasPermission>
           {(user.mfaSecret || user.mfaEnabled) && (
             <HasPermission code="user:reset_mfa">
-              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 sm:h-7 sm:px-2', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => resetMfa(user)}>
+              <Button size="sm" variant="ghost" className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5', isMobile && 'min-w-[2.25rem] p-0')} onClick={() => resetMfa(user)}>
                 {isMobile ? <ShieldOff className="h-4 w-4" /> : '重置 MFA'}
               </Button>
             </HasPermission>
@@ -1018,7 +1007,7 @@ function UserTablePanel({
               <Button
                 size="sm"
                 variant="ghost"
-                className={cn('h-8 px-1.5 sm:h-7 sm:px-2 text-destructive hover:text-destructive', isMobile && 'min-w-[2.25rem] p-0')}
+                className={cn('h-8 px-1.5 whitespace-nowrap sm:h-7 sm:px-1.5 text-destructive hover:text-destructive', isMobile && 'min-w-[2.25rem] p-0')}
                 onClick={() => deleteUser(user)}
               >
                 {isMobile ? <Trash2 className="h-4 w-4" /> : '删除'}
