@@ -52,6 +52,9 @@ class RealtimeHub {
   private retryTimer: number | null = null;
   private manualClose = false;
   private visibilityHandler: (() => void) | null = null;
+  // 标记是否曾成功连接过，用于区分"首次连接"与"断连重连"
+  // 重连时 emit ws:reconnected 事件，让订阅者（如 AI health）重新拉取状态
+  private hasConnectedBefore = false;
 
   // 未读数 / 站内信特定数据（与 notify 模块耦合，保留为可选辅助）
   private unread: UnreadSnapshot = { unread: 0, lastReadId: 0, maxId: 0 };
@@ -237,6 +240,12 @@ class RealtimeHub {
       this.retryDelay = 1500;
       this.setState('open');
       void this.refreshUnread();
+      // 重连后通知所有订阅者（首次连接不触发）
+      // 订阅者（如 AI health）可借此重新拉取状态，避免丢失断连期间的变更
+      if (this.hasConnectedBefore) {
+        this.emitTopic('ws:reconnected', null);
+      }
+      this.hasConnectedBefore = true;
     };
 
     socket.onmessage = (ev) => {

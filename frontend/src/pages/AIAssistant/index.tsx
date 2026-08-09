@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Bot, Send, Loader2, WifiOff, Wifi, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/ui/button';
@@ -7,8 +7,8 @@ import { Badge } from '@/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/ui/card';
 import MarkdownContent from '@/components/MarkdownContent';
 import { PageHeader } from '@/components/PageHeader';
-import { useAsync } from '@/hooks/useAsync';
 import { api } from '@/api';
+import { realtimeHub } from '@/lib/notificationHub';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -27,14 +27,62 @@ export default function AIAssistant() {
   const [streaming, setStreaming] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [sessionID, setSessionID] = useState<string>('');
+  const [health, setHealth] = useState<HealthStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 健康检查
-  const { data: health } = useAsync<HealthStatus>(
-    useCallback(() => api.get('/ovpn/ai/health'), []),
-  );
+  // 健康状态订阅：
+  // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）
+  // 2. 订阅 ai:health WS topic，状态变化时实时更新
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<HealthStatus>('/ovpn/ai/health')
+      .then((data) => {
+        if (cancelled) return;
+        setHealth(data);
+      })
+      .catch(() => {
+        // 静默失败，等待 WS 推送
+      });
+
+    const off = realtimeHub.subscribe<HealthStatus>('ai:health', (status) => {
+      if (!status) return;
+      setHealth(status);
+    });
+
+    // 订阅 WS ai:session_reset 事件（AI 热切换/禁用后旧 sessionID 失效，前端清空会话）
+    const offReset = realtimeHub.subscribe<{ reason?: string; message?: string }>(
+      'ai:session_reset',
+      (payload) => {
+        setSessionID('');
+        setMessages([]);
+        setStreaming('');
+        toast.info(payload?.message || 'AI 配置已更新，会话已重置');
+      },
+    );
+
+    // 订阅 WS ws:reconnected 事件（断连重连后重新拉取 health 状态，避免丢失断连期间变更）
+    const offReconnect = realtimeHub.subscribe<null>('ws:reconnected', () => {
+      api
+        .get<HealthStatus>('/ovpn/ai/health')
+        .then((data) => {
+          if (cancelled) return;
+          setHealth(data);
+        })
+        .catch(() => {
+          // 静默失败
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      off();
+      offReset();
+      offReconnect();
+    };
+  }, []);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -61,6 +109,9 @@ export default function AIAssistant() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // fullText 提升到 try 块外，使 catch 块也能访问（用于 AbortError 中断时保存已接收内容）
+    let fullText = '';
+
     try {
       const response = await fetch('/ovpn/ai/chat', {
         method: 'POST',
@@ -85,7 +136,6 @@ export default function AIAssistant() {
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let fullText = '';
       let sseSessionID = '';
 
       while (true) {
@@ -116,6 +166,14 @@ export default function AIAssistant() {
               fullText += data;
               setStreaming(fullText);
               break;
+            case 'tool_call':
+              // 工具调用开始：展示"正在执行XX操作..."
+              setStreaming(`正在执行：${data}...`);
+              break;
+            case 'tool_result':
+              // 工具调用结果：展示结果摘要
+              setStreaming(`操作结果：${data}`);
+              break;
             case 'done':
               // 流结束，添加 assistant 消息
               if (fullText) {
@@ -134,11 +192,11 @@ export default function AIAssistant() {
       // (正常情况下 buffer 在 done 事件后应为空)
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        // 用户主动中断
-        if (streaming) {
+        // 用户主动中断：用 fullText 局部变量而非 streaming state（避免闭包捕获过期值）
+        if (fullText) {
           setMessages((prev) => [
             ...prev,
-            { role: 'assistant', content: streaming + ' [已中断]' },
+            { role: 'assistant', content: fullText + ' [已中断]' },
           ]);
         }
       } else {

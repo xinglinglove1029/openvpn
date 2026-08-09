@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@/store/theme';
 import { useAuth } from '@/store/auth';
-import { useAsync } from '@/hooks/useAsync';
 import { api } from '@/api';
+import { realtimeHub } from '@/lib/notificationHub';
 import { Button } from '@/ui/button';
 import { Textarea } from '@/ui/textarea';
 import { Card, CardContent } from '@/ui/card';
@@ -31,7 +31,9 @@ interface ChatMessage {
 interface HealthStatus {
   available: boolean;
   model: string;
+  provider?: string;
   error?: string;
+  checkedAt?: string;
 }
 
 const HOT_TOPICS = [
@@ -58,15 +60,75 @@ export default function AIWidget() {
   const [loading, setLoading] = useState(false);
   const [sessionID, setSessionID] = useState('');
   const [deepThink, setDeepThink] = useState(false);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 记录上一次 WS 推送的 available 状态，用于"仅从可用→不可用时弹出提示"
+  const prevAvailableRef = useRef<boolean | null>(null);
 
-  // 健康检查：打开抽屉时或组件首次挂载时刷新
-  const { data: health, loading: healthLoading } = useAsync<HealthStatus>(
-    useCallback(() => api.get('/ovpn/ai/health'), []),
-    [open],
-  );
+  // 健康状态订阅：
+  // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）
+  // 2. 订阅 ai:health WS topic，状态变化时实时更新；仅当从"可用"变为"不可用"时弹出 toast 提示
+  useEffect(() => {
+    let cancelled = false;
+    // 初始拉取（静默，不弹提示）
+    api
+      .get<HealthStatus>('/ovpn/ai/health')
+      .then((data) => {
+        if (cancelled) return;
+        setHealth(data);
+        prevAvailableRef.current = data?.available ?? false;
+      })
+      .catch(() => {
+        // 静默失败，等待 WS 推送
+      });
+
+    // 订阅 WS ai:health 事件（后台周期自检 + 状态变更时推送）
+    const off = realtimeHub.subscribe<HealthStatus>('ai:health', (status) => {
+      if (!status) return;
+      setHealth(status);
+      const prev = prevAvailableRef.current;
+      const current = !!status.available;
+      // 仅在 从可用 → 不可用 时弹出提示（避免启动时初始不可用就弹提示）
+      if (prev === true && current === false) {
+        toast.error(`AI 服务不可用：${status.error || '请检查 AI 配置'}`);
+      }
+      prevAvailableRef.current = current;
+    });
+
+    // 订阅 WS ai:session_reset 事件（AI 热切换/禁用后旧 sessionID 失效，前端清空会话）
+    const offReset = realtimeHub.subscribe<{ reason?: string; message?: string }>(
+      'ai:session_reset',
+      (payload) => {
+        setSessionID('');
+        setMessages([]);
+        setStreaming('');
+        toast.info(payload?.message || 'AI 配置已更新，会话已重置');
+      },
+    );
+
+    // 订阅 WS ws:reconnected 事件（断连重连后重新拉取 health 状态，避免丢失断连期间变更）
+    const offReconnect = realtimeHub.subscribe<null>('ws:reconnected', () => {
+      api
+        .get<HealthStatus>('/ovpn/ai/health')
+        .then((data) => {
+          if (cancelled) return;
+          setHealth(data);
+          prevAvailableRef.current = data?.available ?? false;
+        })
+        .catch(() => {
+          // 静默失败
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      off();
+      offReset();
+      offReconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -95,6 +157,9 @@ export default function AIWidget() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // fullText 提升到 try 块外，使 catch 块也能访问（用于 AbortError 中断时保存已接收内容）
+    let fullText = '';
+
     try {
       const response = await fetch('/ovpn/ai/chat', {
         method: 'POST',
@@ -118,7 +183,6 @@ export default function AIWidget() {
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let fullText = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -130,12 +194,16 @@ export default function AIWidget() {
 
         for (const event of events) {
           let eventType = '';
-          let data = '';
+          // SSE 规范：多个 data: 行之间必须用 \n 连接，而不是直接字符串拼接
+          const dataLines: string[] = [];
 
           for (const line of event.split('\n')) {
             if (line.startsWith('event: ')) eventType = line.slice(7);
-            else if (line.startsWith('data: ')) data += line.slice(6);
+            else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+            // 兼容 "data:" 前缀后无空格的极少情况
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5));
           }
+          const data = dataLines.join('\n');
 
           switch (eventType) {
             case 'session':
@@ -144,6 +212,14 @@ export default function AIWidget() {
             case 'token':
               fullText += data;
               setStreaming(fullText);
+              break;
+            case 'tool_call':
+              // 工具调用开始：展示"正在执行XX操作..."
+              setStreaming(`正在执行：${data}...`);
+              break;
+            case 'tool_result':
+              // 工具调用结果：展示结果摘要
+              setStreaming(`操作结果：${data}`);
               break;
             case 'done':
               if (fullText) {
@@ -159,10 +235,11 @@ export default function AIWidget() {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        if (streaming) {
+        // 用 fullText 局部变量而非 streaming state（避免闭包捕获过期值）
+        if (fullText) {
           setMessages((prev) => [
             ...prev,
-            { role: 'assistant', content: streaming + ' [已中断]' },
+            { role: 'assistant', content: fullText + ' [已中断]' },
           ]);
         }
       } else {

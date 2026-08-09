@@ -1,148 +1,158 @@
 package ai
 
 import (
+	"context"
 	"sync"
 	"time"
 
-	"github.com/tmc/langchaingo/llms"
+	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
-const (
-	// MaxContextMessages 对话上下文最大消息数（不含 system prompt）
-	MaxContextMessages = 20
-	// SessionIdleTimeout 会话空闲超时时间
-	SessionIdleTimeout = 30 * time.Minute
-)
-
-// ChatMessage 对话消息
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// ChatSession 单个用户的对话会话，包含上下文窗口管理
-type ChatSession struct {
-	mu           sync.Mutex
-	Messages     []ChatMessage
-	SystemPrompt string
-	CreatedAt    time.Time
-	LastActiveAt time.Time
-}
-
-// AddMessage 添加一条消息到上下文窗口，超过上限时自动裁剪
-func (s *ChatSession) AddMessage(role, content string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.LastActiveAt = time.Now()
-	s.Messages = append(s.Messages, ChatMessage{
-		Role:    role,
-		Content: content,
-	})
-
-	// 环形缓冲区：保留最近 N 条消息
-	if len(s.Messages) > MaxContextMessages {
-		s.Messages = s.Messages[len(s.Messages)-MaxContextMessages:]
-	}
-}
-
-// GetContext 获取当前上下文，转为 langchaingo MessageContent 格式
-func (s *ChatSession) GetContext() []llms.MessageContent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	ctx := make([]llms.MessageContent, 0, len(s.Messages)+1)
-
-	// 系统提示词放在最前面
-	if s.SystemPrompt != "" {
-		ctx = append(ctx, llms.TextParts(llms.ChatMessageTypeSystem, s.SystemPrompt))
-	}
-
-	for _, m := range s.Messages {
-		switch m.Role {
-		case "user":
-			ctx = append(ctx, llms.TextParts(llms.ChatMessageTypeHuman, m.Content))
-		case "assistant":
-			ctx = append(ctx, llms.TextParts(llms.ChatMessageTypeAI, m.Content))
-		}
-	}
-
-	return ctx
-}
-
-// GetMessages 返回原始消息列表（供 API 返回）
-func (s *ChatSession) GetMessages() []ChatMessage {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	msgs := make([]ChatMessage, len(s.Messages))
-	copy(msgs, s.Messages)
-	return msgs
-}
-
-// IsIdle 检查会话是否空闲超时
-func (s *ChatSession) IsIdle(timeout time.Duration) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return time.Since(s.LastActiveAt) > timeout
-}
-
-// ChatSessionManager 会话管理器，以内存 map 存储所有活跃会话
+// ChatSessionManager 轻量会话管理器
+// 负责生成 sessionID、追踪活跃会话、从 ADK session.Service 提取历史消息。
+// 实际会话存储与上下文管理由 ADK 的 session.Service（在 AgentRunner 内部）负责。
 type ChatSessionManager struct {
-	mu           sync.RWMutex
-	sessions     map[string]*ChatSession
-	systemPrompt string
+	mu          sync.RWMutex
+	activeUsers map[string]time.Time // username → 最后活跃时间（用于清理统计）
+	agentRunner *AgentRunner         // 用于读取 session events
 }
 
 // NewChatSessionManager 创建会话管理器
-func NewChatSessionManager(systemPrompt string) *ChatSessionManager {
+// agentRunner 可为 nil（此时 History 接口返回空列表）；启动后通过 SetAgentRunner 注入。
+func NewChatSessionManager(agentRunner *AgentRunner) *ChatSessionManager {
 	return &ChatSessionManager{
-		sessions:     make(map[string]*ChatSession),
-		systemPrompt: systemPrompt,
+		activeUsers: make(map[string]time.Time),
+		agentRunner: agentRunner,
 	}
 }
 
-// GetOrCreate 获取或创建用户会话
-func (m *ChatSessionManager) GetOrCreate(username, sessionID string) (*ChatSession, string) {
+// SetAgentRunner 注入或更新 AgentRunner（用于热切换后重新绑定）
+func (m *ChatSessionManager) SetAgentRunner(r *AgentRunner) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.agentRunner = r
+}
 
-	if sessionID != "" {
-		key := username + ":" + sessionID
-		if session, ok := m.sessions[key]; ok {
-			session.mu.Lock()
-			session.LastActiveAt = time.Now()
-			session.mu.Unlock()
-			return session, sessionID
+// GetAgentRunner 获取当前 AgentRunner（线程安全）
+func (m *ChatSessionManager) GetAgentRunner() *AgentRunner {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.agentRunner
+}
+
+// EnsureSession 确保会话存在并标记用户活跃
+func (m *ChatSessionManager) EnsureSession(ctx context.Context, username, sessionID string) (string, error) {
+	m.mu.Lock()
+	m.activeUsers[username] = time.Now()
+	runner := m.agentRunner
+	m.mu.Unlock()
+
+	if runner == nil {
+		// AgentRunner 未就绪时仅生成 sessionID，不实际创建 ADK session
+		if sessionID == "" {
+			sessionID = generateSessionID(username)
+		}
+		return sessionID, nil
+	}
+	return runner.EnsureSession(ctx, username, sessionID)
+}
+
+// GetHistory 从 ADK session 提取历史消息
+// 返回 user/assistant 角色的文本消息列表（过滤工具调用中间事件）
+func (m *ChatSessionManager) GetHistory(ctx context.Context, username, sessionID string) ([]HistoryMessage, error) {
+	m.mu.RLock()
+	runner := m.agentRunner
+	m.mu.RUnlock()
+
+	if runner == nil || sessionID == "" {
+		return []HistoryMessage{}, nil
+	}
+
+	resp, err := runner.sessionService.Get(ctx, &session.GetRequest{
+		AppName: AgentAppName,
+		UserID:  username,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return []HistoryMessage{}, nil // 会话不存在时返回空列表
+	}
+
+	events := resp.Session.Events()
+	if events == nil {
+		return []HistoryMessage{}, nil
+	}
+	msgs := make([]HistoryMessage, 0, events.Len())
+	for event := range events.All() {
+		// 跳过工具调用/响应事件、部分事件
+		if HasToolCall(event) || HasToolResponse(event) {
+			continue
+		}
+		if event.Partial {
+			continue
+		}
+		text := ExtractEventText(event)
+		if text == "" {
+			continue
+		}
+		role := "assistant"
+		if event.Author == "user" {
+			role = "user"
+		}
+		msgs = append(msgs, HistoryMessage{
+			Role:    role,
+			Content: text,
+		})
+	}
+	return msgs, nil
+}
+
+// DeleteSession 删除会话（用于"新会话"功能）
+func (m *ChatSessionManager) DeleteSession(ctx context.Context, username, sessionID string) error {
+	m.mu.RLock()
+	runner := m.agentRunner
+	m.mu.RUnlock()
+	if runner == nil || sessionID == "" {
+		return nil
+	}
+	return runner.DeleteSession(ctx, username, sessionID)
+}
+
+// CleanupIdle 清理空闲用户记录并同步删除其 ADK session，避免内存泄漏
+// 返回清理的用户数
+func (m *ChatSessionManager) CleanupIdle(ctx context.Context, maxIdle time.Duration) int {
+	m.mu.Lock()
+	expiredUsers := make([]string, 0)
+	now := time.Now()
+	for user, lastActive := range m.activeUsers {
+		if now.Sub(lastActive) > maxIdle {
+			expiredUsers = append(expiredUsers, user)
+			delete(m.activeUsers, user)
 		}
 	}
+	runner := m.agentRunner
+	m.mu.Unlock()
 
-	newID := generateSessionID(username)
-	key := username + ":" + newID
-	session := &ChatSession{
-		SystemPrompt: m.systemPrompt,
-		CreatedAt:    time.Now(),
-		LastActiveAt: time.Now(),
-	}
-	m.sessions[key] = session
-	return session, newID
-}
-
-// Cleanup 清理空闲会话，返回清理数量
-func (m *ChatSessionManager) Cleanup(maxIdle time.Duration) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	cleaned := 0
-	for key, session := range m.sessions {
-		if session.IsIdle(maxIdle) {
-			delete(m.sessions, key)
-			cleaned++
+	cleaned := len(expiredUsers)
+	// 同步删除 ADK session（在锁外执行，避免阻塞其他操作）
+	if runner != nil && cleaned > 0 {
+		for _, user := range expiredUsers {
+			sessions, err := runner.ListSessions(ctx, user)
+			if err != nil {
+				continue
+			}
+			for _, s := range sessions {
+				_ = runner.DeleteSession(ctx, user, s.ID())
+			}
 		}
 	}
 	return cleaned
 }
 
-func generateSessionID(username string) string {
-	return username + "_" + time.Now().Format("20060102_150405")
+// BuildUserContent 构造用户消息的 genai.Content
+func BuildUserContent(text string) *genai.Content {
+	return &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: text}},
+	}
 }

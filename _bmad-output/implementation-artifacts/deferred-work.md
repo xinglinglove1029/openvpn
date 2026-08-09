@@ -65,3 +65,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-multi-role-per-user.md`
   summary: AuthMiddleWare 每次请求都查 user_role 表加载权限码，无缓存
   evidence: LoadPermissionCodes 每次请求执行 `SELECT role_id FROM user_role WHERE user_id = ?` 然后逐角色 `LoadRolePermissionCodes`，N+1 查询模式。当前部署规模下影响不大，但高并发场景下可考虑加内存缓存（如用户角色变更时失效）。pre-existing 性能模式，本次改造未恶化。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-adkgo-ai-agent-refactor.md`
+  summary: ListUsers 工具全量返回用户列表，无分页参数，大用户量部署可能 token 爆炸
+  evidence: AIToolService.ListUsers 调用 u.All() 全量加载所有用户到 LLM 上下文，未支持 limit 参数。当前部署规模下影响不大，但 10k+ 用户的部署中会导致 LLM 请求 token 超限。建议后续在 ListUsersRequest 增加 limit/offset 参数。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-adkgo-ai-agent-refactor.md`
+  summary: AI 热切换后未通过 WebSocket 推送 ai:session_reset 事件，前端 sessionID 可能失效
+  evidence: 系统设置切换 AI 配置后，AgentRunner 被重建，旧 sessionID 在新 session.Service 中不存在。前端 AIWidget/AIAssistant 仅在发送消息失败时才知道 session 失效，未通过 WS 主动通知清空。建议后续在热切换逻辑中推送 ai:session_reset 事件，前端订阅后清空 sessionID。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-adkgo-ai-agent-refactor.md`
+  summary: WS 断连重连后未重新拉取 health 状态，可能丢失断连期间的 ai:health 状态变更
+  evidence: AIWidget/AIAssistant 仅在组件挂载时拉取一次 /ovpn/ai/health，WS 断连重连后不重新拉取。若断连期间后台自检发现状态变更并推送了 ai:health 事件，重连后前端无法收到该事件，health 状态可能停留在过期值。建议后续在 realtimeHub onopen 回调中重新拉取 health 状态。

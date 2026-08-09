@@ -781,8 +781,30 @@ func Run(info BuildInfo) {
 	StartDashboardStatsCollector(&ov, 5*time.Second)
 
 	// 初始化 AI 助手模块（可选，通过 ai.enabled 控制）
-	var chatMgr *ai.ChatSessionManager
+	// 注意：chatMgr 始终初始化，确保 AI 路由可注册，即使 LLM 客户端暂未就绪
+	// 架构：chatMgr（会话ID管理）+ aiClient（LLM 原子引用）+ agentRunner（ADK 推理循环）+ healthChecker（后台自检）
+	var chatMgr *ai.ChatSessionManager = ai.NewChatSessionManager(nil)
 	aiClient := ai.NewAtomicClient(nil)
+	// healthChecker 始终创建，确保 /ovpn/ai/health 路由可读缓存（即使 LLM 未配置也返回 unavailable）
+	healthChecker := ai.NewHealthChecker(aiClient,
+		ai.WithHealthChangeHandler(func(status ai.HealthStatus) {
+			// 状态变更时通过 WebSocket 推送 ai:health 事件
+			Bus().Publish("ai:health", map[string]any{
+				"available": status.Available,
+				"model":     status.Model,
+				"provider":  status.Provider,
+				"error":     status.Error,
+				"checkedAt": status.CheckedAt,
+			})
+		}),
+	)
+	// 注册 ai:health / ai:session_reset 主题到 WebSocket 桥接，前端可通过 notificationHub 订阅
+	WsHubInstance().SubscribeTopic("ai:health")
+	WsHubInstance().SubscribeTopic("ai:session_reset")
+
+	// 构建 AI 业务工具服务（实现 ai.ToolService 接口，注入到 Agent 工具中）
+	aiToolSvc := NewAIToolService()
+
 	if viper.GetBool("ai.enabled") {
 		var initErr error
 		llmCfg := ai.LLMConfig{
@@ -798,15 +820,34 @@ func Run(info BuildInfo) {
 			log.Printf("⚠ AI 助手初始化失败: %v（将禁用 AI 功能）", initErr)
 		} else {
 			aiClient.Set(client)
-			chatMgr = ai.NewChatSessionManager(viper.GetString("ai.system_prompt"))
+			// 构建 ADK Agent + Runner（含业务工具）
+			// operator 直接通过 ADK ToolContext.UserID() 获取（即 AgentRunner.Run 调用时传入的 usernameStr）
+			tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
+			if toolErr != nil {
+				log.Printf("⚠ AI 业务工具构建失败: %v（将仅支持对话模式）", toolErr)
+				tools = nil
+			}
+			agentRunner, agentErr := ai.NewAgentRunner(client, tools, ai.AgentConfig{
+				SystemPrompt: viper.GetString("ai.system_prompt"),
+				MaxTokens:    viper.GetInt("ai.max_tokens"),
+				Temperature:  viper.GetFloat64("ai.temperature"),
+			})
+			if agentErr != nil {
+				log.Printf("⚠ AI AgentRunner 创建失败: %v（将禁用 Agent 能力）", agentErr)
+			} else {
+				chatMgr.SetAgentRunner(agentRunner)
+				log.Printf("✅ AI AgentRunner 已就绪（工具数: %d）", len(tools))
+			}
+			// 启动后台健康自检（周期 60s，状态变更通过 WebSocket 推送）
+			healthChecker.Start()
 			// 启动会话清理定时器（每 10 分钟清理空闲超过 30 分钟的会话）
 			go func() {
 				ticker := time.NewTicker(10 * time.Minute)
 				defer ticker.Stop()
 				for range ticker.C {
-					n := chatMgr.Cleanup(30 * time.Minute)
+					n := chatMgr.CleanupIdle(context.Background(), 30*time.Minute)
 					if n > 0 {
-						log.Printf("AI 会话清理: 已清理 %d 个空闲会话", n)
+						log.Printf("AI 会话清理: 已清理 %d 个空闲用户记录", n)
 					}
 				}
 			}()
@@ -1476,20 +1517,48 @@ func Run(info BuildInfo) {
 					return
 				}
 				aiClient.Set(newClient)
-				// 更新会话系统提示词，清理旧会话
-				if chatMgr != nil {
-					newChatMgr := ai.NewChatSessionManager(req.SystemPrompt)
-					chatMgr = newChatMgr
-				} else {
-					chatMgr = ai.NewChatSessionManager(req.SystemPrompt)
+			// 重建 ADK Agent + Runner（含业务工具），热切换到新配置
+			// operator 通过 ADK ToolContext.UserID() 获取，无需 operatorResolver
+			tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
+			if toolErr != nil {
+					log.Printf("⚠ AI 业务工具重建失败: %v（将仅支持对话模式）", toolErr)
+					tools = nil
 				}
-				log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
-					req.Provider, req.Model)
-			} else {
-				// 禁用时清空 LLM 客户端
-				aiClient.Set(nil)
-				log.Printf("ℹ AI 已禁用")
-			}
+				newRunner, agentErr := ai.NewAgentRunner(newClient, tools, ai.AgentConfig{
+					SystemPrompt: req.SystemPrompt,
+					MaxTokens:    req.MaxTokens,
+					Temperature:  req.Temperature,
+				})
+				if agentErr != nil {
+					log.Printf("⚠ AI AgentRunner 重建失败: %v", agentErr)
+					c.JSON(http.StatusOK, gin.H{
+						"message": "配置已保存，但 Agent 创建失败: " + agentErr.Error(),
+					})
+					return
+				}
+				// 更新 chatMgr 的 AgentRunner 引用（旧会话上下文丢失，新会话将使用新配置）
+			chatMgr.SetAgentRunner(newRunner)
+			// 确保后台自检已启动（首次启用时启动，已启动则幂等）
+			healthChecker.Start()
+			// 热切换后旧 sessionID 在新 session.Service 中不存在，通过 WS 推送 ai:session_reset 事件
+			// 通知前端清空 sessionID 和历史消息，避免下次发消息时才知道 session 失效
+			Bus().Publish("ai:session_reset", map[string]any{
+				"reason":  "config_changed",
+				"message": "AI 配置已更新，会话已重置，请重新开始对话",
+			})
+			log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
+				req.Provider, req.Model)
+		} else {
+			// 禁用时清空 LLM 客户端和 AgentRunner
+			aiClient.Set(nil)
+			chatMgr.SetAgentRunner(nil)
+			// 禁用同样需要通知前端清空会话
+			Bus().Publish("ai:session_reset", map[string]any{
+				"reason":  "ai_disabled",
+				"message": "AI 已禁用，会话已重置",
+			})
+			log.Printf("ℹ AI 已禁用")
+		}
 
 			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", req.Provider, req.Model))
 			c.JSON(http.StatusOK, gin.H{"message": "AI 配置更新成功"})
@@ -2873,9 +2942,8 @@ func Run(info BuildInfo) {
 		})
 
 		// AI 助手路由（需要 ai:chat 权限）
-		if chatMgr != nil && aiClient.Get() != nil {
-			ai.RegisterAIRoutes(ovpn.Group("/ai", RequirePermission("ai:chat")), chatMgr, aiClient)
-		}
+		// 始终注册路由，由 handler 内部判断 LLM 客户端是否就绪
+		ai.RegisterAIRoutes(ovpn.Group("/ai", RequirePermission("ai:chat")), chatMgr, aiClient, healthChecker)
 
 		ovpn.GET("/history", RequirePermission("history:view"), func(c *gin.Context) {
 			var h History

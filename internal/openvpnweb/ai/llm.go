@@ -7,32 +7,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
+	"log"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/ollama"
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // LLMConfig LLM 客户端初始化配置
 type LLMConfig struct {
 	Provider    string  // ollama | openai | deepseek | customize
 	BaseURL     string  // 服务地址
-	APIKey      string  // API 密钥（OpenAI 兼容接口使用）
+	APIKey      string  // API 密钥
 	Model       string  // 模型名称
 	MaxTokens   int     // 最大生成 token 数
 	Temperature float64 // 温度参数
 }
 
-// LLMClient 多 Provider LLM 客户端，支持 Ollama 和 OpenAI 兼容接口
-// 可动态切换 provider，线程安全
-type LLMClient struct {
+// OpenAIModel 实现 adk model.LLM 接口，适配 OpenAI 兼容 API（DeepSeek/OpenAI/Ollama v1 API）
+type OpenAIModel struct {
 	mu          sync.RWMutex
 	provider    string
-	ollamaLLM   llms.Model
 	httpClient  *http.Client
 	baseURL     string
 	apiKey      string
@@ -41,328 +42,527 @@ type LLMClient struct {
 	temperature float64
 }
 
-// NewLLMClient 根据配置创建 LLM 客户端
-func NewLLMClient(cfg LLMConfig) (*LLMClient, error) {
-	c := &LLMClient{
-		provider:    cfg.Provider,
-		httpClient:  &http.Client{Timeout: 120 * time.Second},
+// NewLLMClient 根据配置创建 LLM 客户端（返回实现 model.LLM 接口的实例）
+func NewLLMClient(cfg LLMConfig) (*OpenAIModel, error) {
+	if cfg.BaseURL == "" {
+		return nil, fmt.Errorf("BaseURL 不能为空")
+	}
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("模型名称不能为空")
+	}
+	// 校验 MaxTokens 范围（允许 0 表示不限制，负数拒绝，超出 int32 拒绝）
+	if cfg.MaxTokens < 0 {
+		return nil, fmt.Errorf("MaxTokens 不能为负数: %d", cfg.MaxTokens)
+	}
+	if cfg.MaxTokens > math.MaxInt32 {
+		return nil, fmt.Errorf("MaxTokens 超出 int32 范围: %d", cfg.MaxTokens)
+	}
+	// 校验 Temperature 范围（OpenAI 规范 0~2）
+	if cfg.Temperature < 0 || cfg.Temperature > 2 {
+		return nil, fmt.Errorf("Temperature 超出范围 [0,2]: %f", cfg.Temperature)
+	}
+
+	c := &OpenAIModel{
+		provider: cfg.Provider,
+		// httpClient 不设置整体 Timeout，依赖调用方 context 控制总时长
+		// （流式响应可能持续较长时间，整体 Timeout 会截断流）
+		httpClient:  &http.Client{},
 		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
 		apiKey:      cfg.APIKey,
 		model:       cfg.Model,
 		maxTokens:   cfg.MaxTokens,
 		temperature: cfg.Temperature,
 	}
-
-	if err := c.initProvider(); err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 
-// initProvider 初始化底层 provider
-func (c *LLMClient) initProvider() error {
-	switch c.provider {
-	case "ollama":
-		llm, err := ollama.New(
-			ollama.WithModel(c.model),
-			ollama.WithServerURL(c.baseURL),
-		)
-		if err != nil {
-			return fmt.Errorf("初始化 Ollama 客户端失败: %w", err)
-		}
-		c.ollamaLLM = llm
-	case "openai", "deepseek", "customize":
-		// OpenAI 兼容接口通过 HTTP 调用，无需预初始化
-		if c.baseURL == "" {
-			return fmt.Errorf("BaseURL 不能为空")
-		}
-		if c.model == "" {
-			return fmt.Errorf("模型名称不能为空")
-		}
-	default:
-		return fmt.Errorf("不支持的 provider: %s", c.provider)
-	}
-	return nil
-}
-
-// Reconfigure 动态切换 provider 配置（线程安全）
-func (c *LLMClient) Reconfigure(cfg LLMConfig) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.provider = cfg.Provider
-	c.baseURL = strings.TrimRight(cfg.BaseURL, "/")
-	c.apiKey = cfg.APIKey
-	c.model = cfg.Model
-	c.maxTokens = cfg.MaxTokens
-	c.temperature = cfg.Temperature
-	c.ollamaLLM = nil // 清空旧客户端，触发重新初始化
-
-	return c.initProvider()
-}
-
 // Provider 返回当前 provider 类型
-func (c *LLMClient) Provider() string {
+func (c *OpenAIModel) Provider() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.provider
 }
 
 // Model 返回当前模型名称
-func (c *LLMClient) Model() string {
+func (c *OpenAIModel) Model() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.model
 }
 
-// IsOpenAICompatible 判断是否为 OpenAI 兼容 provider
-func (c *LLMClient) isOpenAICompatible() bool {
-	return c.provider == "openai" || c.provider == "deepseek" || c.provider == "customize"
+// Name 实现 model.LLM 接口
+func (c *OpenAIModel) Name() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.model
 }
 
-// Generate 非流式对话生成
-func (c *LLMClient) Generate(ctx context.Context,
-	messages []llms.MessageContent) (*llms.ContentResponse, error) {
-
-	c.mu.RLock()
-	provider := c.provider
-	c.mu.RUnlock()
-
-	if provider == "ollama" {
+// GenerateContent 实现 model.LLM 接口
+// 将 genai.Content 转为 OpenAI 格式，调用 API，返回 iter.Seq2 流
+func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
 		c.mu.RLock()
-		llm := c.ollamaLLM
+		baseURL := c.baseURL
+		apiKey := c.apiKey
+		modelName := c.model
+		maxTokens := c.maxTokens
+		temperature := c.temperature
+		httpClient := c.httpClient
 		c.mu.RUnlock()
-		resp, err := llm.GenerateContent(ctx, messages)
-		if err != nil {
-			return nil, fmt.Errorf("LLM 生成失败: %w", err)
+
+		// 构建 OpenAI 请求
+		messages := contentsToOpenAIMessages(req.Contents, req.Config)
+		payload := openAIChatReq{
+			Model:       modelName,
+			Messages:    messages,
+			Stream:      stream,
+			MaxTokens:   maxTokens,
+			Temperature: temperature,
 		}
-		return resp, nil
-	}
 
-	return c.openAICompatibleGenerate(ctx, messages, false, nil)
+		// 从 Config.Tools 提取 function declarations
+		if req.Config != nil && len(req.Config.Tools) > 0 {
+			payload.Tools = extractOpenAITools(req.Config.Tools)
+			payload.ToolChoice = "auto"
+		}
+
+		// system instruction
+		if req.Config != nil && req.Config.SystemInstruction != nil {
+			sysText := contentToText(req.Config.SystemInstruction)
+			if sysText != "" {
+				payload.Messages = append([]openAIMessage{
+					{Role: "system", Content: sysText},
+				}, payload.Messages...)
+			}
+		}
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			yield(nil, fmt.Errorf("序列化请求失败: %w", err))
+			return
+		}
+
+		url := baseURL + "/chat/completions"
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			yield(nil, fmt.Errorf("创建请求失败: %w", err))
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+
+		resp, err := httpClient.Do(httpReq)
+		if err != nil {
+			yield(nil, fmt.Errorf("请求 API 失败: %w", err))
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBytes, _ := io.ReadAll(resp.Body)
+			yield(nil, fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes))))
+			return
+		}
+
+		if !stream {
+			// 非流式：解析完整响应
+			llmResp, err := parseNonStreamOpenAIResponse(resp.Body)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(llmResp, nil)
+			return
+		}
+
+		// 流式：逐块解析并 yield
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 支持长行
+		var fullText strings.Builder
+		// tool_calls 跨 chunk 累积器：按 index 累积 id/name/arguments 片段
+		toolCallAccum := make(map[int]*toolCallAccumulator)
+
+		flushToolCalls := func() {
+			// 按 index 顺序组装完整的 FunctionCall 并 yield
+			if len(toolCallAccum) == 0 {
+				return
+			}
+			// 收集并排序 index
+			indices := make([]int, 0, len(toolCallAccum))
+			for idx := range toolCallAccum {
+				indices = append(indices, idx)
+			}
+			sort.Ints(indices)
+
+			content := &genai.Content{Role: "model"}
+			for _, idx := range indices {
+				acc := toolCallAccum[idx]
+				if acc.name == "" {
+					continue // 未收到 name，跳过残缺调用
+				}
+				var args map[string]any
+				if acc.arguments != "" {
+					if err := json.Unmarshal([]byte(acc.arguments), &args); err != nil {
+						log.Printf("⚠ 流式 tool_call arguments 解析失败 (tool=%s): %v, raw=%s", acc.name, err, acc.arguments)
+						// 保留原始字符串作为 args，让工具层处理
+						args = map[string]any{"_raw": acc.arguments}
+					}
+				}
+				content.Parts = append(content.Parts, &genai.Part{
+					FunctionCall: &genai.FunctionCall{
+						ID:   acc.id,
+						Name: acc.name,
+						Args: args,
+					},
+				})
+			}
+			// 清空累积器
+			toolCallAccum = make(map[int]*toolCallAccumulator)
+			if len(content.Parts) > 0 {
+				yield(&model.LLMResponse{
+					Content:      content,
+					TurnComplete: true,
+				}, nil)
+			}
+		}
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				// 先 flush 残留的 tool_calls
+				flushToolCalls()
+				// 最终事件
+				yield(&model.LLMResponse{
+					Content: &genai.Content{
+						Role:  "model",
+						Parts: []*genai.Part{{Text: fullText.String()}},
+					},
+					TurnComplete: true,
+				}, nil)
+				return
+			}
+
+			var chunk openAIStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				log.Printf("⚠ 解析 SSE chunk 失败: %v, data=%s", err, data)
+				continue
+			}
+
+			for _, choice := range chunk.Choices {
+				// 处理文本 token
+				if choice.Delta.Content != "" {
+					fullText.WriteString(choice.Delta.Content)
+					yield(&model.LLMResponse{
+						Content: &genai.Content{
+							Role:  "model",
+							Parts: []*genai.Part{{Text: choice.Delta.Content}},
+						},
+						Partial: true,
+					}, nil)
+				}
+
+				// 处理 tool_calls：按 index 累积
+				for _, tc := range choice.Delta.ToolCalls {
+					acc, ok := toolCallAccum[tc.Index]
+					if !ok {
+						acc = &toolCallAccumulator{}
+						toolCallAccum[tc.Index] = acc
+					}
+					if tc.ID != "" {
+						acc.id = tc.ID
+					}
+					if tc.Function.Name != "" {
+						acc.name = tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						acc.arguments += tc.Function.Arguments
+					}
+				}
+
+				// finish_reason=tool_calls 时 flush 累积的 tool_calls
+				if choice.FinishReason == "tool_calls" {
+					flushToolCalls()
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			yield(nil, fmt.Errorf("读取流式响应失败: %w", err))
+			return
+		}
+
+		// 如果没有收到 [DONE] 但有内容，也发送完成事件
+		// 先 flush 残留的 tool_calls
+		flushToolCalls()
+		if fullText.Len() > 0 {
+			yield(&model.LLMResponse{
+				Content: &genai.Content{
+					Role:  "model",
+					Parts: []*genai.Part{{Text: fullText.String()}},
+				},
+				TurnComplete: true,
+			}, nil)
+		}
+	}
 }
 
-// GenerateStream 流式对话生成
-func (c *LLMClient) GenerateStream(ctx context.Context,
-	messages []llms.MessageContent,
-	onToken func(token string) error) (*llms.ContentResponse, error) {
-
-	c.mu.RLock()
-	provider := c.provider
-	c.mu.RUnlock()
-
-	if provider == "ollama" {
-		c.mu.RLock()
-		llm := c.ollamaLLM
-		c.mu.RUnlock()
-		return llm.GenerateContent(ctx, messages,
-			llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-				return onToken(string(chunk))
-			}),
-		)
-	}
-
-	return c.openAICompatibleGenerate(ctx, messages, true, onToken)
+// toolCallAccumulator 流式 tool_call 跨 chunk 累积器
+type toolCallAccumulator struct {
+	id        string
+	name      string
+	arguments string
 }
 
-// openAIChatReq OpenAI 兼容接口请求体
+// sanitizeAPIErrorBody 对 API 错误响应体进行脱敏和截断
+func sanitizeAPIErrorBody(body string) string {
+	if len(body) > 200 {
+		body = body[:200] + "..."
+	}
+	// 脱敏 sk- 开头的 API Key
+	for _, prefix := range []string{"sk-", "Bearer "} {
+		for {
+			idx := strings.Index(strings.ToLower(body), strings.ToLower(prefix))
+			if idx < 0 {
+				break
+			}
+			end := idx + len(prefix) + 20
+			if end > len(body) {
+				end = len(body)
+			}
+			body = body[:idx] + prefix + "***" + body[end:]
+		}
+	}
+	return body
+}
+
+// --- OpenAI 请求/响应结构体 ---
+
 type openAIChatReq struct {
 	Model       string          `json:"model"`
 	Messages    []openAIMessage `json:"messages"`
 	Stream      bool            `json:"stream"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Temperature float64         `json:"temperature"`
+	Tools       []openAITool    `json:"tools,omitempty"`
+	ToolChoice  any             `json:"tool_choice,omitempty"`
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string             `json:"role"`
+	Content    string             `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
 }
 
-// openAIChatResp 非流式响应
+type openAITool struct {
+	Type     string             `json:"type"`
+	Function openAIToolFunction `json:"function"`
+}
+
+type openAIToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+type openAIToolCall struct {
+	Index    int              `json:"index"`
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function openAIToolCallFn `json:"function"`
+}
+
+type openAIToolCallFn struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
 type openAIChatResp struct {
 	Choices []struct {
-		Message openAIMessage `json:"message"`
+		Message      openAIMessage `json:"message"`
+		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
 }
 
-// openAIStreamChunk 流式响应分块
 type openAIStreamChunk struct {
 	Choices []struct {
-		Delta openAIMessage `json:"delta"`
+		Delta struct {
+			Content   string           `json:"content"`
+			Role      string           `json:"role"`
+			ToolCalls []openAIToolCall `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 }
 
-// messageContentToOpenAI 将 langchaingo MessageContent 转为 OpenAI 格式
-func messageContentToOpenAI(messages []llms.MessageContent) []openAIMessage {
-	result := make([]openAIMessage, 0, len(messages))
-	for _, msg := range messages {
-		role := string(msg.Role)
-		content := serializeContent(msg.Parts)
-		if role == "" {
-			role = "user"
+// --- 转换辅助函数 ---
+
+// contentsToOpenAIMessages 将 genai.Content 列表转为 OpenAI 消息格式
+// 注意：FunctionResponse 单独作为一条 tool 消息，避免覆盖同 Content 中的 Text/FunctionCall
+func contentsToOpenAIMessages(contents []*genai.Content, cfg *genai.GenerateContentConfig) []openAIMessage {
+	result := make([]openAIMessage, 0, len(contents))
+	for _, content := range contents {
+		msg := openAIMessage{Role: normalizeRole(content.Role)}
+		var textParts []string
+		var toolCalls []openAIToolCall
+		var funcResponses []openAIToolCall // 仅用于判断是否需要拆分
+
+		for _, part := range content.Parts {
+			if part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
+			if part.FunctionCall != nil {
+				args, _ := json.Marshal(part.FunctionCall.Args)
+				toolCalls = append(toolCalls, openAIToolCall{
+					ID:   part.FunctionCall.ID,
+					Type: "function",
+					Function: openAIToolCallFn{
+						Name:      part.FunctionCall.Name,
+						Arguments: string(args),
+					},
+				})
+			}
+			if part.FunctionResponse != nil {
+				// function response 单独作为 tool 消息，避免覆盖 Text/FunctionCall
+				respData, _ := json.Marshal(part.FunctionResponse.Response)
+				result = append(result, openAIMessage{
+					Role:       "tool",
+					ToolCallID: part.FunctionResponse.ID,
+					Content:    string(respData),
+				})
+				funcResponses = append(funcResponses, openAIToolCall{}) // 标记已处理
+			}
 		}
-		// 标准化角色名
-		switch strings.ToLower(role) {
-		case "human":
-			role = "user"
-		case "ai", "assistant":
-			role = "assistant"
+
+		// 仅当该 content 中无 FunctionResponse 时才追加 Text/FunctionCall 消息
+		// （FunctionResponse 已单独作为 tool 消息追加）
+		if len(funcResponses) == 0 {
+			msg.Content = strings.Join(textParts, "\n")
+			if len(toolCalls) > 0 {
+				msg.ToolCalls = toolCalls
+			}
+			result = append(result, msg)
+		} else if len(textParts) > 0 || len(toolCalls) > 0 {
+			// 同时含 FunctionResponse 和 Text/FunctionCall 的混合情况
+			// 将 Text/FunctionCall 作为单独的 assistant 消息追加
+			msg.Content = strings.Join(textParts, "\n")
+			if len(toolCalls) > 0 {
+				msg.ToolCalls = toolCalls
+			}
+			result = append(result, msg)
 		}
-		result = append(result, openAIMessage{Role: role, Content: content})
 	}
 	return result
 }
 
-// serializeContent 将 llms.ContentPart 序列化为纯文本
-func serializeContent(parts []llms.ContentPart) string {
-	var buf strings.Builder
-	for _, p := range parts {
-		switch v := p.(type) {
-		case llms.TextContent:
-			buf.WriteString(v.Text)
-		case llms.BinaryContent:
-			buf.WriteString("[Binary Content]")
-		default:
-			buf.WriteString(fmt.Sprint(v))
+func normalizeRole(role string) string {
+	switch strings.ToLower(role) {
+	case "model", "ai", "assistant":
+		return "assistant"
+	case "human", "user":
+		return "user"
+	case "system":
+		return "system"
+	default:
+		if role == "" {
+			return "user"
+		}
+		return role
+	}
+}
+
+func contentToText(content *genai.Content) string {
+	if content == nil {
+		return ""
+	}
+	var parts []string
+	for _, p := range content.Parts {
+		if p.Text != "" {
+			parts = append(parts, p.Text)
 		}
 	}
-	return buf.String()
+	return strings.Join(parts, "\n")
 }
 
-// openAICompatibleGenerate OpenAI 兼容接口调用
-func (c *LLMClient) openAICompatibleGenerate(ctx context.Context,
-	messages []llms.MessageContent,
-	stream bool,
-	onToken func(token string) error) (*llms.ContentResponse, error) {
-
-	c.mu.RLock()
-	baseURL := c.baseURL
-	apiKey := c.apiKey
-	model := c.model
-	maxTokens := c.maxTokens
-	temperature := c.temperature
-	c.mu.RUnlock()
-
-	payload := openAIChatReq{
-		Model:       model,
-		Messages:    messageContentToOpenAI(messages),
-		Stream:      stream,
-		MaxTokens:   maxTokens,
-		Temperature: temperature,
+// extractOpenAITools 从 genai.Tools 提取 OpenAI 格式的工具定义
+func extractOpenAITools(tools []*genai.Tool) []openAITool {
+	result := make([]openAITool, 0)
+	for _, t := range tools {
+		for _, fd := range t.FunctionDeclarations {
+			params := fd.ParametersJsonSchema
+			if params == nil {
+				// 默认空 schema
+				params = map[string]any{"type": "object", "properties": map[string]any{}}
+			}
+			result = append(result, openAITool{
+				Type: "function",
+				Function: openAIToolFunction{
+					Name:        fd.Name,
+					Description: fd.Description,
+					Parameters:  params,
+				},
+			})
+		}
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("序列化请求失败: %w", err)
-	}
-
-	url := baseURL + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-
-	c.mu.RLock()
-	httpClient := c.httpClient
-	c.mu.RUnlock()
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("请求 API 失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, string(respBytes))
-	}
-
-	if !stream {
-		return parseNonStreamResponse(resp.Body)
-	}
-	return parseStreamResponse(resp.Body, onToken)
+	return result
 }
 
-// parseNonStreamResponse 解析非流式响应
-func parseNonStreamResponse(body io.Reader) (*llms.ContentResponse, error) {
+// parseNonStreamOpenAIResponse 解析非流式响应
+func parseNonStreamOpenAIResponse(body io.Reader) (*model.LLMResponse, error) {
 	var resp openAIChatResp
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		return &llms.ContentResponse{}, nil
+		return &model.LLMResponse{
+			Content:      &genai.Content{Role: "model"},
+			TurnComplete: true,
+		}, nil
 	}
-	return &llms.ContentResponse{
-		Choices: []*llms.ContentChoice{
-			{
-				Content: resp.Choices[0].Message.Content,
+
+	choice := resp.Choices[0]
+	content := &genai.Content{Role: "model"}
+
+	if choice.Message.Content != "" {
+		content.Parts = append(content.Parts, &genai.Part{Text: choice.Message.Content})
+	}
+
+	// 处理 tool_calls
+	for _, tc := range choice.Message.ToolCalls {
+		var args map[string]any
+		if tc.Function.Arguments != "" {
+			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		}
+		content.Parts = append(content.Parts, &genai.Part{
+			FunctionCall: &genai.FunctionCall{
+				ID:   tc.ID,
+				Name: tc.Function.Name,
+				Args: args,
 			},
-		},
+		})
+	}
+
+	return &model.LLMResponse{
+		Content:      content,
+		TurnComplete: true,
 	}, nil
 }
 
-// parseStreamResponse 解析 SSE 流式响应
-func parseStreamResponse(body io.Reader, onToken func(token string) error) (*llms.ContentResponse, error) {
-	scanner := bufio.NewScanner(body)
-	var fullContent strings.Builder
+// --- AtomicClient 原子引用包装 ---
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
-
-		// SSE 格式: "data: {...}"
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-
-		// 流结束标记
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk openAIStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue // 忽略解析错误的分块
-		}
-
-		for _, choice := range chunk.Choices {
-			token := choice.Delta.Content
-			if token == "" {
-				continue
-			}
-			fullContent.WriteString(token)
-			if onToken != nil {
-				if err := onToken(token); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("读取流式响应失败: %w", err)
-	}
-
-	return &llms.ContentResponse{
-		Choices: []*llms.ContentChoice{
-			{Content: fullContent.String()},
-		},
-	}, nil
-}
-
-// AtomicClient LLMClient 的原子引用包装，支持运行时热替换底层 provider
+// AtomicClient model.LLM 的原子引用包装，支持运行时热替换
 type AtomicClient struct {
-	value atomic.Value // 存储 *LLMClient
+	value atomic.Value // 存储 *OpenAIModel
 }
 
 // NewAtomicClient 创建原子引用
-func NewAtomicClient(client *LLMClient) *AtomicClient {
+func NewAtomicClient(client *OpenAIModel) *AtomicClient {
 	ac := &AtomicClient{}
 	if client != nil {
 		ac.value.Store(client)
@@ -370,17 +570,17 @@ func NewAtomicClient(client *LLMClient) *AtomicClient {
 	return ac
 }
 
-// Get 获取当前 LLMClient（线程安全）
-func (ac *AtomicClient) Get() *LLMClient {
+// Get 获取当前 model.LLM（线程安全）
+func (ac *AtomicClient) Get() *OpenAIModel {
 	v := ac.value.Load()
 	if v == nil {
 		return nil
 	}
-	return v.(*LLMClient)
+	return v.(*OpenAIModel)
 }
 
-// Set 替换 LLMClient（线程安全，热切换）
-func (ac *AtomicClient) Set(client *LLMClient) {
+// Set 替换 model.LLM（线程安全，热切换）
+func (ac *AtomicClient) Set(client *OpenAIModel) {
 	ac.value.Store(client)
 }
 
@@ -400,4 +600,48 @@ func (ac *AtomicClient) Model() string {
 		return ""
 	}
 	return client.Model()
+}
+
+// Ping 发送简单消息检测连通性
+func (c *OpenAIModel) Ping(ctx context.Context) error {
+	c.mu.RLock()
+	baseURL := c.baseURL
+	apiKey := c.apiKey
+	modelName := c.model
+	httpClient := c.httpClient
+	c.mu.RUnlock()
+
+	payload := openAIChatReq{
+		Model: modelName,
+		Messages: []openAIMessage{
+			{Role: "user", Content: "ping"},
+		},
+		MaxTokens: 1,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	url := baseURL + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求 API 失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes)))
+	}
+	return nil
 }
