@@ -9,6 +9,7 @@ import MarkdownContent from '@/components/MarkdownContent';
 import { PageHeader } from '@/components/PageHeader';
 import { api } from '@/api';
 import { realtimeHub } from '@/lib/notificationHub';
+import { SSEParser } from '@/lib/sse';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -134,62 +135,50 @@ export default function AIAssistant() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('不支持流式响应');
 
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let sseSessionID = '';
+      const parser = new SSEParser();
+
+      const handleEvent = ({ event: eventType, data }: { event: string; data: string }) => {
+        switch (eventType) {
+          case 'session':
+            setSessionID(data);
+            break;
+          case 'token':
+            fullText += data;
+            setStreaming(fullText);
+            break;
+          case 'tool_call':
+            // 工具调用开始：展示"正在执行XX操作..."
+            setStreaming(`正在执行：${data}...`);
+            break;
+          case 'tool_result':
+            // 工具调用结果：展示结果摘要
+            setStreaming(`操作结果：${data}`);
+            break;
+          case 'done':
+            // 流结束，添加 assistant 消息
+            if (fullText) {
+              setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
+            }
+            setStreaming('');
+            break;
+          case 'error':
+            toast.error(data || 'AI 服务返回错误');
+            break;
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-
-        // 解析 SSE 事件
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const event of events) {
-          let eventType = '';
-          let data = '';
-
-          for (const line of event.split('\n')) {
-            if (line.startsWith('event: ')) eventType = line.slice(7);
-            else if (line.startsWith('data: ')) data += line.slice(6);
-          }
-
-          switch (eventType) {
-            case 'session':
-              sseSessionID = data;
-              setSessionID(data);
-              break;
-            case 'token':
-              fullText += data;
-              setStreaming(fullText);
-              break;
-            case 'tool_call':
-              // 工具调用开始：展示"正在执行XX操作..."
-              setStreaming(`正在执行：${data}...`);
-              break;
-            case 'tool_result':
-              // 工具调用结果：展示结果摘要
-              setStreaming(`操作结果：${data}`);
-              break;
-            case 'done':
-              // 流结束，添加 assistant 消息
-              if (fullText) {
-                setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
-              }
-              setStreaming('');
-              break;
-            case 'error':
-              toast.error(data || 'AI 服务返回错误');
-              break;
-          }
+        for (const event of parser.push(value)) {
+          handleEvent(event);
         }
       }
 
-      // 如果事件解析不完整，buffer 中剩余的数据作为最后内容
-      // (正常情况下 buffer 在 done 事件后应为空)
+      for (const event of parser.finish()) {
+        handleEvent(event);
+      }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // 用户主动中断：用 fullText 局部变量而非 streaming state（避免闭包捕获过期值）

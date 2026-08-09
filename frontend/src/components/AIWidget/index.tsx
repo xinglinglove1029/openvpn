@@ -4,6 +4,7 @@ import { useTheme } from '@/store/theme';
 import { useAuth } from '@/store/auth';
 import { api } from '@/api';
 import { realtimeHub } from '@/lib/notificationHub';
+import { SSEParser } from '@/lib/sse';
 import { Button } from '@/ui/button';
 import { Textarea } from '@/ui/textarea';
 import { Card, CardContent } from '@/ui/card';
@@ -181,57 +182,48 @@ export default function AIWidget() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('不支持流式响应');
 
-      const decoder = new TextDecoder();
-      let buffer = '';
+      const parser = new SSEParser();
+
+      const handleEvent = ({ event: eventType, data }: { event: string; data: string }) => {
+        switch (eventType) {
+          case 'session':
+            setSessionID(data);
+            break;
+          case 'token':
+            fullText += data;
+            setStreaming(fullText);
+            break;
+          case 'tool_call':
+            // 工具调用开始：展示"正在执行XX操作..."
+            setStreaming(`正在执行：${data}...`);
+            break;
+          case 'tool_result':
+            // 工具调用结果：展示结果摘要
+            setStreaming(`操作结果：${data}`);
+            break;
+          case 'done':
+            if (fullText) {
+              setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
+            }
+            setStreaming('');
+            break;
+          case 'error':
+            toast.error(data || 'AI 服务返回错误');
+            break;
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-
-        for (const event of events) {
-          let eventType = '';
-          // SSE 规范：多个 data: 行之间必须用 \n 连接，而不是直接字符串拼接
-          const dataLines: string[] = [];
-
-          for (const line of event.split('\n')) {
-            if (line.startsWith('event: ')) eventType = line.slice(7);
-            else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
-            // 兼容 "data:" 前缀后无空格的极少情况
-            else if (line.startsWith('data:')) dataLines.push(line.slice(5));
-          }
-          const data = dataLines.join('\n');
-
-          switch (eventType) {
-            case 'session':
-              setSessionID(data);
-              break;
-            case 'token':
-              fullText += data;
-              setStreaming(fullText);
-              break;
-            case 'tool_call':
-              // 工具调用开始：展示"正在执行XX操作..."
-              setStreaming(`正在执行：${data}...`);
-              break;
-            case 'tool_result':
-              // 工具调用结果：展示结果摘要
-              setStreaming(`操作结果：${data}`);
-              break;
-            case 'done':
-              if (fullText) {
-                setMessages((prev) => [...prev, { role: 'assistant', content: fullText }]);
-              }
-              setStreaming('');
-              break;
-            case 'error':
-              toast.error(data || 'AI 服务返回错误');
-              break;
-          }
+        for (const event of parser.push(value)) {
+          handleEvent(event);
         }
+      }
+
+      for (const event of parser.finish()) {
+        handleEvent(event);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
