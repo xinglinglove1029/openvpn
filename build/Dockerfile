@@ -55,7 +55,7 @@ ARG BUILDPLATFORM
 # 安装系统依赖 + Ollama。
 # Debian 提供 glibc，避免官方 Ollama 在 Alpine/musl 中出现
 # “fcntl64: symbol not found”并导致 supervisor 反复重启。
-# arm/v6、arm/v7 无官方 Ollama 二进制，创建明确失败的 stub。
+# arm/v7 无官方 Ollama 二进制，创建明确失败的 stub。
 RUN set -eux \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

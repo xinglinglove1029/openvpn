@@ -257,7 +257,7 @@ docker buildx inspect --bootstrap
 
 ```bash
 docker buildx build \
-  --platform linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7 \
+  --platform linux/amd64,linux/arm64,linux/arm/v7 \
   -f build/Dockerfile \
   -t xinglinglove1029/openvpn:latest \
   --push \
@@ -269,7 +269,7 @@ docker buildx build \
 ```bash
 VERSION=v1.0.0
 docker buildx build \
-  --platform linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7 \
+  --platform linux/amd64,linux/arm64,linux/arm/v7 \
   --build-arg VERSION=$VERSION \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
@@ -361,9 +361,10 @@ Docker 多架构镜像当前支持：
 ```text
 linux/amd64
 linux/arm64
-linux/arm/v6
 linux/arm/v7
 ```
+
+`debian:bookworm-slim` 未提供 `linux/arm/v6` 清单，因此 Docker 镜像不再构建 armv6；GoReleaser 仍会发布 armv6 独立二进制压缩包。
 
 GoReleaser 服务端压缩包当前支持：
 

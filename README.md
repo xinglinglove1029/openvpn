@@ -30,7 +30,7 @@
 - **RBAC 权限模型**：管理员/审计员/普通用户三级角色，权限码细粒度到按钮级（如 `client:kill`、`firewall:create`）
 - **MFA + 多主题**：TOTP 动态口令登录、4 套主题切换、深色玻璃拟态界面
 - **多平台客户端分发**：Windows / macOS / Linux / iOS / Android 客户端安装包统一管理，用户自助下载
-- **多架构 Docker 镜像**：amd64 / arm64 / armv6 / armv7 一键覆盖，树莓派/家庭服务器/NAS 通用
+- **多架构 Docker 镜像**：amd64 / arm64 / armv7 一键覆盖，树莓派/家庭服务器/NAS 通用
 - **零依赖单体部署**：Go 1.25 + go:embed，前端构建产物嵌入二进制，单文件即可运行完整 Web 管理台
 
 ---
@@ -384,7 +384,7 @@ frontend/src/
 | 进程管理 | supervisor |
 | VPN | OpenVPN 2.6 |
 | 防火墙 | nftables |
-| 多架构 | linux/amd64, linux/arm64, linux/arm/v6, linux/arm/v7 |
+| 多架构 | linux/amd64, linux/arm64, linux/arm/v7 |
 
 ---
 
@@ -508,7 +508,7 @@ docker build -f build/Dockerfile -t xinglinglove1029/openvpn:latest .
 docker buildx create --name openvpn-builder --use
 docker buildx inspect --bootstrap
 docker buildx build \
-  --platform linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7 \
+  --platform linux/amd64,linux/arm64,linux/arm/v7 \
   -f build/Dockerfile \
   -t xinglinglove1029/openvpn:latest \
   --push \
