@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -62,11 +63,9 @@ func NewLLMClient(cfg LLMConfig) (*OpenAIModel, error) {
 		return nil, fmt.Errorf("Temperature 超出范围 [0,2]: %f", cfg.Temperature)
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	// 容器内 Ollama 只监听 IPv4。Go 在部分环境中会优先将 localhost
-	// 解析为 IPv6 ::1，导致明明服务可用却连接被拒绝。
-	if cfg.Provider == "ollama" && (baseURL == "http://localhost:11434" || baseURL == "https://localhost:11434") {
-		baseURL = strings.Replace(baseURL, "localhost", "127.0.0.1", 1)
+	baseURL, err := NormalizeBaseURL(cfg.Provider, cfg.BaseURL)
+	if err != nil {
+		return nil, err
 	}
 
 	c := &OpenAIModel{
@@ -81,6 +80,31 @@ func NewLLMClient(cfg LLMConfig) (*OpenAIModel, error) {
 		temperature: cfg.Temperature,
 	}
 	return c, nil
+}
+
+// NormalizeBaseURL keeps each provider on its OpenAI-compatible API root.
+// Ollama serves that compatibility API at /v1, while older configurations often omit it.
+func NormalizeBaseURL(provider, rawURL string) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+	if baseURL == "" {
+		return "", fmt.Errorf("Base URL is required")
+	}
+	if !strings.EqualFold(strings.TrimSpace(provider), "ollama") {
+		return baseURL, nil
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("Invalid Base URL: %q", rawURL)
+	}
+	// Containers commonly bind Ollama to IPv4 only; avoid localhost resolving to ::1.
+	if parsed.Hostname() == "localhost" && parsed.Port() == "11434" {
+		parsed.Host = "127.0.0.1:11434"
+	}
+	// Preserve an explicit prefix, but turn a bare Ollama host into /v1.
+	if parsed.Path == "" || parsed.Path == "/" {
+		parsed.Path = "/v1"
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 // Provider 返回当前 provider 类型

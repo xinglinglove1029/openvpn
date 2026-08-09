@@ -695,6 +695,9 @@ func Run(info BuildInfo) {
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
 	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
 	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &GroupRole{})
+	if err := MigrateAISettings(db); err != nil {
+		panic(fmt.Errorf("initialize AI provider settings: %w", err))
+	}
 
 	// 初始化 IP 归属地解析器
 	if err := InitIPRegion(""); err != nil {
@@ -805,15 +808,18 @@ func Run(info BuildInfo) {
 	// 构建 AI 业务工具服务（实现 ai.ToolService 接口，注入到 Agent 工具中）
 	aiToolSvc := NewAIToolService(&ov)
 
-	if viper.GetBool("ai.enabled") {
+	startupAICfg, startupAIConfigErr := activeAIConfig(db)
+	if startupAIConfigErr != nil {
+		log.Printf("AI provider configuration unavailable: %v", startupAIConfigErr)
+	} else if startupAICfg.Enabled {
 		var initErr error
 		llmCfg := ai.LLMConfig{
-			Provider:    viper.GetString("ai.provider"),
-			BaseURL:     viper.GetString("ai.base_url"),
-			APIKey:      viper.GetString("ai.api_key"),
-			Model:       viper.GetString("ai.model"),
-			MaxTokens:   viper.GetInt("ai.max_tokens"),
-			Temperature: viper.GetFloat64("ai.temperature"),
+			Provider:    startupAICfg.Provider,
+			BaseURL:     startupAICfg.BaseURL,
+			APIKey:      startupAICfg.APIKey,
+			Model:       startupAICfg.Model,
+			MaxTokens:   startupAICfg.MaxTokens,
+			Temperature: startupAICfg.Temperature,
 		}
 		client, initErr := ai.NewLLMClient(llmCfg)
 		if initErr != nil {
@@ -828,9 +834,9 @@ func Run(info BuildInfo) {
 				tools = nil
 			}
 			agentRunner, agentErr := ai.NewAgentRunner(client, tools, ai.AgentConfig{
-				SystemPrompt: viper.GetString("ai.system_prompt"),
-				MaxTokens:    viper.GetInt("ai.max_tokens"),
-				Temperature:  viper.GetFloat64("ai.temperature"),
+				SystemPrompt: startupAICfg.SystemPrompt,
+				MaxTokens:    startupAICfg.MaxTokens,
+				Temperature:  startupAICfg.Temperature,
 			})
 			if agentErr != nil {
 				log.Printf("⚠ AI AgentRunner 创建失败: %v（将禁用 Agent 能力）", agentErr)
@@ -852,7 +858,7 @@ func Run(info BuildInfo) {
 				}
 			}()
 			log.Printf("✅ AI 助手已就绪（Provider: %s, 模型: %s, 端点: %s）",
-				viper.GetString("ai.provider"), viper.GetString("ai.model"), viper.GetString("ai.base_url"))
+				startupAICfg.Provider, startupAICfg.Model, startupAICfg.BaseURL)
 		}
 	}
 
@@ -1162,7 +1168,7 @@ func Run(info BuildInfo) {
 
 		// 公开接口：返回 AI 助手启用状态（无需鉴权，供前端登录前/登录后控制菜单显示）
 		public.GET("/ai-status", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"enabled": viper.GetBool("ai.enabled")})
+			c.JSON(http.StatusOK, gin.H{"enabled": isAIEnabled(db)})
 		})
 	}
 
@@ -1427,144 +1433,57 @@ func Run(info BuildInfo) {
 		// AI 设置接口
 		// GET  /ovpn/settings/ai - 获取 AI 配置（需要 settings:ai 权限，API Key 脱敏）
 		ovpn.GET("/settings/ai", RequirePermission("settings:ai"), func(c *gin.Context) {
-			aiCfg := AIConfig{
-				Enabled:      viper.GetBool("ai.enabled"),
-				Provider:     viper.GetString("ai.provider"),
-				BaseURL:      viper.GetString("ai.base_url"),
-				APIKey:       viper.GetString("ai.api_key"),
-				Model:        viper.GetString("ai.model"),
-				SystemPrompt: viper.GetString("ai.system_prompt"),
-				MaxTokens:    viper.GetInt("ai.max_tokens"),
-				Temperature:  viper.GetFloat64("ai.temperature"),
+			response, err := aiSettingsAPIResponse(db, aiClient.Provider(), aiClient.Model())
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "load AI settings failed: " + err.Error()})
+				return
 			}
-			// 脱敏 API Key
-			if len(aiCfg.APIKey) > 8 {
-				aiCfg.APIKey = aiCfg.APIKey[:4] + "****" + aiCfg.APIKey[len(aiCfg.APIKey)-4:]
-			} else if aiCfg.APIKey != "" {
-				aiCfg.APIKey = "****"
-			}
-			// 返回当前 provider 和连接状态
-			provider := aiClient.Provider()
-			model := aiClient.Model()
-			c.JSON(http.StatusOK, gin.H{
-				"config":   aiCfg,
-				"provider": provider,
-				"model":    model,
-			})
+			c.JSON(http.StatusOK, response)
 		})
 
-		// PUT /ovpn/settings/ai - 保存 AI 配置（需要 settings:ai:update 权限）
 		ovpn.PUT("/settings/ai", RequirePermission("settings:ai:update"), func(c *gin.Context) {
-			var req AIConfig
+			var req AISettingsRequest
 			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "请求参数无效", "detail": err.Error()})
+				c.JSON(http.StatusBadRequest, gin.H{"message": "invalid AI settings request", "detail": err.Error()})
+				return
+			}
+			saved, err := saveAISettings(db, req)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "save AI settings failed: " + err.Error()})
 				return
 			}
 
-			// 验证 provider
-			validProviders := map[string]bool{"ollama": true, "openai": true, "deepseek": true, "customize": true}
-			if req.Provider != "" && !validProviders[req.Provider] {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"message": "不支持的 provider，可选值: ollama, openai, deepseek, customize",
-				})
-				return
-			}
-
-			// 如果 API Key 是脱敏值（包含****），保留原有值
-			if strings.Contains(req.APIKey, "****") {
-				req.APIKey = viper.GetString("ai.api_key")
-			}
-
-			// 设置默认值
-			if req.MaxTokens <= 0 {
-				req.MaxTokens = 4096
-			}
-			if req.Temperature <= 0 {
-				req.Temperature = 0.7
-			}
-
-			// 保存到 viper
-			viper.Set("ai.enabled", req.Enabled)
-			viper.Set("ai.provider", req.Provider)
-			viper.Set("ai.base_url", req.BaseURL)
-			viper.Set("ai.api_key", req.APIKey)
-			viper.Set("ai.model", req.Model)
-			viper.Set("ai.system_prompt", req.SystemPrompt)
-			viper.Set("ai.max_tokens", req.MaxTokens)
-			viper.Set("ai.temperature", req.Temperature)
-
-			if err := viper.WriteConfig(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "配置保存失败: " + err.Error()})
-				return
-			}
-
-			// 重新初始化 LLM 客户端
-			if req.Enabled {
-				llmCfg := ai.LLMConfig{
-					Provider:    req.Provider,
-					BaseURL:     req.BaseURL,
-					APIKey:      req.APIKey,
-					Model:       req.Model,
-					MaxTokens:   req.MaxTokens,
-					Temperature: req.Temperature,
-				}
-				newClient, err := ai.NewLLMClient(llmCfg)
+			if saved.Enabled {
+				newClient, err := ai.NewLLMClient(ai.LLMConfig{Provider: saved.Provider, BaseURL: saved.BaseURL, APIKey: saved.APIKey, Model: saved.Model, MaxTokens: saved.MaxTokens, Temperature: saved.Temperature})
 				if err != nil {
-					log.Printf("⚠ AI 配置更新后初始化失败: %v", err)
-					c.JSON(http.StatusOK, gin.H{
-						"message": "配置已保存，但 AI 服务初始化失败: " + err.Error(),
-					})
+					log.Printf("AI settings saved but client initialization failed: %v", err)
+					c.JSON(http.StatusOK, gin.H{"message": "AI settings saved, but service initialization failed: " + err.Error()})
 					return
 				}
 				aiClient.Set(newClient)
-				// 配置热切换后立即刷新健康缓存，避免设置页和 WebSocket
-				// 在下一个 60 秒周期前继续显示旧模型/旧错误。
 				healthChecker.CheckOnce(c.Request.Context())
-				// 重建 ADK Agent + Runner（含业务工具），热切换到新配置
-				// operator 通过 ADK ToolContext.UserID() 获取，无需 operatorResolver
 				tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
 				if toolErr != nil {
-					log.Printf("⚠ AI 业务工具重建失败: %v（将仅支持对话模式）", toolErr)
+					log.Printf("AI business tools rebuild failed: %v", toolErr)
 					tools = nil
 				}
-				newRunner, agentErr := ai.NewAgentRunner(newClient, tools, ai.AgentConfig{
-					SystemPrompt: req.SystemPrompt,
-					MaxTokens:    req.MaxTokens,
-					Temperature:  req.Temperature,
-				})
+				newRunner, agentErr := ai.NewAgentRunner(newClient, tools, ai.AgentConfig{SystemPrompt: saved.SystemPrompt, MaxTokens: saved.MaxTokens, Temperature: saved.Temperature})
 				if agentErr != nil {
-					log.Printf("⚠ AI AgentRunner 重建失败: %v", agentErr)
-					c.JSON(http.StatusOK, gin.H{
-						"message": "配置已保存，但 Agent 创建失败: " + agentErr.Error(),
-					})
+					log.Printf("AI runner rebuild failed: %v", agentErr)
+					c.JSON(http.StatusOK, gin.H{"message": "AI settings saved, but agent initialization failed: " + agentErr.Error()})
 					return
 				}
-				// 更新 chatMgr 的 AgentRunner 引用（旧会话上下文丢失，新会话将使用新配置）
 				chatMgr.SetAgentRunner(newRunner)
-				// 确保后台自检已启动（首次启用时启动，已启动则幂等）
 				healthChecker.Start()
-				// 热切换后旧 sessionID 在新 session.Service 中不存在，通过 WS 推送 ai:session_reset 事件
-				// 通知前端清空 sessionID 和历史消息，避免下次发消息时才知道 session 失效
-				Bus().Publish("ai:session_reset", map[string]any{
-					"reason":  "config_changed",
-					"message": "AI 配置已更新，会话已重置，请重新开始对话",
-				})
-				log.Printf("✅ AI 配置已更新，LLM 已热切换（Provider: %s, 模型: %s）",
-					req.Provider, req.Model)
+				Bus().Publish("ai:session_reset", map[string]any{"reason": "config_changed", "message": "AI configuration changed; start a new chat"})
+				log.Printf("AI settings hot-switched (provider=%s, model=%s)", saved.Provider, saved.Model)
 			} else {
-				// 禁用时清空 LLM 客户端和 AgentRunner
 				aiClient.Set(nil)
 				chatMgr.SetAgentRunner(nil)
-				// 禁用同样需要通知前端清空会话
-				Bus().Publish("ai:session_reset", map[string]any{
-					"reason":  "ai_disabled",
-					"message": "AI 已禁用，会话已重置",
-				})
-				log.Printf("ℹ AI 已禁用")
+				Bus().Publish("ai:session_reset", map[string]any{"reason": "ai_disabled", "message": "AI assistant disabled"})
 			}
-
-			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", req.Provider, req.Model))
-			c.JSON(http.StatusOK, gin.H{"message": "AI 配置更新成功"})
+			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", saved.Provider, saved.Model))
+			c.JSON(http.StatusOK, gin.H{"message": "AI settings updated"})
 		})
 
 		// 客户端安装包管理
@@ -2122,7 +2041,7 @@ func Run(info BuildInfo) {
 				"lastLoginAt":  u.LastLoginAt,
 				"createdAt":    u.CreatedAt,
 				"updatedAt":    u.UpdatedAt,
-				"aiEnabled":    viper.GetBool("ai.enabled"),
+				"aiEnabled":    isAIEnabled(db),
 			})
 		})
 

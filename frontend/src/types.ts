@@ -75,11 +75,25 @@ export interface SettingsResponse {
   };
 }
 
+export type AIProvider = 'ollama' | 'deepseek' | 'openai' | 'customize';
+
+/** 单个 AI 供应商的非敏感配置。API Key 只通过 PUT 写入。 */
+export interface AIProviderProfile {
+  provider: AIProvider;
+  base_url: string;
+  model: string;
+  system_prompt: string;
+  max_tokens: number;
+  temperature: number;
+  has_api_key: boolean;
+}
+
 /** AI 配置详情（来自 /settings/ai 独立接口） */
 export interface AISettingsResponse {
+  // 保留 config/provider/model，兼容现有调用方。
   config: {
     enabled: boolean;
-    provider: string;
+    provider: AIProvider;
     base_url: string;
     api_key: string;
     model: string;
@@ -87,8 +101,21 @@ export interface AISettingsResponse {
     max_tokens: number;
     temperature: number;
   };
-  provider: string;   // 当前激活的 provider
-  model: string;      // 当前激活的模型
+  profiles: AIProviderProfile[];
+  active_provider: AIProvider;
+  provider: string;
+  model: string;
+}
+
+export interface AIProviderProfileSave extends Omit<AIProviderProfile, 'has_api_key'> {
+  api_key?: string;
+  clear_api_key?: boolean;
+}
+
+export interface AISettingsSaveRequest {
+  enabled: boolean;
+  active_provider: AIProvider;
+  profiles: AIProviderProfileSave[];
 }
 
 export interface OnlineClient {

@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff, Bot, Zap, AlertCircle, Loader2 } from 'lucide-react';
 
 import { api } from '@/api';
-import type { SettingsResponse, AISettingsResponse } from '@/types';
+import type { AIProvider, AIProviderProfile, AISettingsResponse, AISettingsSaveRequest, SettingsResponse } from '@/types';
 import { messageOf } from '@/lib/format';
 import { useAuth } from '@/store/auth';
 import {
@@ -1366,13 +1366,39 @@ function ClientPackagesTab() {
 
 /* ========== AI 助手设置 Tab ========== */
 
-const PROVIDER_OPTIONS: { value: string; label: string; hint: string }[] = [
-  // Ollama 使用 OpenAI 兼容 /v1/chat/completions；容器内仅监听 IPv4，避免 localhost 解析到 ::1。
-  { value: 'ollama', label: 'Ollama (内置小模型)', hint: 'http://127.0.0.1:11434' },
-  { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1' },
-  { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1' },
-  { value: 'customize', label: '自定义 (OpenAI 兼容)', hint: 'https://your-api.com/v1' },
+const PROVIDER_OPTIONS: { value: AIProvider; label: string; hint: string; defaultModel: string }[] = [
+  { value: 'ollama', label: 'Ollama（内置小模型）', hint: 'http://127.0.0.1:11434/v1', defaultModel: 'qwen2.5:7b' },
+  { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-v4-flash' },
+  { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1', defaultModel: 'gpt-5.4-mini' },
+  { value: 'customize', label: '自定义（OpenAI 兼容）', hint: 'https://your-api.com/v1', defaultModel: '' },
 ];
+
+const MODEL_PRESETS: Record<AIProvider, string[]> = {
+  ollama: ['qwen2.5:7b', 'qwen3:8b', 'qwen2.5:14b', 'llama3.2:3b'],
+  deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  openai: ['gpt-5.4-mini', 'gpt-5.4', 'gpt-4.1-mini'],
+  customize: [],
+};
+
+type AIProfileForm = AIProviderProfile & { apiKey: string; clearAPIKey: boolean };
+type AIProfileForms = Record<AIProvider, AIProfileForm>;
+
+function createDefaultProfiles(): AIProfileForms {
+  return Object.fromEntries(PROVIDER_OPTIONS.map((option) => [
+    option.value,
+    {
+      provider: option.value,
+      base_url: option.hint,
+      model: option.defaultModel,
+      system_prompt: '',
+      max_tokens: 4096,
+      temperature: 0.7,
+      has_api_key: false,
+      apiKey: '',
+      clearAPIKey: false,
+    },
+  ])) as AIProfileForms;
+}
 
 function AISettingsTab({ canSave }: { canSave: boolean }) {
   const { reloadAiEnabled } = useAuth();
@@ -1380,75 +1406,46 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-
-  // 表单状态
   const [enabled, setEnabled] = useState(false);
-  const [provider, setProvider] = useState('ollama');
-  const [baseURL, setBaseURL] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('');
-  const [systemPrompt, setSystemPrompt] = useState('');
-  const [maxTokens, setMaxTokens] = useState(4096);
-  const [temperature, setTemperature] = useState(0.7);
+  const [provider, setProvider] = useState<AIProvider>('ollama');
+  const [profiles, setProfiles] = useState<AIProfileForms>(createDefaultProfiles);
   const [showKey, setShowKey] = useState(false);
-
-  // 当前运行状态
   const [currentProvider, setCurrentProvider] = useState('');
   const [currentModel, setCurrentModel] = useState('');
+  const [originalSnapshot, setOriginalSnapshot] = useState('');
 
-  // 原始值（用于判断是否有修改）
-  const [originals, setOriginals] = useState<Record<string, string>>({});
+  const activeProfile = profiles[provider];
+  const snapshot = useMemo(() => JSON.stringify({ enabled, provider, profiles }), [enabled, provider, profiles]);
+  const isDirty = snapshot !== originalSnapshot;
+  const presetModels = MODEL_PRESETS[provider];
+  const selectedModel = presetModels.includes(activeProfile.model) ? activeProfile.model : '__custom__';
 
-  const isDirty = useMemo(() => {
-    return (
-      String(enabled) !== originals.enabled ||
-      provider !== originals.provider ||
-      baseURL !== originals.baseURL ||
-      apiKey !== originals.apiKey ||
-      model !== originals.model ||
-      systemPrompt !== originals.systemPrompt ||
-      String(maxTokens) !== originals.maxTokens ||
-      String(temperature) !== originals.temperature
-    );
-  }, [enabled, provider, baseURL, apiKey, model, systemPrompt, maxTokens, temperature, originals]);
+  const updateProfile = (changes: Partial<AIProfileForm>) => {
+    setProfiles((current) => ({ ...current, [provider]: { ...current[provider], ...changes } }));
+  };
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
-
-  useEffect(() => {
-    // 切换 provider 时自动填充默认 BaseURL
-    const opt = PROVIDER_OPTIONS.find((o) => o.value === provider);
-    if (opt && (!baseURL || baseURL === PROVIDER_OPTIONS.find((o) => o.value === originals.provider)?.hint)) {
-      setBaseURL(opt.hint);
-    }
-  }, [provider]);
+  useEffect(() => { void loadConfig(); }, []);
 
   async function loadConfig() {
     setLoading(true);
     try {
       const data = await api.get<AISettingsResponse>('/ovpn/settings/ai');
-      const c = data.config;
-      setEnabled(c.enabled);
-      setProvider(c.provider || 'ollama');
-      setBaseURL(c.base_url || '');
-      setApiKey(c.api_key || '');
-      setModel(c.model || '');
-      setSystemPrompt(c.system_prompt || '');
-      setMaxTokens(c.max_tokens || 4096);
-      setTemperature(c.temperature || 0.7);
+      const nextProfiles = createDefaultProfiles();
+      for (const saved of data.profiles || []) {
+        nextProfiles[saved.provider] = { ...nextProfiles[saved.provider], ...saved, apiKey: '', clearAPIKey: false };
+      }
+      // Backward compatibility for servers that only return the legacy active config.
+      if (!data.profiles?.length && data.config?.provider) {
+        const legacy = data.config;
+        nextProfiles[legacy.provider] = { ...nextProfiles[legacy.provider], ...legacy, has_api_key: Boolean(legacy.api_key), apiKey: '', clearAPIKey: false };
+      }
+      const activeProvider = data.active_provider || data.config?.provider || 'ollama';
+      setEnabled(data.config?.enabled ?? false);
+      setProvider(activeProvider);
+      setProfiles(nextProfiles);
       setCurrentProvider(data.provider || '');
       setCurrentModel(data.model || '');
-      setOriginals({
-        enabled: String(c.enabled),
-        provider: c.provider || 'ollama',
-        baseURL: c.base_url || '',
-        apiKey: c.api_key || '',
-        model: c.model || '',
-        systemPrompt: c.system_prompt || '',
-        maxTokens: String(c.max_tokens || 4096),
-        temperature: String(c.temperature || 0.7),
-      });
+      setOriginalSnapshot(JSON.stringify({ enabled: data.config?.enabled ?? false, provider: activeProvider, profiles: nextProfiles }));
     } catch (err) {
       toast.error('加载 AI 配置失败: ' + messageOf(err));
     } finally {
@@ -1456,24 +1453,41 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
     }
   }
 
+  function handleProviderChange(nextProvider: string) {
+    setProvider(nextProvider as AIProvider);
+    setShowKey(false);
+    setTestResult(null);
+  }
+
   async function handleSave() {
     if (!isDirty || saving) return;
+    if (!activeProfile.model.trim()) {
+      toast.error('请填写模型名称后再保存');
+      return;
+    }
     setSaving(true);
     setTestResult(null);
     try {
-      await api.putJson<{ message: string }>('/ovpn/settings/ai', {
+      const request: AISettingsSaveRequest = {
         enabled,
-        provider,
-        base_url: baseURL,
-        api_key: apiKey,
-        model,
-        system_prompt: systemPrompt,
-        max_tokens: maxTokens,
-        temperature,
-      });
+        active_provider: provider,
+        profiles: PROVIDER_OPTIONS.map((option) => {
+          const profile = profiles[option.value];
+          return {
+            provider: option.value,
+            base_url: profile.base_url,
+            model: profile.model,
+            system_prompt: profile.system_prompt,
+            max_tokens: profile.max_tokens,
+            temperature: profile.temperature,
+            ...(profile.apiKey ? { api_key: profile.apiKey } : {}),
+            ...(profile.clearAPIKey ? { clear_api_key: true } : {}),
+          };
+        }),
+      };
+      await api.putJson<{ message: string }>('/ovpn/settings/ai', request);
       toast.success('AI 配置已保存');
       await loadConfig();
-      // 刷新前端 AI 启用状态，控制 AI 菜单和悬浮按钮的显示/隐藏
       await reloadAiEnabled();
     } catch (err) {
       toast.error('保存失败: ' + messageOf(err));
@@ -1483,16 +1497,15 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
   }
 
   async function handleTest() {
+    if (isDirty) {
+      toast.error('请先保存当前 AI 配置，再测试连接');
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     try {
-      // 设置页测试必须强制探测当前热切换后的客户端，不能复用上一轮健康缓存。
       const data = await api.get<{ available: boolean; model: string; error?: string }>('/ovpn/ai/health?refresh=true');
-      if (data.available) {
-        setTestResult({ ok: true, message: `连接成功！当前模型: ${data.model}` });
-      } else {
-        setTestResult({ ok: false, message: data.error || '连接失败，请检查配置' });
-      }
+      setTestResult(data.available ? { ok: true, message: `连接成功！当前模型: ${data.model}` } : { ok: false, message: data.error || '连接失败，请检查配置' });
     } catch (err) {
       setTestResult({ ok: false, message: '请求失败: ' + messageOf(err) });
     } finally {
@@ -1501,282 +1514,57 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
   }
 
   function handleReset() {
-    setEnabled(originals.enabled === 'true');
-    setProvider(originals.provider);
-    setBaseURL(originals.baseURL);
-    setApiKey(originals.apiKey);
-    setModel(originals.model);
-    setSystemPrompt(originals.systemPrompt);
-    setMaxTokens(Number(originals.maxTokens) || 4096);
-    setTemperature(Number(originals.temperature) || 0.7);
+    if (!originalSnapshot) return;
+    const original = JSON.parse(originalSnapshot) as { enabled: boolean; provider: AIProvider; profiles: AIProfileForms };
+    setEnabled(original.enabled);
+    setProvider(original.provider);
+    setProfiles(original.profiles);
+    setShowKey(false);
     setTestResult(null);
   }
 
   if (loading) {
-    return (
-      <Card>
-        <CardContent className="p-8 text-center text-muted-foreground">正在加载 AI 配置…</CardContent>
-      </Card>
-    );
+    return <Card><CardContent className="p-8 text-center text-muted-foreground">正在加载 AI 配置…</CardContent></Card>;
   }
 
   return (
     <div className="space-y-6">
-      {/* 当前状态卡片 */}
       {enabled && currentProvider && (
         <Card className="border-[color-mix(in_srgb,var(--accent)_20%,transparent)]">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-full',
-                  'bg-[color-mix(in_srgb,var(--success)_15%,transparent)]',
-                )}
-              >
-                <Zap className="h-4 w-4 text-[var(--success)]" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">
-                  AI 助手运行中
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {currentProvider} · {currentModel}
-                  </span>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleTest}
-                disabled={testing}
-                className="ml-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-60"
-              >
-                {testing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                测试连接
-              </button>
-            </div>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--success)_15%,transparent)]"><Zap className="h-4 w-4 text-[var(--success)]" /></div>
+            <p className="text-sm font-medium">AI 助手运行中 <span className="ml-2 text-xs text-muted-foreground">{currentProvider} · {currentModel}</span></p>
+            <button type="button" onClick={handleTest} disabled={testing || isDirty} className="ml-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-60">
+              {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} 测试连接
+            </button>
           </CardContent>
         </Card>
       )}
 
-      {/* 测试结果提示 */}
-      {testResult && (
-        <div
-          className={cn(
-            'flex items-start gap-2 rounded-lg border p-3 text-sm',
-            testResult.ok
-              ? 'border-[color-mix(in_srgb,var(--success)_30%,transparent)] bg-[color-mix(in_srgb,var(--success)_8%,transparent)] text-[var(--success)]'
-              : 'border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] text-[var(--danger)]',
-          )}
-        >
-          {testResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />}
-          <span>{testResult.message}</span>
-        </div>
-      )}
+      {testResult && <div className={cn('flex items-start gap-2 rounded-lg border p-3 text-sm', testResult.ok ? 'border-[color-mix(in_srgb,var(--success)_30%,transparent)] bg-[color-mix(in_srgb,var(--success)_8%,transparent)] text-[var(--success)]' : 'border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] text-[var(--danger)]')}>
+        {testResult.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />}<span>{testResult.message}</span>
+      </div>}
 
       <Card>
-        <CardHeader>
-          <CardTitle>AI 助手配置</CardTitle>
-          <CardDescription>
-            配置大模型接入，支持 Ollama 内置模型、DeepSeek、OpenAI 及任意 OpenAI 兼容接口
-          </CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>AI 助手配置</CardTitle><CardDescription>每个供应商都独立保存地址、模型、提示词、参数和密钥；切换时会自动恢复。</CardDescription></CardHeader>
         <CardContent className="space-y-6">
-          {/* 启用开关 */}
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div>
-              <p className="font-medium">启用 AI 助手</p>
-              <p className="text-sm text-muted-foreground">开启后 AI 助手菜单和功能将可用</p>
-            </div>
-            <Switch checked={enabled} onCheckedChange={setEnabled} />
-          </div>
-
+          <div className="flex items-center justify-between rounded-lg border p-4"><div><p className="font-medium">启用 AI 助手</p><p className="text-sm text-muted-foreground">开启后 AI 助手菜单和功能将可用</p></div><Switch checked={enabled} onCheckedChange={setEnabled} /></div>
           <Separator />
-
-          {/* Provider 选择 */}
-          <div className="space-y-2">
-            <Label>模型提供商</Label>
-            <Select value={provider} onValueChange={setProvider}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择提供商" />
-              </SelectTrigger>
-              <SelectContent>
-                {PROVIDER_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Ollama 适合离线/内网环境；DeepSeek 性价比高；OpenAI 生态完善；自定义支持任意兼容接口
-            </p>
-          </div>
+          <div className="space-y-2"><Label>模型提供商</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择提供商" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">Ollama 使用 OpenAI 兼容接口（/v1/chat/completions）；切换供应商不会覆盖其他供应商配置。</p></div>
 
           <div className="grid gap-6 sm:grid-cols-2">
-            {/* Base URL */}
-            <div className="space-y-2">
-              <Label htmlFor="ai-base-url">接口地址 (Base URL)</Label>
-              <Input
-                id="ai-base-url"
-                value={baseURL}
-                onChange={(e) => setBaseURL(e.target.value)}
-                placeholder={
-                  provider === 'ollama'
-                    ? 'http://127.0.0.1:11434'
-                    : provider === 'deepseek'
-                    ? 'https://api.deepseek.com/v1'
-                    : provider === 'openai'
-                    ? 'https://api.openai.com/v1'
-                    : 'https://your-api.com/v1'
-                }
-              />
-              <p className="text-xs text-muted-foreground">
-                {provider === 'ollama' && '容器内已集成 ollama，默认 http://127.0.0.1:11434；首次启动自动拉取模型'}
-                {provider === 'deepseek' && 'DeepSeek API 地址'}
-                {provider === 'openai' && 'OpenAI API 地址'}
-                {provider === 'customize' && '你的 OpenAI 兼容 API 地址'}
-              </p>
-            </div>
-
-            {/* API Key */}
-            <div className="space-y-2">
-              <Label htmlFor="ai-api-key">API 密钥</Label>
-              <div className="relative">
-                <Input
-                  id="ai-api-key"
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={provider === 'ollama' ? 'Ollama 无需 API Key' : 'sk-xxx...'}
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(!showKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  tabIndex={-1}
-                >
-                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                密钥以密文保存，加载时自动脱敏（显示为 ****）
-              </p>
-            </div>
-
-            {/* Model */}
-            <div className="space-y-2">
-              <Label htmlFor="ai-model">模型名称</Label>
-              <Input
-                id="ai-model"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={
-                  provider === 'ollama'
-                    ? 'qwen2.5:7b'
-                    : provider === 'deepseek'
-                    ? 'deepseek-chat'
-                    : 'gpt-4o-mini'
-                }
-              />
-            </div>
-
-            {/* Max Tokens */}
-            <div className="space-y-2">
-              <Label htmlFor="ai-max-tokens">最大 Token 数</Label>
-              <Input
-                id="ai-max-tokens"
-                type="number"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value) || 4096)}
-                min={256}
-                max={128000}
-              />
-            </div>
+            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /><p className="text-xs text-muted-foreground">{provider === 'ollama' ? '默认 http://127.0.0.1:11434/v1，避免请求到错误的 /chat/completions。' : '支持自定义兼容接口地址。'}</p></div>
+            <div className="space-y-2"><div className="flex items-center justify-between"><Label htmlFor="ai-api-key">API 密钥</Label>{activeProfile.has_api_key && !activeProfile.clearAPIKey && <span className="text-xs text-[var(--success)]">已安全保存</span>}</div><div className="relative"><Input id="ai-api-key" type={showKey ? 'text' : 'password'} value={activeProfile.apiKey} onChange={(event) => updateProfile({ apiKey: event.target.value, clearAPIKey: false })} placeholder={provider === 'ollama' ? 'Ollama 默认不需要 API Key' : activeProfile.has_api_key ? '留空将保留已保存的密钥' : 'sk-xxx...'} className="pr-10" /><button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div>{activeProfile.has_api_key && <button type="button" className="text-xs text-muted-foreground underline" onClick={() => updateProfile({ clearAPIKey: !activeProfile.clearAPIKey })}>{activeProfile.clearAPIKey ? '取消清除密钥' : '清除已保存密钥'}</button>}<p className="text-xs text-muted-foreground">密钥加密存入数据库，读取时不会返回明文。</p></div>
+            <div className="space-y-2"><Label>模型名称</Label><Select value={selectedModel} onValueChange={(value) => updateProfile({ model: value === '__custom__' ? '' : value })}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{presetModels.map((preset) => <SelectItem key={preset} value={preset}>{preset}</SelectItem>)}<SelectItem value="__custom__">自定义模型…</SelectItem></SelectContent></Select>{selectedModel === '__custom__' && <Input value={activeProfile.model} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="输入任意兼容模型 ID" className="mt-2" />}</div>
+            <div className="space-y-2"><Label htmlFor="ai-max-tokens">最大 Token 数</Label><Input id="ai-max-tokens" type="number" value={activeProfile.max_tokens} onChange={(event) => updateProfile({ max_tokens: Number(event.target.value) || 4096 })} min={256} max={128000} /></div>
           </div>
-
-          {/* Temperature */}
-          <div className="space-y-2">
-            <Label>温度参数: {temperature.toFixed(1)}</Label>
-            <input
-              type="range"
-              min={0}
-              max={2}
-              step={0.1}
-              value={temperature}
-              onChange={(e) => setTemperature(Number(e.target.value))}
-              className="w-full accent-[var(--accent)]"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>精确 (0)</span>
-              <span>平衡 (1)</span>
-              <span>创意 (2)</span>
-            </div>
-          </div>
-
+          <div className="space-y-2"><Label>温度参数：{activeProfile.temperature.toFixed(1)}</Label><input type="range" min={0} max={2} step={0.1} value={activeProfile.temperature} onChange={(event) => updateProfile({ temperature: Number(event.target.value) })} className="w-full accent-[var(--accent)]" /><div className="flex justify-between text-xs text-muted-foreground"><span>精确（0）</span><span>平衡（1）</span><span>创意（2）</span></div></div>
           <Separator />
-
-          {/* System Prompt */}
-          <div className="space-y-2">
-            <Label htmlFor="ai-system-prompt">系统提示词</Label>
-            <Textarea
-              id="ai-system-prompt"
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="你是 OpenVPN 运维控制台的智能助手..."
-              rows={4}
-            />
-            <p className="text-xs text-muted-foreground">
-              定义 AI 的角色和行为，修改后新会话生效
-            </p>
-          </div>
+          <div className="space-y-2"><Label htmlFor="ai-system-prompt">系统提示词</Label><Textarea id="ai-system-prompt" value={activeProfile.system_prompt} onChange={(event) => updateProfile({ system_prompt: event.target.value })} placeholder="你是 OpenVPN 运维控制台的智能助手…" rows={4} /><p className="text-xs text-muted-foreground">该提示词也按供应商独立保存。</p></div>
         </CardContent>
       </Card>
 
-      {/* 操作按钮 */}
-      {canSave && (
-        <div
-          className={cn(
-            'sticky bottom-4 z-30 flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md',
-            'border-[color-mix(in_srgb,var(--accent)_30%,transparent)]',
-            'bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)]',
-          )}
-        >
-          <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground w-full sm:w-auto">
-            {isDirty ? (
-              <span>
-                有未保存的<strong className="text-[var(--accent)]"> AI 配置</strong>修改
-              </span>
-            ) : (
-              <span>AI 配置已是最新</span>
-            )}
-          </div>
-          <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
-            <button
-              type="button"
-              onClick={handleReset}
-              disabled={!isDirty || saving}
-              className="secondary-action"
-            >
-              <RotateCcw className="h-4 w-4" />
-              撤销
-            </button>
-            <GlowButton
-              type="button"
-              onClick={handleSave}
-              loading={saving}
-              loadingText="保存中…"
-              disabled={!isDirty}
-              icon={<Save className="h-4 w-4" />}
-            >
-              保存 AI 配置
-            </GlowButton>
-          </div>
-        </div>
-      )}
+      {canSave && <div className={cn('sticky bottom-4 z-30 flex flex-col items-center justify-between gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md sm:flex-row', 'border-[color-mix(in_srgb,var(--accent)_30%,transparent)]', 'bg-[color-mix(in_srgb,var(--surface-strong)_82%,transparent)]')}><div className="w-full px-1 text-sm text-muted-foreground sm:w-auto">{isDirty ? <>有未保存的<strong className="text-[var(--accent)]"> AI 配置</strong>修改</> : 'AI 配置已是最新'}</div><div className="flex w-full flex-col items-center gap-2 sm:w-auto sm:flex-row"><button type="button" onClick={handleReset} disabled={!isDirty || saving} className="secondary-action"><RotateCcw className="h-4 w-4" />撤销</button><GlowButton type="button" onClick={handleSave} loading={saving} loadingText="保存中…" disabled={!isDirty} icon={<Save className="h-4 w-4" />}>保存 AI 配置</GlowButton></div></div>}
     </div>
   );
 }

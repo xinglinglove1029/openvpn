@@ -51,8 +51,8 @@ func TestNewLLMClientNormalizesOllamaLocalhost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLLMClient() error: %v", err)
 	}
-	if client.baseURL != "http://127.0.0.1:11434" {
-		t.Fatalf("baseURL = %q, want IPv4 loopback", client.baseURL)
+	if client.baseURL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("baseURL = %q, want IPv4 loopback with /v1", client.baseURL)
 	}
 
 	custom, err := NewLLMClient(LLMConfig{
