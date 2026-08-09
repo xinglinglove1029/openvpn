@@ -77,3 +77,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-adkgo-ai-agent-refactor.md`
   summary: WS 断连重连后未重新拉取 health 状态，可能丢失断连期间的 ai:health 状态变更
   evidence: AIWidget/AIAssistant 仅在组件挂载时拉取一次 /ovpn/ai/health，WS 断连重连后不重新拉取。若断连期间后台自检发现状态变更并推送了 ai:health 事件，重连后前端无法收到该事件，health 状态可能停留在过期值。建议后续在 realtimeHub onopen 回调中重新拉取 health 状态。
+- source_spec: `spec-ai-settings-database-only-storage.md`
+  summary: 旧 config.json 可能仍保留历史明文 AI API Key，当前需求要求 AI 运行时完全不再读取或写入该文件。
+  evidence: 数据库切换后为避免再次依赖只读 JSON，补丁未执行旧文件清理；需由运维在确认数据库配置后删除旧字段或轮换密钥。
+- source_spec: `spec-ai-settings-database-only-storage.md`
+  summary: 存在非 ID=1 或缺失活动 provider profile 的损坏 AI 数据库时，初始化不会自动修复。
+  evidence: `MigrateAISettings` 保持已有 SQLite 数据不覆盖的原则，异常数据库仍会在后续读取活动配置时返回错误。

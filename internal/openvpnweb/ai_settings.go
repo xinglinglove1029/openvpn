@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gavintan/gopkg/aes"
-	"github.com/spf13/viper"
 	"gorm.io/gorm"
 )
 
@@ -17,6 +16,8 @@ const (
 	AIProviderOpenAI    = "openai"
 	AIProviderCustomize = "customize"
 )
+
+const defaultAISystemPrompt = "你是 OpenVPN 运维控制台的智能助手，具备全面的运维管理能力。\n\n你可以调用工具直接执行以下操作：\n\n## 用户管理\n- 创建用户（自动生成 .ovpn 客户端配置 + 发送开通邮件，与页面流程完全一致）\n- 列出用户、更新用户（启用/禁用、设有效期、固定IP）、删除用户\n- 重置密码、重置 MFA、绑定角色\n\n## VPN 客户端管理\n- 列出所有客户端配置、删除客户端（吊销证书）\n- 更新 CCD 配置（设置固定IP、推送路由）\n- 重新生成客户端配置、生成新客户端\n- 查看在线客户端、断开连接\n\n## 防火墙管理\n- 列出防火墙规则、拉黑/解黑 IP、设置/移除限速\n\n## 证书管理\n- 查看 CA 证书、CRL 吊销列表、已签发客户端证书的状态和有效期\n\n## 通知渠道管理\n- 列出/创建/更新/删除通知渠道（邮件、Webhook 等）\n\n## 审计与监控\n- 查询操作审计日志（按模块、操作类型筛选）\n- 获取系统仪表盘摘要（服务器状态、用户统计、在线数、风险项）\n\n## 绝对重要的使用原则（违反会导致误报）\n1. **禁止幻觉**：不要在工具未实际调用、或工具调用失败时告诉用户\"已执行完成\"。如果不确定工具是否真的执行了，必须先调用工具确认。\n2. **等待工具返回**：每次需要执行操作时，必须真正发出 function_call 并等待工具返回结果，再基于工具的实际返回内容（success 字段、message 字段）回答用户。\n3. **失败必须明示**：工具返回 success=false 或返回 error 时，必须明确告知用户失败原因，不得掩饰为\"已成功\"。\n4. **复合任务必须分别调用**：当用户要求\"先删除再创建\"或\"同时做多件事\"时，对每个动作都要单独调用对应工具；不要因为意图里同时含多个动作就只调用一部分。\n5. **查询用工具**：用户问\"系统有多少用户\"\"当前谁在线\"等问题，必须先调用工具获取实时数据，不要凭印象回答。\n6. **执行敏感操作前简要说明**：删除用户、断开连接等动作前先一句话告知用户。\n7. **权限不足直接告知**：工具返回权限不足时，直接告诉用户需要相应权限，不要反复重试。\n8. **用简洁专业的中文回答**"
 
 var aiProviders = map[string]struct{}{
 	AIProviderOllama: {}, AIProviderDeepSeek: {}, AIProviderOpenAI: {}, AIProviderCustomize: {},
@@ -103,7 +104,7 @@ func defaultAIProfile(provider string) AIProviderProfile {
 	provider = normalizeAIProvider(provider)
 	profile := AIProviderProfile{
 		Provider: provider, MaxTokens: 4096, Temperature: 0.7,
-		SystemPrompt: viper.GetString("ai.system_prompt"),
+		SystemPrompt: defaultAISystemPrompt,
 	}
 	switch provider {
 	case AIProviderOllama:
@@ -161,68 +162,33 @@ func decryptAIKey(ciphertext string) (string, error) {
 	return aes.AesDecrypt(ciphertext, secretKey)
 }
 
-// clearLegacyAIAPIKey removes the plaintext key from the legacy Viper source.
-// It is intentionally safe to retry after a previous migration completed in SQLite.
-func clearLegacyAIAPIKey() error {
-	if viper.GetString("ai.api_key") == "" {
-		return nil
-	}
-	viper.Set("ai.api_key", "")
-	if viper.ConfigFileUsed() == "" {
-		return nil
-	}
-	if err := viper.WriteConfig(); err != nil {
-		return fmt.Errorf("??? AI ??????: %w", err)
-	}
-	return nil
-}
-
-// MigrateAISettings creates the tables and imports the old Viper ai.* settings only once.
+// MigrateAISettings initializes the SQLite-backed AI settings schema.
+// AI settings are database-only; legacy configuration values are deliberately ignored.
 func MigrateAISettings(database *gorm.DB) error {
 	if err := database.AutoMigrate(&AISettings{}, &AIProviderProfile{}); err != nil {
 		return err
 	}
-	var count int64
-	if err := database.Model(&AISettings{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		// If a previous run committed the database transaction but could not write the
-		// legacy file, finish the plaintext-key cleanup without overwriting profiles.
-		return clearLegacyAIAPIKey()
-	}
 
-	provider := normalizeAIProvider(viper.GetString("ai.provider"))
-	legacy := AIProviderProfileInput{
-		Provider: provider, BaseURL: viper.GetString("ai.base_url"), APIKey: viper.GetString("ai.api_key"),
-		Model: viper.GetString("ai.model"), SystemPrompt: viper.GetString("ai.system_prompt"),
-		MaxTokens: viper.GetInt("ai.max_tokens"), Temperature: viper.GetFloat64("ai.temperature"),
-	}
-	if legacy.Model == "" {
-		legacy.Model = defaultAIProfile(provider).Model
-	}
-	legacy, err := normalizeAIProfileInput(legacy)
-	if err != nil {
-		return fmt.Errorf("???? AI ????: %w", err)
-	}
-	encrypted, err := encryptAIKey(legacy.APIKey)
-	if err != nil {
-		return err
-	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&AISettings{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			// Existing SQLite settings are authoritative and must never be overwritten.
+			return nil
+		}
 
-	err = database.Transaction(func(tx *gorm.DB) error {
-		profile := AIProviderProfile{Provider: legacy.Provider, BaseURL: legacy.BaseURL, APIKeyEncrypted: encrypted, Model: legacy.Model, SystemPrompt: legacy.SystemPrompt, MaxTokens: legacy.MaxTokens, Temperature: legacy.Temperature}
+		profile := defaultAIProfile(AIProviderOllama)
 		if err := tx.Create(&profile).Error; err != nil {
 			return err
 		}
-		return tx.Create(&AISettings{ID: 1, Enabled: viper.GetBool("ai.enabled"), ActiveProvider: provider}).Error
+		return tx.Create(&AISettings{
+			ID:             1,
+			Enabled:        false,
+			ActiveProvider: AIProviderOllama,
+		}).Error
 	})
-	if err != nil {
-		return err
-	}
-
-	// The legacy JSON is only a migration source. Never leave a newly-migrated API key there.
-	return clearLegacyAIAPIKey()
 }
 
 func loadAISettings(database *gorm.DB) (AISettings, []AIProviderProfile, error) {

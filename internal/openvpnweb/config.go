@@ -179,15 +179,6 @@ func initConfig() {
 	viper.SetDefault("openvpn.ovpn_push_dns2", "2001:4860:4860::8888")
 
 	// AI 助手配置
-	viper.SetDefault("ai.enabled", false)
-	viper.SetDefault("ai.provider", "ollama")
-	viper.SetDefault("ai.base_url", "http://127.0.0.1:11434/v1")
-	viper.SetDefault("ai.api_key", "")
-	viper.SetDefault("ai.model", "qwen2.5:7b")
-	viper.SetDefault("ai.system_prompt", "你是 OpenVPN 运维控制台的智能助手，具备全面的运维管理能力。\n\n你可以调用工具直接执行以下操作：\n\n## 用户管理\n- 创建用户（自动生成 .ovpn 客户端配置 + 发送开通邮件，与页面流程完全一致）\n- 列出用户、更新用户（启用/禁用、设有效期、固定IP）、删除用户\n- 重置密码、重置 MFA、绑定角色\n\n## VPN 客户端管理\n- 列出所有客户端配置、删除客户端（吊销证书）\n- 更新 CCD 配置（设置固定IP、推送路由）\n- 重新生成客户端配置、生成新客户端\n- 查看在线客户端、断开连接\n\n## 防火墙管理\n- 列出防火墙规则、拉黑/解黑 IP、设置/移除限速\n\n## 证书管理\n- 查看 CA 证书、CRL 吊销列表、已签发客户端证书的状态和有效期\n\n## 通知渠道管理\n- 列出/创建/更新/删除通知渠道（邮件、Webhook 等）\n\n## 审计与监控\n- 查询操作审计日志（按模块、操作类型筛选）\n- 获取系统仪表盘摘要（服务器状态、用户统计、在线数、风险项）\n\n## 绝对重要的使用原则（违反会导致误报）\n1. **禁止幻觉**：不要在工具未实际调用、或工具调用失败时告诉用户\"已执行完成\"。如果不确定工具是否真的执行了，必须先调用工具确认。\n2. **等待工具返回**：每次需要执行操作时，必须真正发出 function_call 并等待工具返回结果，再基于工具的实际返回内容（success 字段、message 字段）回答用户。\n3. **失败必须明示**：工具返回 success=false 或返回 error 时，必须明确告知用户失败原因，不得掩饰为\"已成功\"。\n4. **复合任务必须分别调用**：当用户要求\"先删除再创建\"或\"同时做多件事\"时，对每个动作都要单独调用对应工具；不要因为意图里同时含多个动作就只调用一部分。\n5. **查询用工具**：用户问\"系统有多少用户\"\"当前谁在线\"等问题，必须先调用工具获取实时数据，不要凭印象回答。\n6. **执行敏感操作前简要说明**：删除用户、断开连接等动作前先一句话告知用户。\n7. **权限不足直接告知**：工具返回权限不足时，直接告诉用户需要相应权限，不要反复重试。\n8. **用简洁专业的中文回答**")
-	viper.SetDefault("ai.max_tokens", 4096)
-	viper.SetDefault("ai.temperature", 0.7)
-
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
 	viper.SetConfigPermissions(0600)

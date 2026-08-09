@@ -1247,6 +1247,14 @@ func Run(info BuildInfo) {
 
 			// 根据用户 Tab 权限过滤返回数据
 			// admin 用户直接返回全量数据
+			// AI configuration is stored in SQLite only, never in the legacy JSON file.
+			aiSettings, err := aiSettingsAPIResponse(db, "", "")
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "load AI settings failed"})
+				return
+			}
+			conf.AI = aiSettings.Config
+
 			if isAdmin, _ := c.Get("isAdmin"); isAdmin == true {
 				c.JSON(http.StatusOK, conf)
 				return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,9 +29,10 @@ func newTestAIDatabase(t *testing.T, filename string) *gorm.DB {
 	return database
 }
 
-func configureLegacyAI(t *testing.T, provider, baseURL, apiKey, model string) {
+func configureConflictingLegacyAI(t *testing.T, provider, baseURL, apiKey, model string) {
 	t.Helper()
 	viper.Reset()
+	t.Cleanup(viper.Reset)
 	viper.Set("ai.enabled", true)
 	viper.Set("ai.provider", provider)
 	viper.Set("ai.base_url", baseURL)
@@ -41,13 +43,64 @@ func configureLegacyAI(t *testing.T, provider, baseURL, apiKey, model string) {
 	viper.Set("ai.temperature", 0.4)
 }
 
-func TestMigrateAISettingsMigratesOnceAndProtectsKey(t *testing.T) {
+func TestMigrateAISettingsCreatesDisabledOllamaDefaultWithoutViper(t *testing.T) {
+	configureConflictingLegacyAI(t, AIProviderDeepSeek, "https://legacy.example/v1", "legacy-secret", "legacy-model")
+	database := newTestAIDatabase(t, ":memory:")
+
+	if err := MigrateAISettings(database); err != nil {
+		t.Fatalf("MigrateAISettings() error: %v", err)
+	}
+
+	var settings AISettings
+	if err := database.First(&settings, 1).Error; err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.Enabled || settings.ActiveProvider != AIProviderOllama {
+		t.Fatalf("settings = %#v, want disabled Ollama defaults", settings)
+	}
+
+	var profile AIProviderProfile
+	if err := database.Where("provider = ?", AIProviderOllama).First(&profile).Error; err != nil {
+		t.Fatalf("load default Ollama profile: %v", err)
+	}
+	if profile.BaseURL != "http://127.0.0.1:11434/v1" || profile.Model != "qwen2.5:7b" {
+		t.Fatalf("default profile = %#v, want Ollama database defaults", profile)
+	}
+	if profile.APIKeyEncrypted != "" {
+		t.Fatalf("default profile unexpectedly contains an API key: %q", profile.APIKeyEncrypted)
+	}
+	if profile.SystemPrompt != defaultAISystemPrompt {
+		t.Fatal("default profile did not preserve the built-in system prompt")
+	}
+	if viper.GetString("ai.api_key") != "legacy-secret" {
+		t.Fatalf("AI initialization changed legacy Viper state: %q", viper.GetString("ai.api_key"))
+	}
+}
+
+func TestMigrateAISettingsPreservesExistingDatabaseConfiguration(t *testing.T) {
 	previousSecret := secretKey
 	secretKey = "test-secret-key"
-	t.Cleanup(func() { secretKey = previousSecret; viper.Reset() })
-	configureLegacyAI(t, AIProviderDeepSeek, "https://api.deepseek.com/v1", "legacy-secret", "deepseek-v4-flash")
+	t.Cleanup(func() { secretKey = previousSecret })
+	configureConflictingLegacyAI(t, AIProviderOllama, "http://legacy.invalid/v1", "legacy-secret", "legacy-model")
 
 	database := newTestAIDatabase(t, ":memory:")
+	if err := database.AutoMigrate(&AISettings{}, &AIProviderProfile{}); err != nil {
+		t.Fatalf("prepare tables: %v", err)
+	}
+	encrypted, err := encryptAIKey("database-secret")
+	if err != nil {
+		t.Fatalf("encrypt test key: %v", err)
+	}
+	if err := database.Create(&AIProviderProfile{
+		Provider: AIProviderDeepSeek, BaseURL: "https://api.deepseek.com/v1", APIKeyEncrypted: encrypted,
+		Model: "deepseek-v4-pro", SystemPrompt: "database prompt", MaxTokens: 8192, Temperature: 0.3,
+	}).Error; err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+	if err := database.Create(&AISettings{ID: 1, Enabled: true, ActiveProvider: AIProviderDeepSeek}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+
 	if err := MigrateAISettings(database); err != nil {
 		t.Fatalf("MigrateAISettings() error: %v", err)
 	}
@@ -56,39 +109,75 @@ func TestMigrateAISettingsMigratesOnceAndProtectsKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activeAIConfig() error: %v", err)
 	}
-	if config.Provider != AIProviderDeepSeek || config.APIKey != "legacy-secret" {
-		t.Fatalf("migrated config = %#v, want DeepSeek legacy profile", config)
+	if config.Provider != AIProviderDeepSeek || config.Model != "deepseek-v4-pro" || config.APIKey != "database-secret" {
+		t.Fatalf("existing database configuration was overwritten: %#v", config)
 	}
-	var profile AIProviderProfile
-	if err := database.Where("provider = ?", AIProviderDeepSeek).First(&profile).Error; err != nil {
-		t.Fatalf("load migrated profile: %v", err)
+	var profileCount int64
+	if err := database.Model(&AIProviderProfile{}).Count(&profileCount).Error; err != nil {
+		t.Fatalf("count profiles: %v", err)
 	}
-	if profile.APIKeyEncrypted == "legacy-secret" || profile.APIKeyEncrypted == "" {
-		t.Fatalf("API key was not encrypted in SQLite: %q", profile.APIKeyEncrypted)
+	if profileCount != 1 {
+		t.Fatalf("existing database initialization added profiles: got %d, want 1", profileCount)
 	}
-	if viper.GetString("ai.api_key") != "" {
-		t.Fatalf("legacy Viper API key was not cleared")
+	if viper.GetString("ai.model") != "legacy-model" {
+		t.Fatalf("AI initialization changed legacy Viper state: %q", viper.GetString("ai.model"))
+	}
+}
+
+func TestSaveAISettingsDoesNotDependOnLegacyViper(t *testing.T) {
+	previousSecret := secretKey
+	secretKey = "test-secret-key"
+	t.Cleanup(func() { secretKey = previousSecret; viper.Reset() })
+
+	legacyPath := filepath.Join(t.TempDir(), "config.json")
+	legacyJSON := []byte(`{"ai":{"enabled":true,"provider":"ollama","base_url":"http://legacy.invalid/v1","api_key":"legacy-secret","model":"legacy-model"}}`)
+	if err := os.WriteFile(legacyPath, legacyJSON, 0o400); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	viper.Reset()
+	viper.SetConfigFile(legacyPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("read legacy config: %v", err)
 	}
 
-	viper.Set("ai.model", "should-not-overwrite")
-	viper.Set("ai.api_key", "must-not-remain-in-viper")
+	database := newTestAIDatabase(t, ":memory:")
 	if err := MigrateAISettings(database); err != nil {
-		t.Fatalf("idempotent MigrateAISettings() error: %v", err)
+		t.Fatalf("MigrateAISettings() error: %v", err)
 	}
-	if viper.GetString("ai.api_key") != "" {
-		t.Fatal("idempotent migration did not retry legacy plaintext API key cleanup")
+	if _, err := saveAISettings(database, AISettingsRequest{
+		Enabled: true, ActiveProvider: AIProviderDeepSeek,
+		Profiles: []AIProviderProfileInput{{
+			Provider: AIProviderDeepSeek, BaseURL: "https://api.deepseek.com/v1", APIKey: "database-secret",
+			Model: "deepseek-v4-flash", SystemPrompt: "database prompt", MaxTokens: 4096, Temperature: 0.7,
+		}},
+	}); err != nil {
+		t.Fatalf("saveAISettings() error: %v", err)
 	}
-	config, err = activeAIConfig(database)
-	if err != nil || config.Model != "deepseek-v4-flash" {
-		t.Fatalf("migration overwrote stored profile: config=%#v err=%v", config, err)
+
+	contents, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read legacy config after save: %v", err)
+	}
+	if string(contents) != string(legacyJSON) {
+		t.Fatalf("saving AI settings wrote legacy config: got %q, want %q", contents, legacyJSON)
+	}
+	if viper.GetString("ai.api_key") != "legacy-secret" {
+		t.Fatalf("saving AI settings changed legacy Viper state: %q", viper.GetString("ai.api_key"))
+	}
+
+	config, err := activeAIConfig(database)
+	if err != nil {
+		t.Fatalf("activeAIConfig() error: %v", err)
+	}
+	if config.Provider != AIProviderDeepSeek || config.APIKey != "database-secret" {
+		t.Fatalf("saved database configuration = %#v", config)
 	}
 }
 
 func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) {
 	previousSecret := secretKey
 	secretKey = "test-secret-key"
-	t.Cleanup(func() { secretKey = previousSecret; viper.Reset() })
-	configureLegacyAI(t, AIProviderOllama, "http://127.0.0.1:11434", "", "qwen2.5:7b")
+	t.Cleanup(func() { secretKey = previousSecret })
 	path := filepath.Join(t.TempDir(), "ai.db")
 	database := newTestAIDatabase(t, path)
 	if err := MigrateAISettings(database); err != nil {
