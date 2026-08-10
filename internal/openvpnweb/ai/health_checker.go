@@ -5,7 +5,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -23,79 +22,48 @@ type HealthStatus struct {
 // 由 server.go 注入，用于通过 WebSocket 推送 ai:health 事件。
 type HealthStatusChangeHandler func(status HealthStatus)
 
-// HealthChecker 后台静默自检器
-// 周期性检测 LLM 可达性，缓存结果，状态变更时通过回调通知。
-// 设计目标：用户打开 AI 助手时无需等待 HTTP health 请求，直接读缓存；
-// 服务异常时主动通过 WebSocket 推送，前端弹出提示。
+// HealthChecker caches AI service state. It never performs scheduled provider probes.
+// Only an administrator's explicit connection test calls the model provider, preventing background token usage.
 type HealthChecker struct {
 	mu        sync.RWMutex
 	client    *AtomicClient
-	interval  time.Duration
 	onChange  HealthStatusChangeHandler
 	cached    HealthStatus
 	hasCached bool
-	stopCh    chan struct{}
-	stoppedCh chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
-	started   atomic.Bool // 标记是否已启动，用于 Stop 时区分未启动场景
 }
 
-// HealthCheckerOption 自检器配置选项
+// HealthCheckerOption configures a health checker.
 type HealthCheckerOption func(*HealthChecker)
 
-// WithHealthCheckInterval 设置检查间隔（默认 60s）
-func WithHealthCheckInterval(d time.Duration) HealthCheckerOption {
-	return func(h *HealthChecker) {
-		if d > 0 {
-			h.interval = d
-		}
-	}
-}
-
-// WithHealthChangeHandler 设置状态变更回调
+// WithHealthChangeHandler registers a callback that receives status updates.
 func WithHealthChangeHandler(handler HealthStatusChangeHandler) HealthCheckerOption {
 	return func(h *HealthChecker) {
 		h.onChange = handler
 	}
 }
 
-// NewHealthChecker 创建后台自检器
-// client: LLM 客户端原子引用（支持热切换，每次检查都读最新值）
+// NewHealthChecker creates a cache-backed status checker. CheckOnce is reserved for an explicit connection test.
 func NewHealthChecker(client *AtomicClient, opts ...HealthCheckerOption) *HealthChecker {
-	h := &HealthChecker{
-		client:    client,
-		interval:  60 * time.Second,
-		stopCh:    make(chan struct{}),
-		stoppedCh: make(chan struct{}),
-	}
+	h := &HealthChecker{client: client}
 	for _, opt := range opts {
 		opt(h)
 	}
 	return h
 }
 
-// Start 启动后台自检 goroutine（幂等，重复调用安全）
-// 用 sync.Once 确保即使多次调用也只启动一个 loop goroutine
-func (h *HealthChecker) Start() {
-	h.startOnce.Do(func() {
-		h.started.Store(true)
-		go h.loop()
-	})
-}
-
-// Stop 停止后台自检（阻塞等待 goroutine 退出）
-// 用 sync.Once 防止 double close channel panic；
-// 若从未启动则直接返回，避免永久阻塞
-func (h *HealthChecker) Stop() {
-	if !h.started.Load() {
-		return // 从未启动，直接返回
+// SetConfiguredStatus updates cached status from configuration only; it does not call the model provider.
+// A configured client is marked ready until an administrator explicitly tests connectivity.
+func (h *HealthChecker) SetConfiguredStatus() HealthStatus {
+	status := HealthStatus{CheckedAt: time.Now()}
+	if client := h.client.Get(); client != nil {
+		status.Available = true
+		status.Provider = client.Provider()
+		status.Model = client.Model()
+	} else {
+		status.Error = "AI service is not configured"
 	}
-	h.stopOnce.Do(func() { close(h.stopCh) })
-	select {
-	case <-h.stoppedCh:
-	case <-time.After(35 * time.Second): // 兜底超时，避免 CheckOnce 阻塞导致 Stop 卡死
-	}
+	h.updateCache(status)
+	return status
 }
 
 // GetCachedStatus 获取缓存的健康状态（无缓存时返回零值）
@@ -112,47 +80,6 @@ func (h *HealthChecker) CheckOnce(ctx context.Context) HealthStatus {
 	return status
 }
 
-// loop 后台周期检查主循环
-func (h *HealthChecker) loop() {
-	defer close(h.stoppedCh)
-	// panic 防护：避免 CheckOnce 内部 panic 导致整个进程崩溃
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("⚠ HealthChecker loop panic: %v", r)
-		}
-	}()
-
-	// 启动时立即检查一次
-	h.CheckOnce(context.Background())
-
-	ticker := time.NewTicker(h.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-h.stopCh:
-			return
-		case <-ticker.C:
-			// 使用可被 stopCh 取消的 context，避免 Stop 时等待完整超时
-			ctx, cancel := context.WithCancel(context.Background())
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				defer cancel()
-				h.CheckOnce(ctx)
-			}()
-			select {
-			case <-h.stopCh:
-				cancel() // 通知 doCheck 取消
-				return
-			case <-done:
-			}
-		}
-	}
-}
-
-// doCheck 执行一次真实健康检查
-// 超时根据 provider 动态调整：外部 API 30s，Ollama 15s
 func (h *HealthChecker) doCheck(ctx context.Context) HealthStatus {
 	client := h.client.Get()
 	if client == nil {
@@ -189,8 +116,8 @@ func (h *HealthChecker) doCheck(ctx context.Context) HealthStatus {
 	return status
 }
 
-// updateCache 更新缓存并在状态变更时触发回调
-// onChange 异步执行，避免阻塞健康检查循环
+// updateCache writes cached state and calls the change handler only when availability or the error changes.
+// The handler runs asynchronously so status updates never block the current request.
 func (h *HealthChecker) updateCache(newStatus HealthStatus) {
 	h.mu.Lock()
 	oldStatus := h.cached
@@ -204,7 +131,7 @@ func (h *HealthChecker) updateCache(newStatus HealthStatus) {
 	if changed && onChange != nil {
 		log.Printf("ℹ AI 健康状态变更: available=%v → %v（model=%s, error=%s）",
 			oldStatus.Available, newStatus.Available, newStatus.Model, newStatus.Error)
-		// 异步执行回调，避免阻塞 loop
+		// Run the callback asynchronously to avoid blocking the current request.
 		go onChange(newStatus)
 	}
 }

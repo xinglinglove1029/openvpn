@@ -848,8 +848,8 @@ func Run(info BuildInfo) {
 				chatMgr.SetAgentRunner(agentRunner)
 				log.Printf("✅ AI AgentRunner 已就绪（工具数: %d）", len(tools))
 			}
-			// 启动后台健康自检（周期 60s，状态变更通过 WebSocket 推送）
-			healthChecker.Start()
+			// Cache the configured state; provider calls happen only during explicit connection tests.
+			healthChecker.SetConfiguredStatus()
 			// 启动会话清理定时器（每 10 分钟清理空闲超过 30 分钟的会话）
 			go func() {
 				ticker := time.NewTicker(10 * time.Minute)
@@ -1473,7 +1473,6 @@ func Run(info BuildInfo) {
 					return
 				}
 				aiClient.Set(newClient)
-				healthChecker.CheckOnce(c.Request.Context())
 				tools, toolErr := ai.BuildBusinessTools(aiToolSvc)
 				if toolErr != nil {
 					log.Printf("AI business tools rebuild failed: %v", toolErr)
@@ -1486,12 +1485,14 @@ func Run(info BuildInfo) {
 					return
 				}
 				chatMgr.SetAgentRunner(newRunner)
-				healthChecker.Start()
+				// Saving configuration must not consume model tokens; use the explicit connection test to probe.
+				healthChecker.SetConfiguredStatus()
 				Bus().Publish("ai:session_reset", map[string]any{"reason": "config_changed", "message": "AI configuration changed; start a new chat"})
 				log.Printf("AI settings hot-switched (provider=%s, model=%s)", saved.Provider, saved.Model)
 			} else {
 				aiClient.Set(nil)
 				chatMgr.SetAgentRunner(nil)
+				healthChecker.SetConfiguredStatus()
 				Bus().Publish("ai:session_reset", map[string]any{"reason": "ai_disabled", "message": "AI assistant disabled"})
 			}
 			recordAudit(c, "config", "save", "settings:ai", true, fmt.Sprintf("Provider=%s, Model=%s", saved.Provider, saved.Model))

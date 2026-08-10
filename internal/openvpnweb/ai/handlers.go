@@ -14,7 +14,7 @@ import (
 // RegisterAIRoutes 注册 AI 模块路由到 ovpn 路由组下
 // chatMgr: 会话管理器（始终非 nil，确保路由可注册）
 // llmClient: LLM 客户端原子引用（可为 nil，表示 AI 未配置）
-// healthChecker: 后台自检器（可为 nil，此时 Health 接口实时检查）
+// healthChecker: cached AI status (may be nil; only refresh=true performs a live probe)
 func RegisterAIRoutes(rg *gin.RouterGroup,
 	chatMgr *ChatSessionManager,
 	llmClient *AtomicClient,
@@ -211,6 +211,11 @@ func (h *AIHandler) Chat(c *gin.Context) {
 		return
 	}
 
+	if h.healthChecker != nil {
+		// A completed chat already proves the configured provider is reachable; do not make a separate probe.
+		h.healthChecker.SetConfiguredStatus()
+	}
+
 	if finalText != "" {
 		// Persist only a completed pair so refresh never restores an orphaned prompt.
 		if err := h.chatMgr.SaveExchange(c.Request.Context(), usernameStr, sessionID,
@@ -225,9 +230,9 @@ func (h *AIHandler) Chat(c *gin.Context) {
 	flusher.Flush()
 }
 
-// Health AI 服务健康检查。
-// 默认读取后台缓存；传入 ?refresh=true 时强制执行一次真实探测并更新缓存，
-// 供设置页“测试连接”和配置热切换后的即时状态确认使用。
+// Health returns AI service status.
+// Default requests only return cached/configured state and never call the model provider.
+// Passing ?refresh=true performs one live probe for the settings page's explicit connection test.
 // GET /ovpn/ai/health?refresh=true
 func (h *AIHandler) Health(c *gin.Context) {
 	if h.healthChecker != nil {
@@ -254,8 +259,8 @@ func (h *AIHandler) Health(c *gin.Context) {
 			})
 			return
 		}
-		// 无缓存时触发一次即时检查
-		status := h.healthChecker.CheckOnce(c.Request.Context())
+		// Initialize from local configuration only; refresh=true is the sole provider probe path.
+		status := h.healthChecker.SetConfiguredStatus()
 		c.JSON(http.StatusOK, HealthResponse{
 			Available: status.Available,
 			Model:     status.Model,
@@ -266,12 +271,22 @@ func (h *AIHandler) Health(c *gin.Context) {
 		return
 	}
 
-	// 回退：无 healthChecker 时直接检查 LLM 客户端
+	// Fallback for callers without a HealthChecker: normal status reads must still avoid provider requests.
 	client := h.llmClient.Get()
 	if client == nil {
 		c.JSON(http.StatusOK, HealthResponse{
 			Available: false,
-			Error:     "LLM 客户端未初始化",
+			Error:     "LLM client is not initialized",
+		})
+		return
+	}
+
+	if c.Query("refresh") != "true" {
+		c.JSON(http.StatusOK, HealthResponse{
+			Available: true,
+			Model:     client.Model(),
+			Provider:  client.Provider(),
+			CheckedAt: time.Now(),
 		})
 		return
 	}
@@ -289,7 +304,7 @@ func (h *AIHandler) Health(c *gin.Context) {
 			Available: false,
 			Model:     client.Model(),
 			Provider:  client.Provider(),
-			Error:     sanitizeErrorMessage(fmt.Sprintf("连接失败: %v", err)),
+			Error:     sanitizeErrorMessage(fmt.Sprintf("connection failed: %v", err)),
 		})
 		return
 	}
@@ -298,7 +313,9 @@ func (h *AIHandler) Health(c *gin.Context) {
 		Available: true,
 		Model:     client.Model(),
 		Provider:  client.Provider(),
+		CheckedAt: time.Now(),
 	})
+
 }
 
 // History 获取会话历史
