@@ -368,9 +368,6 @@ case $1 in
 		init_config
 	fi
 
-	# 创建 ollama 模型存储目录（容器内集成 ollama，持久化到 /data/ollama）
-	mkdir -p "${OLLAMA_MODELS:-/data/ollama/models}"
-
 	load_nftconfig
 	check_config
 	run_server

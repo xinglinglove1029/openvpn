@@ -920,7 +920,7 @@ func pingOllamaTags(ctx context.Context, httpClient *http.Client, baseURL, model
 			return nil
 		}
 	}
-	return fmt.Errorf("Ollama model %q is not installed; run: ollama pull %s", modelName, modelName)
+	return fmt.Errorf("Ollama model %q is not installed on the configured external Ollama service; install it there before retrying", modelName)
 }
 
 // normalizeOllamaModelName aligns Ollama's implicit latest tag with the explicit

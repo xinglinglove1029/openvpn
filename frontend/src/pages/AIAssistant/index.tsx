@@ -351,7 +351,7 @@ export default function AIAssistant() {
         <PageHeader
           eyebrow="AI"
           title="AI 运维助手"
-          description="基于 Ollama 本地大模型的智能运维问答，支持流式对话"
+          description="基于已配置 AI 服务的智能运维问答，支持流式对话"
         >
           <div className="flex items-center gap-2">
             {/* 健康状态 */}

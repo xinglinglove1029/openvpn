@@ -43,7 +43,7 @@ func configureConflictingLegacyAI(t *testing.T, provider, baseURL, apiKey, model
 	viper.Set("ai.temperature", 0.4)
 }
 
-func TestMigrateAISettingsCreatesDisabledOllamaDefaultWithoutViper(t *testing.T) {
+func TestMigrateAISettingsCreatesDisabledDeepSeekDefaultWithoutViper(t *testing.T) {
 	configureConflictingLegacyAI(t, AIProviderDeepSeek, "https://legacy.example/v1", "legacy-secret", "legacy-model")
 	database := newTestAIDatabase(t, ":memory:")
 
@@ -55,16 +55,16 @@ func TestMigrateAISettingsCreatesDisabledOllamaDefaultWithoutViper(t *testing.T)
 	if err := database.First(&settings, 1).Error; err != nil {
 		t.Fatalf("load settings: %v", err)
 	}
-	if settings.Enabled || settings.ActiveProvider != AIProviderOllama {
-		t.Fatalf("settings = %#v, want disabled Ollama defaults", settings)
+	if settings.Enabled || settings.ActiveProvider != AIProviderDeepSeek {
+		t.Fatalf("settings = %#v, want disabled DeepSeek defaults", settings)
 	}
 
 	var profile AIProviderProfile
-	if err := database.Where("provider = ?", AIProviderOllama).First(&profile).Error; err != nil {
-		t.Fatalf("load default Ollama profile: %v", err)
+	if err := database.Where("provider = ?", AIProviderDeepSeek).First(&profile).Error; err != nil {
+		t.Fatalf("load default DeepSeek profile: %v", err)
 	}
-	if profile.BaseURL != "http://127.0.0.1:11434/v1" || profile.Model != "qwen2.5:1.5b" {
-		t.Fatalf("default profile = %#v, want Ollama database defaults", profile)
+	if profile.BaseURL != "https://api.deepseek.com/v1" || profile.Model != "deepseek-v4-flash" {
+		t.Fatalf("default profile = %#v, want DeepSeek database defaults", profile)
 	}
 	if profile.APIKeyEncrypted != "" {
 		t.Fatalf("default profile unexpectedly contains an API key: %q", profile.APIKeyEncrypted)
@@ -74,6 +74,72 @@ func TestMigrateAISettingsCreatesDisabledOllamaDefaultWithoutViper(t *testing.T)
 	}
 	if viper.GetString("ai.api_key") != "legacy-secret" {
 		t.Fatalf("AI initialization changed legacy Viper state: %q", viper.GetString("ai.api_key"))
+	}
+}
+
+func TestMigrateAISettingsDisablesRemovedContainerLocalOllama(t *testing.T) {
+	legacyURLs := []string{
+		"http://127.0.0.1:11434",
+		"http://127.0.0.1:11434/v1",
+		"http://localhost:11434",
+		"http://localhost:11434/v1",
+		"http://[::1]:11434/v1",
+		"http://0.0.0.0:11434/v1",
+	}
+	for _, legacyURL := range legacyURLs {
+		t.Run(legacyURL, func(t *testing.T) {
+			database := newTestAIDatabase(t, ":memory:")
+			if err := database.AutoMigrate(&AISettings{}, &AIProviderProfile{}); err != nil {
+				t.Fatalf("prepare tables: %v", err)
+			}
+
+			profile := AIProviderProfile{
+				Provider: AIProviderOllama, BaseURL: legacyURL, Model: "qwen2.5:1.5b",
+				SystemPrompt: "saved prompt", MaxTokens: 4096, Temperature: 0.7,
+			}
+			if err := database.Create(&profile).Error; err != nil {
+				t.Fatalf("create profile: %v", err)
+			}
+			if err := database.Create(&AISettings{ID: 1, Enabled: true, ActiveProvider: AIProviderOllama}).Error; err != nil {
+				t.Fatalf("create settings: %v", err)
+			}
+
+			if err := MigrateAISettings(database); err != nil {
+				t.Fatalf("MigrateAISettings() error: %v", err)
+			}
+
+			var settings AISettings
+			if err := database.First(&settings, 1).Error; err != nil {
+				t.Fatalf("load settings: %v", err)
+			}
+			if settings.Enabled || settings.ActiveProvider != AIProviderOllama {
+				t.Fatalf("settings = %#v, want disabled legacy Ollama settings", settings)
+			}
+			var savedProfile AIProviderProfile
+			if err := database.Where("provider = ?", AIProviderOllama).First(&savedProfile).Error; err != nil {
+				t.Fatalf("load profile: %v", err)
+			}
+			if savedProfile.BaseURL != profile.BaseURL || savedProfile.Model != profile.Model || savedProfile.SystemPrompt != profile.SystemPrompt {
+				t.Fatalf("legacy profile was changed: %#v", savedProfile)
+			}
+		})
+	}
+}
+
+func TestSaveAISettingsRejectsEnabledContainerLocalOllama(t *testing.T) {
+	database := newTestAIDatabase(t, ":memory:")
+	if err := MigrateAISettings(database); err != nil {
+		t.Fatalf("MigrateAISettings() error: %v", err)
+	}
+
+	_, err := saveAISettings(database, AISettingsRequest{
+		Enabled: true, ActiveProvider: AIProviderOllama,
+		Profiles: []AIProviderProfileInput{{
+			Provider: AIProviderOllama, BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen2.5:1.5b",
+		}},
+	})
+	if err == nil {
+		t.Fatal("saveAISettings() succeeded for the removed container-local Ollama service")
 	}
 }
 
@@ -187,7 +253,7 @@ func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) 
 	_, err := saveAISettings(database, AISettingsRequest{
 		Enabled: true, ActiveProvider: AIProviderDeepSeek,
 		Profiles: []AIProviderProfileInput{
-			{Provider: AIProviderOllama, BaseURL: "http://127.0.0.1:11434", Model: "qwen2.5:7b", SystemPrompt: "ollama", MaxTokens: 4096, Temperature: 0.7},
+			{Provider: AIProviderOllama, BaseURL: "http://ollama.example.internal:11434", Model: "qwen2.5:7b", SystemPrompt: "ollama", MaxTokens: 4096, Temperature: 0.7},
 			{Provider: AIProviderDeepSeek, BaseURL: "https://api.deepseek.com/v1", APIKey: "deepseek-secret", Model: "deepseek-v4-pro", SystemPrompt: "deepseek", MaxTokens: 8192, Temperature: 0.3},
 		},
 	})
@@ -217,14 +283,14 @@ func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) 
 	config, err := saveAISettings(reopened, AISettingsRequest{
 		Enabled: true, ActiveProvider: AIProviderOllama,
 		Profiles: []AIProviderProfileInput{
-			{Provider: AIProviderOllama, BaseURL: "http://127.0.0.1:11434", Model: "qwen2.5:7b", SystemPrompt: "ollama", MaxTokens: 4096, Temperature: 0.7},
+			{Provider: AIProviderOllama, BaseURL: "http://ollama.example.internal:11434", Model: "qwen2.5:7b", SystemPrompt: "ollama", MaxTokens: 4096, Temperature: 0.7},
 			{Provider: AIProviderDeepSeek, BaseURL: "https://api.deepseek.com/v1", Model: "deepseek-v4-pro", SystemPrompt: "deepseek", MaxTokens: 8192, Temperature: 0.3},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Provider != AIProviderOllama || config.BaseURL != "http://127.0.0.1:11434" {
+	if config.Provider != AIProviderOllama || config.BaseURL != "http://ollama.example.internal:11434" {
 		t.Fatalf("active Ollama profile not restored: %#v", config)
 	}
 	if _, err := saveAISettings(reopened, AISettingsRequest{Enabled: true, ActiveProvider: AIProviderDeepSeek, Profiles: []AIProviderProfileInput{{Provider: AIProviderDeepSeek, BaseURL: "https://api.deepseek.com/v1", Model: "deepseek-v4-pro", SystemPrompt: "deepseek", MaxTokens: 8192, Temperature: 0.3}}}); err != nil {
