@@ -139,6 +139,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		}
 
 		c.mu.RLock()
+		provider := c.provider
 		baseURL := c.baseURL
 		apiKey := c.apiKey
 		modelName := c.model
@@ -162,6 +163,15 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			payload.Tools = extractOpenAITools(req.Config.Tools)
 			payload.ToolChoice = "auto"
 		}
+
+		// Some small Ollama models served through OpenAI-compatible endpoints emit a
+		// textual JSON tool call instead of the standard tool_calls field. Keep an
+		// allow-list from this request and normalize that format below.
+		allowedTextToolNames := make(map[string]struct{}, len(payload.Tools))
+		for _, toolDef := range payload.Tools {
+			allowedTextToolNames[toolDef.Function.Name] = struct{}{}
+		}
+		allowTextToolFallback := strings.EqualFold(provider, "ollama") && len(allowedTextToolNames) > 0
 
 		// system instruction
 		if req.Config != nil && req.Config.SystemInstruction != nil {
@@ -205,7 +215,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 		if !stream {
 			// 非流式：解析完整响应
-			llmResp, err := parseNonStreamOpenAIResponse(resp.Body)
+			llmResp, err := parseNonStreamOpenAIResponse(resp.Body, allowTextToolFallback, allowedTextToolNames)
 			if err != nil {
 				emit(nil, err)
 				return
@@ -220,6 +230,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		var fullText strings.Builder
 		// tool_calls 跨 chunk 累积器：按 index 累积 id/name/arguments 片段
 		toolCallAccum := make(map[int]*toolCallAccumulator)
+		hasNativeToolCalls := false
 
 		flushToolCalls := func() bool {
 			// 按 index 顺序组装完整的 FunctionCall 并 yield
@@ -273,11 +284,19 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
-				// 先 flush 残留的 tool_calls；消费者已退出时立即停止。
+				// Flush remaining native tool_calls; stop if the consumer has exited.
 				if !flushToolCalls() {
 					return
 				}
-				// 最终事件
+				// Some Ollama models emit function calls as ordinary JSON text.
+				// Convert only complete allow-listed JSON so it never reaches the chat UI.
+				if allowTextToolFallback && !hasNativeToolCalls {
+					if toolCallResp, ok := textToolCallResponse(fullText.String(), allowedTextToolNames); ok {
+						emit(toolCallResp, nil)
+						return
+					}
+				}
+				// Final event.
 				emit(&model.LLMResponse{
 					Content: &genai.Content{
 						Role:  "model",
@@ -298,7 +317,9 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				// 处理文本 token
 				if choice.Delta.Content != "" {
 					fullText.WriteString(choice.Delta.Content)
-					if !emit(&model.LLMResponse{
+					// Buffer Ollama textual fallback candidates so their raw JSON never
+					// reaches the chat UI before it can be converted into a FunctionCall.
+					if !allowTextToolFallback && !emit(&model.LLMResponse{
 						Content: &genai.Content{
 							Role:  "model",
 							Parts: []*genai.Part{{Text: choice.Delta.Content}},
@@ -311,6 +332,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 
 				// 处理 tool_calls：按 index 累积
 				for _, tc := range choice.Delta.ToolCalls {
+					hasNativeToolCalls = true
 					acc, ok := toolCallAccum[tc.Index]
 					if !ok {
 						acc = &toolCallAccumulator{}
@@ -344,6 +366,12 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			return
 		}
 		if fullText.Len() > 0 {
+			if allowTextToolFallback && !hasNativeToolCalls {
+				if toolCallResp, ok := textToolCallResponse(fullText.String(), allowedTextToolNames); ok {
+					emit(toolCallResp, nil)
+					return
+				}
+			}
 			emit(&model.LLMResponse{
 				Content: &genai.Content{
 					Role:  "model",
@@ -556,11 +584,12 @@ func extractOpenAITools(tools []*genai.Tool) []openAITool {
 	return result
 }
 
-// parseNonStreamOpenAIResponse 解析非流式响应
-func parseNonStreamOpenAIResponse(body io.Reader) (*model.LLMResponse, error) {
+// parseNonStreamOpenAIResponse parses a non-streaming response.
+// Textual tool-call fallback is enabled only for Ollama.
+func parseNonStreamOpenAIResponse(body io.Reader, allowTextToolFallback bool, allowedTextToolNames map[string]struct{}) (*model.LLMResponse, error) {
 	var resp openAIChatResp
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	if len(resp.Choices) == 0 {
 		return &model.LLMResponse{
@@ -570,13 +599,20 @@ func parseNonStreamOpenAIResponse(body io.Reader) (*model.LLMResponse, error) {
 	}
 
 	choice := resp.Choices[0]
-	content := &genai.Content{Role: "model"}
+	// Native tool_calls take priority for every provider. The text fallback is
+	// deliberately limited to Ollama and only runs when no native call exists.
+	if len(choice.Message.ToolCalls) == 0 && allowTextToolFallback {
+		if toolCallResp, ok := textToolCallResponse(choice.Message.Content, allowedTextToolNames); ok {
+			return toolCallResp, nil
+		}
+	}
 
+	content := &genai.Content{Role: "model"}
 	if choice.Message.Content != "" {
 		content.Parts = append(content.Parts, &genai.Part{Text: choice.Message.Content})
 	}
 
-	// 处理 tool_calls
+	// Preserve native tool_calls from all OpenAI-compatible providers.
 	for _, tc := range choice.Message.ToolCalls {
 		var args map[string]any
 		if tc.Function.Arguments != "" {
@@ -595,6 +631,81 @@ func parseNonStreamOpenAIResponse(body io.Reader) (*model.LLMResponse, error) {
 		Content:      content,
 		TurnComplete: true,
 	}, nil
+}
+
+// textToolCallResponse converts the JSON shape emitted as ordinary text by some
+// small Ollama models into an ADK FunctionCall. It only accepts a complete,
+// single JSON object (optionally wrapped by a pure Markdown code fence) whose
+// tool name was advertised in this request.
+func textToolCallResponse(text string, allowedToolNames map[string]struct{}) (*model.LLMResponse, bool) {
+	if len(allowedToolNames) == 0 {
+		return nil, false
+	}
+
+	payload, ok := unwrapTextToolCallPayload(text)
+	if !ok || !strings.HasPrefix(payload, "{") {
+		return nil, false
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.UseNumber()
+	var raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := decoder.Decode(&raw); err != nil || raw.Name == "" {
+		return nil, false
+	}
+	if _, allowed := allowedToolNames[raw.Name]; !allowed {
+		return nil, false
+	}
+	// InputOffset is relative to payload and verifies that a second JSON object,
+	// natural-language suffix, or any other trailing content cannot be ignored.
+	if strings.TrimSpace(payload[decoder.InputOffset():]) != "" {
+		return nil, false
+	}
+
+	args := map[string]any{}
+	if len(raw.Arguments) > 0 && string(raw.Arguments) != "null" {
+		if err := json.Unmarshal(raw.Arguments, &args); err != nil {
+			var encoded string
+			if json.Unmarshal(raw.Arguments, &encoded) != nil || json.Unmarshal([]byte(encoded), &args) != nil {
+				return nil, false
+			}
+		}
+	}
+
+	return &model.LLMResponse{
+		Content: &genai.Content{Role: "model", Parts: []*genai.Part{{
+			FunctionCall: &genai.FunctionCall{ID: "text-tool-call-0", Name: raw.Name, Args: args},
+		}}},
+		TurnComplete: true,
+	}, true
+}
+
+// unwrapTextToolCallPayload permits whitespace around raw JSON, or a code fence
+// containing only the JSON. Any explanatory text outside/inside the JSON remains
+// model text rather than becoming an executable tool call.
+func unwrapTextToolCallPayload(text string) (string, bool) {
+	payload := strings.TrimSpace(text)
+	if !strings.HasPrefix(payload, "```") {
+		return payload, true
+	}
+
+	newline := strings.IndexByte(payload, '\n')
+	if newline < 0 {
+		return "", false
+	}
+	openingFence := strings.TrimSpace(payload[:newline])
+	if !strings.HasPrefix(openingFence, "```") || strings.Contains(openingFence[3:], "`") {
+		return "", false
+	}
+
+	remaining := strings.TrimSpace(payload[newline+1:])
+	if !strings.HasSuffix(remaining, "```") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimSuffix(remaining, "```")), true
 }
 
 // --- AtomicClient 原子引用包装 ---

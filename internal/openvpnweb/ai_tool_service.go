@@ -1137,6 +1137,44 @@ func (s *AIToolService) QueryAuditLogs(ctx agent.ToolContext, operator string, r
 	return ai.QueryAuditLogsResult{Logs: infos, Total: total}, nil
 }
 
+// GetServerResources returns the latest collector snapshot instead of making a second
+// expensive host-stat probe for every AI question.
+func (s *AIToolService) GetServerResources(ctx agent.ToolContext, operator string) (ai.ServerResourcesResult, error) {
+	if !s.hasPermission(ctx, operator, "menu:overview") {
+		return ai.ServerResourcesResult{}, fmt.Errorf("权限不足: 需要 menu:overview 权限")
+	}
+
+	_, latest := GetSystemStatsHistory()
+	if latest == nil {
+		return ai.ServerResourcesResult{}, fmt.Errorf("服务器资源采集尚未就绪，请稍后重试")
+	}
+
+	result := ai.ServerResourcesResult{
+		CollectedAt:       latest.Timestamp,
+		Hostname:          latest.Host.Hostname,
+		CPUPercent:        latest.CpuPercent,
+		CPUCores:          latest.Host.CpuCores,
+		LoadAvg1:          latest.Host.LoadAvg1,
+		LoadAvg5:          latest.Host.LoadAvg5,
+		LoadAvg15:         latest.Host.LoadAvg15,
+		MemoryTotalBytes:  latest.Memory.TotalBytes,
+		MemoryUsedBytes:   latest.Memory.UsedBytes,
+		MemoryAvailable:   latest.Memory.AvailableBytes,
+		MemoryUsedPercent: latest.Memory.UsedPercent,
+		SwapUsedPercent:   latest.Memory.SwapPercent,
+		NetRxBps:          latest.NetTotalRxBps,
+		NetTxBps:          latest.NetTotalTxBps,
+		Disks:             make([]ai.ServerResourceDisk, 0, len(latest.Disks)),
+	}
+	for _, disk := range latest.Disks {
+		result.Disks = append(result.Disks, ai.ServerResourceDisk{
+			Mountpoint: disk.Mountpoint, TotalBytes: disk.TotalBytes, UsedBytes: disk.UsedBytes,
+			FreeBytes: disk.FreeBytes, UsedPercent: disk.UsedPercent,
+		})
+	}
+	return result, nil
+}
+
 // GetDashboard 获取系统仪表盘摘要
 func (s *AIToolService) GetDashboard(ctx agent.ToolContext, operator string) (ai.GetDashboardResult, error) {
 	if !s.hasPermission(ctx, operator, "menu:overview") {

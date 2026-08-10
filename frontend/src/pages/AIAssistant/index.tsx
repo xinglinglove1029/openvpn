@@ -398,7 +398,7 @@ export default function AIAssistant() {
               你可以询问 OpenVPN 配置、防火墙规则、用户管理、日志分析等运维相关问题。
             </p>
             <div className="flex flex-wrap gap-2 mt-4 justify-center">
-              {['如何添加防火墙规则？', '查看在线客户端', '如何导出用户列表？', '服务器状态怎么看？'].map(
+              {['查看当前在线客户端', '查看当前防火墙规则', '查看服务器实时资源状态', '查询近期审计日志'].map(
                 (q) => (
                   <Button
                     key={q}

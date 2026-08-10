@@ -68,15 +68,15 @@ function loadPersistedChat(storageKey: string): PersistedChat {
 }
 
 const HOT_TOPICS = [
-  '如何查看当前在线客户端？',
-  'OpenVPN 配置示例',
-  '防火墙规则推荐',
+  '查看当前在线客户端',
+  '查看当前防火墙规则',
+  '查看系统运行概况',
 ];
 
 const RECOMMENDATIONS = [
-  '新增用户并导出配置文件',
-  '查看服务器资源状态',
-  '审计日志分析',
+  '新增用户并生成 .ovpn 配置',
+  '查看服务器实时资源状态',
+  '查询近期审计日志',
 ];
 
 export default function AIWidget() {

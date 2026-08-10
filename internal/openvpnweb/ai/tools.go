@@ -60,6 +60,8 @@ type ToolService interface {
 	QueryAuditLogs(ctx agent.ToolContext, operator string, req QueryAuditLogsRequest) (QueryAuditLogsResult, error)
 	// GetDashboard 获取系统仪表盘摘要（服务器状态、在线数、风险项、趋势）。需要 menu:overview 权限。
 	GetDashboard(ctx agent.ToolContext, operator string) (GetDashboardResult, error)
+	// GetServerResources returns the latest CPU, memory, disk, network, and load snapshot.
+	GetServerResources(ctx agent.ToolContext, operator string) (ServerResourcesResult, error)
 }
 
 // CreateUserRequest 创建用户工具入参
@@ -70,8 +72,8 @@ type CreateUserRequest struct {
 	Email            string `json:"email" jsonschema:"邮箱地址（必填）"`
 	ExpireDate       string `json:"expireDate,omitempty" jsonschema:"有效期，格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS，可选"`
 	IpAddr           string `json:"ipAddr,omitempty" jsonschema:"固定 IP 地址，可选"`
-	AutoCreateClient *bool `json:"autoCreateClient,omitempty" jsonschema:"是否自动生成 OpenVPN 客户端配置，默认 true"`
-	SendNotifyEmail  *bool `json:"sendNotifyEmail,omitempty" jsonschema:"是否发送开通通知邮件（含密码和客户端配置），默认 true"`
+	AutoCreateClient *bool  `json:"autoCreateClient,omitempty" jsonschema:"是否自动生成 OpenVPN 客户端配置，默认 true"`
+	SendNotifyEmail  *bool  `json:"sendNotifyEmail,omitempty" jsonschema:"是否发送开通通知邮件（含密码和客户端配置），默认 true"`
 }
 
 // CreateUserResult 创建用户工具返回
@@ -162,19 +164,19 @@ type ResetMFAResult struct {
 // GenerateClientRequest 生成客户端配置工具入参
 // 默认使用系统配置中的服务器地址 / 端口（与"添加用户时自动创建客户端"保持一致）。
 type GenerateClientRequest struct {
-	Username    string `json:"username" jsonschema:"目标账号用户名"`
-	ServerAddr  string `json:"serverAddr,omitempty" jsonschema:"服务器地址，可选；留空则从系统配置/站点URL推断"`
-	ServerPort  string `json:"serverPort,omitempty" jsonschema:"服务器端口，可选；留空则使用 openvpn.ovpn_port（默认 1194）"`
-	CCDConfig   string `json:"ccdConfig,omitempty" jsonschema:"CCD 推送配置，可选"`
+	Username   string `json:"username" jsonschema:"目标账号用户名"`
+	ServerAddr string `json:"serverAddr,omitempty" jsonschema:"服务器地址，可选；留空则从系统配置/站点URL推断"`
+	ServerPort string `json:"serverPort,omitempty" jsonschema:"服务器端口，可选；留空则使用 openvpn.ovpn_port（默认 1194）"`
+	CCDConfig  string `json:"ccdConfig,omitempty" jsonschema:"CCD 推送配置，可选"`
 }
 
 // GenerateClientResult 生成客户端配置工具返回
 type GenerateClientResult struct {
-	Success     bool   `json:"success"`
-	Message     string `json:"message"`
-	ClientName  string `json:"clientName,omitempty"`
-	UserID      uint   `json:"userId,omitempty"`
-	OvpnConfig  string `json:"ovpnConfig,omitempty"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message"`
+	ClientName string `json:"clientName,omitempty"`
+	UserID     uint   `json:"userId,omitempty"`
+	OvpnConfig string `json:"ovpnConfig,omitempty"`
 }
 
 // UpdateUserRequest 更新用户工具入参
@@ -311,14 +313,14 @@ type ManageFirewallResult struct {
 
 // CertInfo 证书信息
 type CertInfo struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	NotBefore  string `json:"notBefore"`
-	NotAfter   string `json:"notAfter"`
-	Status     string `json:"status"`
-	Issuer     string `json:"issuer"`
-	Subject    string `json:"subject"`
-	Serial     string `json:"serial"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	NotBefore string `json:"notBefore"`
+	NotAfter  string `json:"notAfter"`
+	Status    string `json:"status"`
+	Issuer    string `json:"issuer"`
+	Subject   string `json:"subject"`
+	Serial    string `json:"serial"`
 }
 
 type ListCertsResult struct {
@@ -387,17 +389,43 @@ type DashboardRisk struct {
 	Message string `json:"message"`
 }
 
+type ServerResourceDisk struct {
+	Mountpoint  string  `json:"mountpoint"`
+	TotalBytes  uint64  `json:"totalBytes"`
+	UsedBytes   uint64  `json:"usedBytes"`
+	FreeBytes   uint64  `json:"freeBytes"`
+	UsedPercent float64 `json:"usedPercent"`
+}
+
+type ServerResourcesResult struct {
+	CollectedAt       int64                `json:"collectedAt"`
+	Hostname          string               `json:"hostname"`
+	CPUPercent        float64              `json:"cpuPercent"`
+	CPUCores          int                  `json:"cpuCores"`
+	LoadAvg1          float64              `json:"loadAvg1"`
+	LoadAvg5          float64              `json:"loadAvg5"`
+	LoadAvg15         float64              `json:"loadAvg15"`
+	MemoryTotalBytes  uint64               `json:"memoryTotalBytes"`
+	MemoryUsedBytes   uint64               `json:"memoryUsedBytes"`
+	MemoryAvailable   uint64               `json:"memoryAvailableBytes"`
+	MemoryUsedPercent float64              `json:"memoryUsedPercent"`
+	SwapUsedPercent   float64              `json:"swapUsedPercent"`
+	Disks             []ServerResourceDisk `json:"disks"`
+	NetRxBps          float64              `json:"netRxBps"`
+	NetTxBps          float64              `json:"netTxBps"`
+}
+
 type GetDashboardResult struct {
-	TotalUsers      int64           `json:"totalUsers"`
-	EnabledUsers    int64           `json:"enabledUsers"`
-	OnlineClients   int             `json:"onlineClients"`
-	ClientConfigs   int             `json:"clientConfigs"`
-	ExpiredUsers    int64           `json:"expiredUsers"`
-	ExpiringUsers   int64           `json:"expiringUsers"`
-	FirewallRules   int64           `json:"firewallRules"`
-	ServerStatus    string          `json:"serverStatus"`
-	ManagementOK    bool            `json:"managementOk"`
-	Risks           []DashboardRisk `json:"risks"`
+	TotalUsers    int64           `json:"totalUsers"`
+	EnabledUsers  int64           `json:"enabledUsers"`
+	OnlineClients int             `json:"onlineClients"`
+	ClientConfigs int             `json:"clientConfigs"`
+	ExpiredUsers  int64           `json:"expiredUsers"`
+	ExpiringUsers int64           `json:"expiringUsers"`
+	FirewallRules int64           `json:"firewallRules"`
+	ServerStatus  string          `json:"serverStatus"`
+	ManagementOK  bool            `json:"managementOk"`
+	Risks         []DashboardRisk `json:"risks"`
 }
 
 // BuildBusinessTools 构造业务工具集合（create_user / list_users / bind_role）
@@ -700,6 +728,19 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("创建 get_dashboard 工具失败: %w", err)
 	}
 
+	getServerResourcesTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "get_server_resources",
+			Description: "获取服务器实时资源状态，包括 CPU、内存、磁盘、网络速率和系统负载。需要 menu:overview 权限。当用户询问‘服务器资源’、‘CPU/内存/磁盘使用率’或‘机器负载’时调用。",
+		},
+		func(ctx agent.ToolContext, _ struct{}) (ServerResourcesResult, error) {
+			return svc.GetServerResources(ctx, ctx.UserID())
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 get_server_resources 工具失败: %w", err)
+	}
+
 	return []tool.Tool{
 		createUserTool,
 		listUsersTool,
@@ -723,5 +764,6 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		manageChannelTool,
 		queryAuditLogsTool,
 		getDashboardTool,
+		getServerResourcesTool,
 	}, nil
 }
