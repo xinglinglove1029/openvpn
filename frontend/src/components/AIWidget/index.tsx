@@ -74,7 +74,6 @@ const HOT_TOPICS = [
 ];
 
 const RECOMMENDATIONS = [
-  '新增用户并生成 .ovpn 配置',
   '查看服务器实时资源状态',
   '查询近期审计日志',
 ];

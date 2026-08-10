@@ -178,6 +178,47 @@ func TestGenerateContentNonOllamaTextToolCallRemainsText(t *testing.T) {
 	}
 }
 
+func TestGenerateContentOllamaStreamsNormalTextWithTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSETextChunk(t, w, "??")
+		writeSSETextChunk(t, w, "??")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	responses := collectLLMResponses(t, newToolTestClient(t, "ollama", server.URL), newTextToolRequest(), true)
+	if len(responses) != 3 {
+		t.Fatalf("response count = %d, want 3", len(responses))
+	}
+	if !responses[0].Partial || responses[0].Content.Parts[0].Text != "??" {
+		t.Fatalf("first streaming response = %#v, want partial text", responses[0])
+	}
+	if !responses[1].Partial || responses[1].Content.Parts[0].Text != "??" {
+		t.Fatalf("second streaming response = %#v, want partial text", responses[1])
+	}
+}
+
+func TestGenerateContentOllamaTextToolCallRejectsMutatingTool(t *testing.T) {
+	const toolJSON = `{"name":"delete_user","arguments":{"username":"demo"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%s}}]}`, mustJSON(t, toolJSON))
+	}))
+	defer server.Close()
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("show delete JSON", genai.RoleUser)},
+		Config: &genai.GenerateContentConfig{Tools: []*genai.Tool{{
+			FunctionDeclarations: []*genai.FunctionDeclaration{{Name: "delete_user"}},
+		}}},
+	}
+	responses := collectLLMResponses(t, newToolTestClient(t, "ollama", server.URL), req, false)
+	if len(responses) != 1 || len(responses[0].Content.Parts) != 1 || responses[0].Content.Parts[0].Text != toolJSON {
+		t.Fatalf("mutating textual tool call was not preserved as text: %#v", responses)
+	}
+}
+
 func newToolTestClient(t *testing.T, provider, baseURL string) *OpenAIModel {
 	t.Helper()
 	client, err := NewLLMClient(LLMConfig{Provider: provider, BaseURL: baseURL, Model: "test", Temperature: 0.7})

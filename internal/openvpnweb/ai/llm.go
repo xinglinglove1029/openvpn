@@ -165,12 +165,10 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		}
 
 		// Some small Ollama models served through OpenAI-compatible endpoints emit a
-		// textual JSON tool call instead of the standard tool_calls field. Keep an
-		// allow-list from this request and normalize that format below.
-		allowedTextToolNames := make(map[string]struct{}, len(payload.Tools))
-		for _, toolDef := range payload.Tools {
-			allowedTextToolNames[toolDef.Function.Name] = struct{}{}
-		}
+		// textual JSON tool call instead of the standard tool_calls field. This
+		// lossy fallback is intentionally limited to read-only tools: a user asking
+		// for a JSON example must never turn model text into a destructive operation.
+		allowedTextToolNames := extractOllamaTextToolNames(payload.Tools)
 		allowTextToolFallback := strings.EqualFold(provider, "ollama") && len(allowedTextToolNames) > 0
 
 		// system instruction
@@ -231,6 +229,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		// tool_calls 跨 chunk 累积器：按 index 累积 id/name/arguments 片段
 		toolCallAccum := make(map[int]*toolCallAccumulator)
 		hasNativeToolCalls := false
+		textToolFallbackCandidate := allowTextToolFallback
 
 		flushToolCalls := func() bool {
 			// 按 index 顺序组装完整的 FunctionCall 并 yield
@@ -290,7 +289,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				}
 				// Some Ollama models emit function calls as ordinary JSON text.
 				// Convert only complete allow-listed JSON so it never reaches the chat UI.
-				if allowTextToolFallback && !hasNativeToolCalls {
+				if textToolFallbackCandidate && !hasNativeToolCalls {
 					if toolCallResp, ok := textToolCallResponse(fullText.String(), allowedTextToolNames); ok {
 						emit(toolCallResp, nil)
 						return
@@ -317,9 +316,20 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 				// 处理文本 token
 				if choice.Delta.Content != "" {
 					fullText.WriteString(choice.Delta.Content)
-					// Buffer Ollama textual fallback candidates so their raw JSON never
-					// reaches the chat UI before it can be converted into a FunctionCall.
-					if !allowTextToolFallback && !emit(&model.LLMResponse{
+					// Buffer only a possible text-tool-call prefix. Ordinary Ollama
+					// replies must retain token streaming instead of waiting for [DONE].
+					if textToolFallbackCandidate && !possibleTextToolCallPrefix(fullText.String()) {
+						textToolFallbackCandidate = false
+						if !emit(&model.LLMResponse{
+							Content: &genai.Content{
+								Role:  "model",
+								Parts: []*genai.Part{{Text: fullText.String()}},
+							},
+							Partial: true,
+						}, nil) {
+							return
+						}
+					} else if !textToolFallbackCandidate && !emit(&model.LLMResponse{
 						Content: &genai.Content{
 							Role:  "model",
 							Parts: []*genai.Part{{Text: choice.Delta.Content}},
@@ -366,7 +376,7 @@ func (c *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			return
 		}
 		if fullText.Len() > 0 {
-			if allowTextToolFallback && !hasNativeToolCalls {
+			if textToolFallbackCandidate && !hasNativeToolCalls {
 				if toolCallResp, ok := textToolCallResponse(fullText.String(), allowedTextToolNames); ok {
 					emit(toolCallResp, nil)
 					return
@@ -631,6 +641,76 @@ func parseNonStreamOpenAIResponse(body io.Reader, allowTextToolFallback bool, al
 		Content:      content,
 		TurnComplete: true,
 	}, nil
+}
+
+// ollamaTextToolCallNames explicitly lists the query-only tools that can be
+// safely recovered from a lossy textual tool-call response. Mutating tools must
+// use native tool_calls so ordinary JSON output can never cause side effects.
+var ollamaTextToolCallNames = map[string]struct{}{
+	"get_dashboard":        {},
+	"get_server_resources": {},
+	"get_system_counts":    {},
+	"list_certs":           {},
+	"list_channels":        {},
+	"list_clients":         {},
+	"list_firewall_rules":  {},
+	"list_online_clients":  {},
+	"list_users":           {},
+	"query_audit_logs":     {},
+}
+
+func extractOllamaTextToolNames(tools []openAITool) map[string]struct{} {
+	allowed := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if _, safe := ollamaTextToolCallNames[tool.Function.Name]; safe {
+			allowed[tool.Function.Name] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+// possibleTextToolCallPrefix detects the strict JSON shape while it is still
+// arriving in SSE chunks. As soon as it is clearly ordinary prose, streaming is
+// restored and the buffered prefix is emitted.
+func possibleTextToolCallPrefix(text string) bool {
+	payload := strings.TrimSpace(text)
+	if payload == "" {
+		return true
+	}
+	if strings.HasPrefix(payload, "```") {
+		newline := strings.IndexByte(payload, '\n')
+		if newline < 0 {
+			return true
+		}
+		openingFence := strings.TrimSpace(payload[:newline])
+		if !strings.HasPrefix(openingFence, "```") || strings.Contains(openingFence[3:], "`") {
+			return false
+		}
+		payload = strings.TrimSpace(payload[newline+1:])
+		if payload == "" {
+			return true
+		}
+	}
+	if !strings.HasPrefix(payload, "{") {
+		return false
+	}
+	remaining := strings.TrimLeft(payload[1:], " \t\r\n")
+	const nameKey = `"name"`
+	if len(remaining) <= len(nameKey) {
+		return strings.HasPrefix(nameKey, remaining)
+	}
+	if !strings.HasPrefix(remaining, nameKey) {
+		return false
+	}
+	remaining = strings.TrimLeft(remaining[len(nameKey):], " \t\r\n")
+	if remaining == "" {
+		return true
+	}
+	if !strings.HasPrefix(remaining, ":") {
+		return false
+	}
+	remaining = strings.TrimLeft(remaining[1:], " \t\r\n")
+	return remaining == "" || strings.HasPrefix(remaining, `"`)
 }
 
 // textToolCallResponse converts the JSON shape emitted as ordinary text by some

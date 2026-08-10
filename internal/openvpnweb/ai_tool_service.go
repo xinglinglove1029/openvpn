@@ -1149,6 +1149,10 @@ func (s *AIToolService) GetServerResources(ctx agent.ToolContext, operator strin
 		return ai.ServerResourcesResult{}, fmt.Errorf("服务器资源采集尚未就绪，请稍后重试")
 	}
 
+	if latest.IntervalMs <= 0 || time.Since(time.UnixMilli(latest.Timestamp)) > 3*time.Duration(latest.IntervalMs)*time.Millisecond {
+		return ai.ServerResourcesResult{}, fmt.Errorf("\u670d\u52a1\u5668\u8d44\u6e90\u91c7\u96c6\u6570\u636e\u5df2\u8fc7\u671f\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5")
+	}
+
 	result := ai.ServerResourcesResult{
 		CollectedAt:       latest.Timestamp,
 		Hostname:          latest.Host.Hostname,

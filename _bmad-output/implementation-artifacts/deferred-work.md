@@ -96,3 +96,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-ai-health-and-chat-history-persistence.md`
   summary: 聊天输入和持久化历史尚未设置显式单条/总字节大小上限。
   evidence: 现有接口接受完整文本并回灌模型上下文；需要结合部署资源与模型上下文窗口确定限制，当前规格未给出唯一可实施的阈值。
+
+- source_spec: `spec-ai-shortcuts-and-ollama-text-tools.md`
+  summary: 自定义 provider 若通过反向代理或统一网关连接 Ollama，当前不启用文本式工具调用兼容。
+  evidence: 兼容分支按 provider 名称严格限定为 `ollama`，而 `customize` 仍走同一 OpenAI-compatible 客户端；对该场景启用兼容需要可验证的端点能力识别，不能仅根据 URL 猜测。
