@@ -4,7 +4,6 @@
 set -e
 
 MODELS_DIR="${OLLAMA_MODELS:-/data/ollama/models}"
-PULL_FLAG="/data/ollama/.pulled"
 DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:1.5b}"
 
 # 确保模型目录存在
@@ -13,12 +12,6 @@ mkdir -p "$MODELS_DIR"
 # 若禁用自动拉取，直接退出
 if [ "${OLLAMA_AUTO_PULL:-true}" != "true" ]; then
     echo "[ollama-bootstrap] 自动拉取已禁用 (OLLAMA_AUTO_PULL=false)，跳过"
-    exit 0
-fi
-
-# 已拉取过的标记文件存在则跳过（避免每次重启都拉取）
-if [ -f "$PULL_FLAG" ]; then
-    echo "[ollama-bootstrap] 模型已就绪（标记文件存在），跳过拉取"
     exit 0
 fi
 
@@ -40,9 +33,8 @@ fi
 
 # 检查模型是否已存在（可能用户手动拉过）
 EXISTING=$(curl -sf http://127.0.0.1:11434/api/tags 2>/dev/null | jq -r '.models[].name' 2>/dev/null || echo "")
-if echo "$EXISTING" | grep -q "$DEFAULT_MODEL"; then
-    echo "[ollama-bootstrap] 模型 $DEFAULT_MODEL 已存在，标记完成"
-    touch "$PULL_FLAG"
+if echo "$EXISTING" | grep -Fxq "$DEFAULT_MODEL"; then
+    echo "[ollama-bootstrap] model $DEFAULT_MODEL already exists; skipping pull"
     exit 0
 fi
 
@@ -56,7 +48,6 @@ PULL_PID=$!
 (
     wait $PULL_PID
     if [ $? -eq 0 ]; then
-        touch "$PULL_FLAG"
         echo "[ollama-bootstrap] 模型 $DEFAULT_MODEL 拉取完成" >> /data/ollama/pull.log
     else
         echo "[ollama-bootstrap] 模型拉取失败，请检查网络后重试" >> /data/ollama/pull.log
