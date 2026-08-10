@@ -65,7 +65,7 @@ export interface SettingsResponse {
   };
   ai?: {
     enabled: boolean;
-    provider: string;       // ollama | openai | deepseek | customize
+    provider: string;       // deepseek | openai | customize | legacy providers
     base_url: string;
     api_key: string;        // 脱敏后的值
     model: string;
@@ -75,11 +75,12 @@ export interface SettingsResponse {
   };
 }
 
-export type AIProvider = 'ollama' | 'deepseek' | 'openai' | 'customize';
+export type AIProvider = 'deepseek' | 'openai' | 'customize';
+export type AIProviderID = AIProvider | 'ollama';
 
 /** 单个 AI 供应商的非敏感配置。API Key 只通过 PUT 写入。 */
 export interface AIProviderProfile {
-  provider: AIProvider;
+  provider: AIProviderID;
   base_url: string;
   model: string;
   system_prompt: string;
@@ -93,7 +94,7 @@ export interface AISettingsResponse {
   // 保留 config/provider/model，兼容现有调用方。
   config: {
     enabled: boolean;
-    provider: AIProvider;
+    provider: AIProviderID;
     base_url: string;
     api_key: string;
     model: string;
@@ -102,7 +103,7 @@ export interface AISettingsResponse {
     temperature: number;
   };
   profiles: AIProviderProfile[];
-  active_provider: AIProvider;
+  active_provider: AIProviderID;
   provider: string;
   model: string;
 }

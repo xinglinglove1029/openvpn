@@ -63,7 +63,6 @@
 ### 支持的 LLM Provider
 
 - **DeepSeek**（推荐，国内访问快，中文能力强）
-- **Ollama**（连接容器网络可达的外部 Ollama API）
 - **OpenAI** 兼容（任何 OpenAI API 格式的服务）
 - **Customize**（自定义 OpenAI 兼容端点）
 
@@ -261,8 +260,7 @@
                                 ▼
                 ┌──────────────────────────────┐
                 │  LLM Backend                 │
-                │  (DeepSeek / Ollama /        │
-                │   OpenAI compatible)         │
+                │  (DeepSeek / OpenAI-compatible) │
                 └──────────────────────────────┘
 ```
 
@@ -285,7 +283,7 @@ cmd/openvpn-web/                 # 启动入口（main.go）
     │   ├── agent.go             # ADK Agent 初始化
     │   ├── tools.go             # 22 个 functiontool 注册
     │   ├── sse.go               # SSE 流式响应
-    │   └── llm.go               # DeepSeek/Ollama/OpenAI 客户端
+    │   └── llm.go               # 外部 OpenAI-compatible 客户端
     ├── ai_tool_service.go       # 22 个工具的业务实现
     └── templates/               # Go embed 模板
         └── index.html           # React 宿主页
@@ -344,7 +342,7 @@ frontend/src/
 | ORM | GORM v1.31.1 |
 | 数据库 | SQLite (glebarez/sqlite 驱动) |
 | AI 框架 | Google ADK v1.5.1 |
-| LLM 客户端 | DeepSeek / Ollama / OpenAI 兼容 |
+| LLM 客户端 | DeepSeek / OpenAI-compatible |
 | 证书 | Easy-RSA + crypto/x509 |
 | 防火墙 | nftables |
 | 配置 | Viper v1.21.0 |
@@ -591,10 +589,10 @@ docker compose config
 - 生产环境首次登录后请立即修改默认管理员密码。
 - 只执行 `go run ./cmd/openvpn-web` 不会启动真实 OpenVPN 进程；上线/下线 hook、防火墙、在线连接等能力需要 Docker 完整环境验证。
 - 本地数据目录为 `data/`，构建产物目录为 `dist/`，均已在 `.gitignore` 中排除。
-- AI 助手需要配置有效的 LLM 才能启用：DeepSeek、OpenAI、容器网络可达的外部 Ollama，或其他 OpenAI-compatible API；未启用时所有其他功能正常工作。
-- 镜像不内置、下载或启动本地模型。选择 Ollama 时，请填写应用容器可访问的外部服务地址；Docker 容器内的 `127.0.0.1:11434` 不再可用。 ????? Ollama ??????????????????????? Docker ?????????
-- ???????????????? `/data/ollama/models` ???????????????????????????????????????????
-- ??????? `OLLAMA_AUTO_PULL`?`OLLAMA_DEFAULT_MODEL`?`OLLAMA_MODELS` ???????????????????????
+- AI 助手需要配置有效的外部 LLM 才能启用：DeepSeek、OpenAI 或其他 OpenAI-compatible API；未启用时所有其他功能正常工作。
+- 镜像不内置、下载或启动本地模型。请在“自定义外部模型（OpenAI 兼容）”中填写应用容器网络可访问的 API 地址；Docker 容器内的 `127.0.0.1:11434` 不再可用。部署在宿主机的模型服务请使用宿主机局域网地址，或将两个服务接入同一个 Docker 网络后使用服务名。
+- 升级旧版本后，如不再需要历史模型文件，可手动清理数据卷中的 `/data/ollama/models`；清理前请确认其中没有仍在使用的模型数据。
+- 旧的 `OLLAMA_AUTO_PULL`、`OLLAMA_DEFAULT_MODEL`、`OLLAMA_MODELS` 环境变量已经废弃，新的镜像会忽略它们。
 
 ---
 

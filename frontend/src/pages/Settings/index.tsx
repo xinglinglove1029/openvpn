@@ -1367,19 +1367,16 @@ function ClientPackagesTab() {
 /* ========== AI 助手设置 Tab ========== */
 
 const PROVIDER_OPTIONS: { value: AIProvider; label: string; hint: string; defaultModel: string }[] = [
-  { value: 'ollama', label: 'Ollama（外部服务）', hint: 'http://your-ollama-host:11434/v1', defaultModel: 'qwen2.5:1.5b' },
   { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-v4-flash' },
   { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1', defaultModel: 'gpt-5.4-mini' },
-  { value: 'customize', label: '自定义（OpenAI 兼容）', hint: 'https://your-api.com/v1', defaultModel: '' },
+  { value: 'customize', label: '自定义外部模型（OpenAI 兼容）', hint: 'https://your-api.com/v1', defaultModel: '' },
 ];
 
-const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  ollama: ['qwen2.5:1.5b', 'qwen2.5:7b', 'qwen3:8b', 'qwen2.5:14b', 'llama3.2:3b'],
+const MODEL_PRESETS: Partial<Record<AIProvider, string[]>> = {
   deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
   openai: ['gpt-5.4-mini', 'gpt-5.4', 'gpt-4.1-mini'],
   customize: [],
 };
-
 type AIProfileForm = AIProviderProfile & { apiKey: string; clearAPIKey: boolean };
 type AIProfileForms = Record<AIProvider, AIProfileForm>;
 
@@ -1417,7 +1414,7 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
   const activeProfile = profiles[provider];
   const snapshot = useMemo(() => JSON.stringify({ enabled, provider, profiles }), [enabled, provider, profiles]);
   const isDirty = snapshot !== originalSnapshot;
-  const presetModels = MODEL_PRESETS[provider];
+  const presetModels = MODEL_PRESETS[provider] ?? [];
   const selectedModel = presetModels.includes(activeProfile.model) ? activeProfile.model : '__custom__';
 
   const updateProfile = (changes: Partial<AIProfileForm>) => {
@@ -1432,14 +1429,19 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
       const data = await api.get<AISettingsResponse>('/ovpn/settings/ai');
       const nextProfiles = createDefaultProfiles();
       for (const saved of data.profiles || []) {
-        nextProfiles[saved.provider] = { ...nextProfiles[saved.provider], ...saved, apiKey: '', clearAPIKey: false };
+        if (PROVIDER_OPTIONS.some((option) => option.value === saved.provider)) {
+          const savedProvider = saved.provider as AIProvider;
+          nextProfiles[savedProvider] = { ...nextProfiles[savedProvider], ...saved, provider: savedProvider, apiKey: '', clearAPIKey: false };
+        }
       }
-      // Backward compatibility for servers that only return the legacy active config.
-      if (!data.profiles?.length && data.config?.provider) {
+      // Ignore retired provider profiles returned by older servers; they remain preserved in the database.
+      if (!data.profiles?.length && data.config?.provider && PROVIDER_OPTIONS.some((option) => option.value === data.config.provider)) {
         const legacy = data.config;
-        nextProfiles[legacy.provider] = { ...nextProfiles[legacy.provider], ...legacy, has_api_key: Boolean(legacy.api_key), apiKey: '', clearAPIKey: false };
+        const legacyProvider = legacy.provider as AIProvider;
+        nextProfiles[legacyProvider] = { ...nextProfiles[legacyProvider], ...legacy, provider: legacyProvider, has_api_key: Boolean(legacy.api_key), apiKey: '', clearAPIKey: false };
       }
-      const activeProvider = data.active_provider || data.config?.provider || 'deepseek';
+      const configuredProvider = data.active_provider || data.config?.provider || 'deepseek';
+      const activeProvider = (PROVIDER_OPTIONS.some((option) => option.value === configuredProvider) ? configuredProvider : 'deepseek') as AIProvider;
       setEnabled(data.config?.enabled ?? false);
       setProvider(activeProvider);
       setProfiles(nextProfiles);
@@ -1550,11 +1552,11 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between rounded-lg border p-4"><div><p className="font-medium">启用 AI 助手</p><p className="text-sm text-muted-foreground">开启后 AI 助手菜单和功能将可用</p></div><Switch checked={enabled} onCheckedChange={setEnabled} /></div>
           <Separator />
-          <div className="space-y-2"><Label>模型提供商</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择提供商" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">Ollama 使用 OpenAI 兼容接口（/v1/chat/completions），请填写容器网络可访问的外部服务地址；切换供应商不会覆盖其他供应商配置。</p></div>
+          <div className="space-y-2"><Label>模型服务</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型服务" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">所有模型都通过外部 API 配置；切换模型服务不会覆盖其他服务的配置。</p></div>
 
           <div className="grid gap-6 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /><p className="text-xs text-muted-foreground">{provider === 'ollama' ? '镜像不再内置本地模型，请填写容器网络可访问的外部 Ollama API 地址。' : '支持自定义兼容接口地址。'}</p></div>
-            <div className="space-y-2"><div className="flex items-center justify-between"><Label htmlFor="ai-api-key">API 密钥</Label>{activeProfile.has_api_key && !activeProfile.clearAPIKey && <span className="text-xs text-[var(--success)]">已安全保存</span>}</div><div className="relative"><Input id="ai-api-key" type={showKey ? 'text' : 'password'} value={activeProfile.apiKey} onChange={(event) => updateProfile({ apiKey: event.target.value, clearAPIKey: false })} placeholder={provider === 'ollama' ? 'Ollama 默认不需要 API Key' : activeProfile.has_api_key ? '留空将保留已保存的密钥' : 'sk-xxx...'} className="pr-10" /><button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div>{activeProfile.has_api_key && <button type="button" className="text-xs text-muted-foreground underline" onClick={() => updateProfile({ clearAPIKey: !activeProfile.clearAPIKey })}>{activeProfile.clearAPIKey ? '取消清除密钥' : '清除已保存密钥'}</button>}<p className="text-xs text-muted-foreground">密钥加密存入数据库，读取时不会返回明文。</p></div>
+            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /><p className="text-xs text-muted-foreground">请填写容器网络可访问的外部模型 API 地址。</p></div>
+            <div className="space-y-2"><div className="flex items-center justify-between"><Label htmlFor="ai-api-key">API 密钥</Label>{activeProfile.has_api_key && !activeProfile.clearAPIKey && <span className="text-xs text-[var(--success)]">已安全保存</span>}</div><div className="relative"><Input id="ai-api-key" type={showKey ? 'text' : 'password'} value={activeProfile.apiKey} onChange={(event) => updateProfile({ apiKey: event.target.value, clearAPIKey: false })} placeholder={activeProfile.has_api_key ? '留空将保留已保存的密钥' : 'sk-xxx...'} className="pr-10" /><button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div>{activeProfile.has_api_key && <button type="button" className="text-xs text-muted-foreground underline" onClick={() => updateProfile({ clearAPIKey: !activeProfile.clearAPIKey })}>{activeProfile.clearAPIKey ? '取消清除密钥' : '清除已保存密钥'}</button>}<p className="text-xs text-muted-foreground">密钥加密存入数据库，读取时不会返回明文。</p></div>
             <div className="space-y-2"><Label>模型名称</Label><Select value={selectedModel} onValueChange={(value) => updateProfile({ model: value === '__custom__' ? '' : value })}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{presetModels.map((preset) => <SelectItem key={preset} value={preset}>{preset}</SelectItem>)}<SelectItem value="__custom__">自定义模型…</SelectItem></SelectContent></Select>{selectedModel === '__custom__' && <Input value={activeProfile.model} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="输入任意兼容模型 ID" className="mt-2" />}</div>
             <div className="space-y-2"><Label htmlFor="ai-max-tokens">最大 Token 数</Label><Input id="ai-max-tokens" type="number" value={activeProfile.max_tokens} onChange={(event) => updateProfile({ max_tokens: Number(event.target.value) || 4096 })} min={256} max={128000} /></div>
           </div>
