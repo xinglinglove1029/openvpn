@@ -82,6 +82,7 @@ export default function AIWidget() {
   const navigate = useNavigate();
   const { theme } = useTheme();
   const { hasPermission, aiEnabled, user } = useAuth();
+  const canUseAI = aiEnabled && hasPermission('ai:chat');
   const storageKey = chatStorageKey(user?.username);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -106,7 +107,7 @@ export default function AIWidget() {
   // React state could overwrite an existing fallback before it is read.
   useEffect(() => {
     let cancelled = false;
-    if (!storageKey) {
+    if (!canUseAI || !storageKey) {
       setMessages([]);
       setSessionID('');
       setHistoryReadyFor('');
@@ -141,7 +142,7 @@ export default function AIWidget() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [canUseAI, storageKey]);
 
   // LocalStorage is only an immediate, per-user fallback for unavailable history requests.
   useEffect(() => {
@@ -162,6 +163,14 @@ export default function AIWidget() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!canUseAI) {
+      setHealth(null);
+      prevAvailableRef.current = null;
+      return () => {
+        cancelled = true;
+      };
+    }
+
     // 初始拉取（静默，不弹提示）
     api
       .get<HealthStatus>('/ovpn/ai/health')
@@ -224,7 +233,7 @@ export default function AIWidget() {
       offReset();
       offReconnect();
     };
-  }, [storageKey]);
+  }, [canUseAI, storageKey]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -241,7 +250,7 @@ export default function AIWidget() {
 
   const sendMessage = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || loading || historyReadyFor !== storageKey) return;
+    if (!canUseAI || !text || loading || historyReadyFor !== storageKey) return;
 
     setInput('');
     const userMsg: ChatMessage = { role: 'user', content: text };
@@ -356,7 +365,7 @@ export default function AIWidget() {
   };
 
   const newChat = async () => {
-    if (loading || historyReadyFor !== storageKey) return;
+    if (!canUseAI || loading || historyReadyFor !== storageKey) return;
     const currentSessionID = sessionID;
     if (currentSessionID) {
       try {
@@ -386,7 +395,7 @@ export default function AIWidget() {
   };
 
   // AI 助手未启用或用户无 AI 聊天权限则不渲染
-  if (!aiEnabled || !hasPermission('ai:chat')) {
+  if (!canUseAI) {
     return null;
   }
 

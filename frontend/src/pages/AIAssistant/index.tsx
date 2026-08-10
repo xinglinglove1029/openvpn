@@ -54,7 +54,8 @@ function loadPersistedChat(storageKey: string): PersistedChat {
 }
 
 export default function AIAssistant() {
-  const { user } = useAuth();
+  const { user, hasPermission, aiEnabled } = useAuth();
+  const canUseAI = aiEnabled && hasPermission('ai:chat');
   const storageKey = chatStorageKey(user?.username);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -72,7 +73,7 @@ export default function AIAssistant() {
   // React state could overwrite an existing fallback before it is read.
   useEffect(() => {
     let cancelled = false;
-    if (!storageKey) {
+    if (!canUseAI || !storageKey) {
       setMessages([]);
       setSessionID('');
       setHistoryReadyFor('');
@@ -107,7 +108,7 @@ export default function AIAssistant() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [canUseAI, storageKey]);
 
   // LocalStorage is only an immediate, per-user fallback for unavailable history requests.
   useEffect(() => {
@@ -131,6 +132,13 @@ export default function AIAssistant() {
   // 2. 订阅 ai:health WS topic，状态变化时实时更新
   useEffect(() => {
     let cancelled = false;
+    if (!canUseAI) {
+      setHealth(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     api
       .get<HealthStatus>('/ovpn/ai/health')
       .then((data) => {
@@ -182,7 +190,7 @@ export default function AIAssistant() {
       offReset();
       offReconnect();
     };
-  }, []);
+  }, [canUseAI, storageKey]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -194,7 +202,7 @@ export default function AIAssistant() {
   // 发送消息
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading || historyReadyFor !== storageKey) return;
+    if (!canUseAI || !text || loading || historyReadyFor !== storageKey) return;
 
     setInput('');
 
@@ -314,7 +322,7 @@ export default function AIAssistant() {
 
   // 清空对话
   const clearChat = async () => {
-    if (loading || historyReadyFor !== storageKey) return;
+    if (!canUseAI || loading || historyReadyFor !== storageKey) return;
     const currentSessionID = sessionID;
     if (currentSessionID) {
       try {
