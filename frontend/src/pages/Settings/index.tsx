@@ -1367,14 +1367,14 @@ function ClientPackagesTab() {
 /* ========== AI 助手设置 Tab ========== */
 
 const PROVIDER_OPTIONS: { value: AIProvider; label: string; hint: string; defaultModel: string }[] = [
-  { value: 'ollama', label: 'Ollama（内置小模型）', hint: 'http://127.0.0.1:11434/v1', defaultModel: 'qwen2.5:7b' },
+  { value: 'ollama', label: 'Ollama（内置小模型）', hint: 'http://127.0.0.1:11434/v1', defaultModel: 'qwen2.5:1.5b' },
   { value: 'deepseek', label: 'DeepSeek', hint: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-v4-flash' },
   { value: 'openai', label: 'OpenAI', hint: 'https://api.openai.com/v1', defaultModel: 'gpt-5.4-mini' },
   { value: 'customize', label: '自定义（OpenAI 兼容）', hint: 'https://your-api.com/v1', defaultModel: '' },
 ];
 
 const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  ollama: ['qwen2.5:7b', 'qwen3:8b', 'qwen2.5:14b', 'llama3.2:3b'],
+  ollama: ['qwen2.5:1.5b', 'qwen2.5:7b', 'qwen3:8b', 'qwen2.5:14b', 'llama3.2:3b'],
   deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
   openai: ['gpt-5.4-mini', 'gpt-5.4', 'gpt-4.1-mini'],
   customize: [],

@@ -63,7 +63,7 @@ func TestMigrateAISettingsCreatesDisabledOllamaDefaultWithoutViper(t *testing.T)
 	if err := database.Where("provider = ?", AIProviderOllama).First(&profile).Error; err != nil {
 		t.Fatalf("load default Ollama profile: %v", err)
 	}
-	if profile.BaseURL != "http://127.0.0.1:11434/v1" || profile.Model != "qwen2.5:7b" {
+	if profile.BaseURL != "http://127.0.0.1:11434/v1" || profile.Model != "qwen2.5:1.5b" {
 		t.Fatalf("default profile = %#v, want Ollama database defaults", profile)
 	}
 	if profile.APIKeyEncrypted != "" {

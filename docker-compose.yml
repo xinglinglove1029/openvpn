@@ -14,10 +14,10 @@ services:
       - ADMIN_PASSWORD=admin
       - OVPN_GATEWAY=false
       # AI 助手配置（容器内已集成 ollama，默认 http://127.0.0.1:11434）
-      # 首次启动会自动后台拉取 qwen2.5:7b 模型（约 4.7GB）
-      # 设为 false 可禁用自动拉取，之后需手动 docker exec -it <容器> ollama pull qwen2.5:7b
+      # 首次启动会自动后台拉取 qwen2.5:1.5b 模型（约 1GB）
+      # 设为 false 可禁用自动拉取，之后需手动 docker exec -it <容器> ollama pull qwen2.5:1.5b
       - OLLAMA_AUTO_PULL=true
-      - OLLAMA_DEFAULT_MODEL=qwen2.5:7b
+      - OLLAMA_DEFAULT_MODEL=qwen2.5:1.5b
     volumes:
       - ./data:/data
       - /etc/localtime:/etc/localtime:ro

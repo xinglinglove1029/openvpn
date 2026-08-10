@@ -63,7 +63,7 @@
 ### 支持的 LLM Provider
 
 - **DeepSeek**（推荐，国内访问快，中文能力强）
-- **Ollama**（本地部署，Docker 镜像内置 `qwen2.5:7b`）
+- **Ollama**（本地部署，Docker 镜像内置 `qwen2.5:1.5b`）
 - **OpenAI** 兼容（任何 OpenAI API 格式的服务）
 - **Customize**（自定义 OpenAI 兼容端点）
 
@@ -432,7 +432,7 @@ docker run -d \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=admin \
   -e OLLAMA_AUTO_PULL=true \
-  -e OLLAMA_DEFAULT_MODEL=qwen2.5:7b \
+  -e OLLAMA_DEFAULT_MODEL=qwen2.5:1.5b \
   -v $(pwd)/data:/data \
   xinglinglove1029/openvpn:latest
 ```

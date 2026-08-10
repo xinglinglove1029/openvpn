@@ -108,7 +108,7 @@ func defaultAIProfile(provider string) AIProviderProfile {
 	}
 	switch provider {
 	case AIProviderOllama:
-		profile.BaseURL, profile.Model = "http://127.0.0.1:11434/v1", "qwen2.5:7b"
+		profile.BaseURL, profile.Model = "http://127.0.0.1:11434/v1", "qwen2.5:1.5b"
 	case AIProviderDeepSeek:
 		profile.BaseURL, profile.Model = "https://api.deepseek.com/v1", "deepseek-v4-flash"
 	case AIProviderOpenAI:

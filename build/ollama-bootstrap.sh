@@ -5,7 +5,7 @@ set -e
 
 MODELS_DIR="${OLLAMA_MODELS:-/data/ollama/models}"
 PULL_FLAG="/data/ollama/.pulled"
-DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:7b}"
+DEFAULT_MODEL="${OLLAMA_DEFAULT_MODEL:-qwen2.5:1.5b}"
 
 # 确保模型目录存在
 mkdir -p "$MODELS_DIR"
