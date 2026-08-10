@@ -1339,7 +1339,7 @@ function UserFormDialog({
       setName(mode === 'edit' && user ? user.name || '' : '');
       setEmail(mode === 'edit' && user ? user.email || '' : '');
       setIpAddr(mode === 'edit' && user ? user.ipAddr || '' : '');
-      setOvpnConfig(mode === 'edit' && user ? user.ovpnConfig || '' : clients[0]?.name || '');
+      setOvpnConfig(mode === 'edit' && user ? user.ovpnConfig || '' : '');
       setPassword('');
       setShowPassword(false);
       setExpireDate(mode === 'edit' && user ? user.expireDate || '' : '');
