@@ -2521,21 +2521,28 @@ func Run(info BuildInfo) {
 			}
 
 			username := user.Username
+			clientName := strings.TrimSuffix(strings.TrimSpace(user.OvpnConfig), ".ovpn")
+			if clientName == "" {
+				clientName = username
+			}
 
 			// 1. 撤销客户端证书（纯 Go 实现，不再依赖 easyrsa）
-			if revErr := RevokeByName(username); revErr != nil {
+			if revErr := RevokeByName(clientName); revErr != nil {
 				// 证书可能不存在（例如用户还未生成过 ovpn 客户端文件），这里只记录警告不阻断删除
 				logger.Warn(context.Background(), "revoke client cert failed (may not exist): "+revErr.Error())
 			} else {
 				// 吊销成功，发送 SIGHUP 通知 openvpn 重新加载 CRL
 				ov.sendCommand("signal SIGHUP")
+				if err := removeClientCredentials(clientName); err != nil {
+					logger.Warn(context.Background(), "remove revoked client credentials failed: "+err.Error())
+				}
 			}
 
 			// 2. 删除客户端配置文件和 ccd 目录
 			dataRoot, err := os.OpenRoot(ovData)
 			if err == nil {
-				dataRoot.Remove(filepath.Join("clients", fmt.Sprintf("%s.ovpn", username)))
-				dataRoot.Remove(filepath.Join("ccd", username))
+				dataRoot.Remove(filepath.Join("clients", fmt.Sprintf("%s.ovpn", clientName)))
+				dataRoot.Remove(filepath.Join("ccd", clientName))
 				dataRoot.Close()
 			} else {
 				logger.Warn(context.Background(), "remove client files failed: "+err.Error())
@@ -2860,6 +2867,9 @@ func Run(info BuildInfo) {
 				logger.Warn(context.Background(), "吊销证书失败，继续清理客户端文件: %s", revErr.Error())
 			} else {
 				ov.sendCommand("signal SIGHUP")
+				if err := removeClientCredentials(name); err != nil {
+					logger.Warn(context.Background(), "remove revoked client credentials failed: "+err.Error())
+				}
 			}
 
 			dataRoot, err := os.OpenRoot(ovData)

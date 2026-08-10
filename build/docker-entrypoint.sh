@@ -158,8 +158,29 @@ genclient() {
 	OVPN_PORT=$(jq -r '.openvpn.ovpn_port // "1194"' $SYSTEM_CONFIG)
 	OVPN_IPV6=$(jq -r '.openvpn.ovpn_ipv6 // "false"' $SYSTEM_CONFIG)
 
-	if [ ! -f "$EASYRSA_PKI/private/$1.key" ]; then
-		/usr/share/easy-rsa/easyrsa --batch build-client-full $1 nopass >/dev/null
+	CLIENT_CERT="$EASYRSA_PKI/issued/$1.crt"
+	CLIENT_KEY="$EASYRSA_PKI/private/$1.key"
+
+	# A deleted client certificate remains revoked in crl.pem. Reusing its key and
+	# certificate would produce a new .ovpn that OpenVPN rejects during TLS verification.
+	if [ -f "$CLIENT_CERT" ] && [ -f "$CLIENT_KEY" ]; then
+		if ! VERIFY_OUTPUT=$(openssl verify -crl_check -CAfile "$EASYRSA_PKI/ca.crt" -CRLfile "$EASYRSA_PKI/crl.pem" "$CLIENT_CERT" 2>&1); then
+			if printf '%s\n' "$VERIFY_OUTPUT" | grep -qi 'certificate revoked'; then
+				# The CRL is the revocation record of authority. Removing only the local
+				# artifacts permits EasyRSA to issue a fresh certificate with a new serial.
+				rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+			else
+				echo "Refusing to reuse client certificate for $1: $VERIFY_OUTPUT" >&2
+				return 1
+			fi
+		fi
+	elif [ -e "$CLIENT_CERT" ] || [ -e "$CLIENT_KEY" ]; then
+		# A partial credential pair cannot generate a usable client profile.
+		rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+	fi
+
+	if [ ! -f "$CLIENT_CERT" ] || [ ! -f "$CLIENT_KEY" ]; then
+		/usr/share/easy-rsa/easyrsa --batch build-client-full "$1" nopass >/dev/null
 	fi
 	mkdir -p $OVPN_DATA/clients
 	cat <<EOF >$OVPN_DATA/clients/$1.ovpn

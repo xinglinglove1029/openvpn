@@ -781,11 +781,33 @@ func parseCertAndKey(certPEM, keyPEM []byte) (*x509.Certificate, *ecdsa.PrivateK
 	return cert, key, nil
 }
 
-func generateClientCert(name string) error {
-	if fileExists(clientCertPath(name)) && fileExists(clientKeyPath(name)) {
-		return nil
+func isCertificateRevoked(cert *x509.Certificate) (bool, error) {
+	revokedList, err := loadRevokedList()
+	if err != nil {
+		return false, err
 	}
 
+	serial := cert.SerialNumber.String()
+	for _, entry := range revokedList {
+		if entry.SerialNumber == serial {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// removeClientCredentials removes the revoked client's locally stored certificate and key.
+// The revocation remains in revoked.json and the CRL, so removing these artifacts does not restore access.
+func removeClientCredentials(name string) error {
+	for _, path := range []string{clientCertPath(name), clientKeyPath(name)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove client credential %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func generateClientCert(name string) error {
 	if err := ensurePKIDirs(); err != nil {
 		return err
 	}
@@ -793,6 +815,30 @@ func generateClientCert(name string) error {
 	if !fileExists(caCertPath()) || !fileExists(caKeyPath()) {
 		if err := initPKI(); err != nil {
 			return err
+		}
+	}
+
+	// A deleted client is added to the CRL. Reusing its name must issue a new certificate;
+	// otherwise the newly downloaded .ovpn embeds a certificate OpenVPN will reject.
+	if fileExists(clientCertPath(name)) && fileExists(clientKeyPath(name)) {
+		certPEM, err := os.ReadFile(clientCertPath(name))
+		if err != nil {
+			return fmt.Errorf("read existing client certificate: %w", err)
+		}
+		block, _ := pem.Decode(certPEM)
+		if block == nil {
+			return fmt.Errorf("parse existing client certificate PEM")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("parse existing client certificate: %w", err)
+		}
+		revoked, err := isCertificateRevoked(cert)
+		if err != nil {
+			return fmt.Errorf("check existing client certificate revocation status: %w", err)
+		}
+		if !revoked {
+			return nil
 		}
 	}
 

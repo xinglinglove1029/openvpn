@@ -752,6 +752,9 @@ func (s *AIToolService) DeleteUser(ctx agent.ToolContext, operator string, req a
 		if s.ov != nil {
 			s.ov.sendCommand("signal SIGHUP")
 		}
+		if err := removeClientCredentials(clientName); err != nil {
+			logger.Warn(context.Background(), fmt.Sprintf("DeleteUser: remove revoked client credentials for %s: %s", clientName, err.Error()))
+		}
 	}
 
 	// 2. 删除客户端配置文件和 CCD 目录
@@ -870,8 +873,13 @@ func (s *AIToolService) DeleteClient(ctx agent.ToolContext, operator string, req
 			return ai.DeleteClientResult{Success: false, Message: fmt.Sprintf("吊销证书失败: %v", revErr)}, revErr
 		}
 		logger.Warn(context.Background(), fmt.Sprintf("吊销证书失败，继续清理: %s", revErr.Error()))
-	} else if s.ov != nil {
-		s.ov.sendCommand("signal SIGHUP")
+	} else {
+		if s.ov != nil {
+			s.ov.sendCommand("signal SIGHUP")
+		}
+		if err := removeClientCredentials(name); err != nil {
+			logger.Warn(context.Background(), fmt.Sprintf("DeleteClient: remove revoked client credentials for %s: %s", name, err.Error()))
+		}
 	}
 	os.Remove(ovpnFile)
 	os.Remove(filepath.Join(ovData, "ccd", name))
