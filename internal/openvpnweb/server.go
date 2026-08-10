@@ -698,6 +698,9 @@ func Run(info BuildInfo) {
 	if err := MigrateAISettings(db); err != nil {
 		panic(fmt.Errorf("initialize AI provider settings: %w", err))
 	}
+	if err := MigrateAIChatHistory(db); err != nil {
+		panic(fmt.Errorf("initialize AI chat history: %w", err))
+	}
 
 	// 初始化 IP 归属地解析器
 	if err := InitIPRegion(""); err != nil {
@@ -786,7 +789,8 @@ func Run(info BuildInfo) {
 	// 初始化 AI 助手模块（可选，通过 ai.enabled 控制）
 	// 注意：chatMgr 始终初始化，确保 AI 路由可注册，即使 LLM 客户端暂未就绪
 	// 架构：chatMgr（会话ID管理）+ aiClient（LLM 原子引用）+ agentRunner（ADK 推理循环）+ healthChecker（后台自检）
-	var chatMgr *ai.ChatSessionManager = ai.NewChatSessionManager(nil)
+	chatHistoryStore := NewSQLiteAIChatHistoryStore(db)
+	var chatMgr *ai.ChatSessionManager = ai.NewChatSessionManager(nil, chatHistoryStore)
 	aiClient := ai.NewAtomicClient(nil)
 	// healthChecker 始终创建，确保 /ovpn/ai/health 路由可读缓存（即使 LLM 未配置也返回 unavailable）
 	healthChecker := ai.NewHealthChecker(aiClient,

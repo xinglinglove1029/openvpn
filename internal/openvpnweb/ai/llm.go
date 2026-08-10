@@ -645,14 +645,19 @@ func (ac *AtomicClient) Model() string {
 	return client.Model()
 }
 
-// Ping 发送简单消息检测连通性
+// Ping checks provider reachability. Ollama uses its native model-list endpoint so health checks never load or infer a model.
 func (c *OpenAIModel) Ping(ctx context.Context) error {
 	c.mu.RLock()
+	provider := c.provider
 	baseURL := c.baseURL
 	apiKey := c.apiKey
 	modelName := c.model
 	httpClient := c.httpClient
 	c.mu.RUnlock()
+
+	if strings.EqualFold(provider, "ollama") {
+		return pingOllamaTags(ctx, httpClient, baseURL, modelName)
+	}
 
 	payload := openAIChatReq{
 		Model: modelName,
@@ -663,13 +668,13 @@ func (c *OpenAIModel) Ping(ctx context.Context) error {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("序列化请求失败: %w", err)
+		return fmt.Errorf("marshal ping request: %w", err)
 	}
 
-	url := baseURL + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := baseURL + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
+		return fmt.Errorf("create ping request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -678,13 +683,80 @@ func (c *OpenAIModel) Ping(ctx context.Context) error {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("请求 API 失败: %w", err)
+		return fmt.Errorf("request API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API 返回错误 (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes)))
+		return fmt.Errorf("API returned an error (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes)))
 	}
 	return nil
+}
+
+type ollamaTagsResponse struct {
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
+}
+
+func pingOllamaTags(ctx context.Context, httpClient *http.Client, baseURL, modelName string) error {
+	endpoint, err := ollamaTagsEndpoint(baseURL)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create Ollama tags request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request Ollama tags: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Ollama tags returned an error (status=%d): %s", resp.StatusCode, sanitizeAPIErrorBody(string(respBytes)))
+	}
+
+	var tags ollamaTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return fmt.Errorf("decode Ollama tags: %w", err)
+	}
+	for _, model := range tags.Models {
+		if normalizeOllamaModelName(model.Name) == normalizeOllamaModelName(modelName) {
+			return nil
+		}
+	}
+	return fmt.Errorf("Ollama model %q is not installed; run: ollama pull %s", modelName, modelName)
+}
+
+// normalizeOllamaModelName aligns Ollama's implicit latest tag with the explicit
+// name returned by /api/tags. Explicit tags and digest references remain unchanged.
+func normalizeOllamaModelName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.Contains(name, "@") {
+		return name
+	}
+	lastSlash := strings.LastIndex(name, "/")
+	if strings.LastIndex(name, ":") <= lastSlash {
+		return name + ":latest"
+	}
+	return name
+}
+
+func ollamaTagsEndpoint(baseURL string) (string, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid Ollama base URL: %q", baseURL)
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(path, "/v1") {
+		path = strings.TrimSuffix(path, "/v1")
+	}
+	parsed.Path = strings.TrimRight(path, "/") + "/api/tags"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }

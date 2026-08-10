@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { api } from '@/api';
 import { realtimeHub } from '@/lib/notificationHub';
 import { SSEParser } from '@/lib/sse';
+import { useAuth } from '@/store/auth';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -22,17 +23,27 @@ interface HealthStatus {
   error?: string;
 }
 
-const CHAT_STORAGE_KEY = 'openvpn-ai-chat';
+const CHAT_STORAGE_KEY_PREFIX = 'openvpn-ai-chat';
 
 interface PersistedChat {
   messages: ChatMessage[];
   sessionID: string;
 }
 
-/** 从 localStorage 恢复聊天记录 */
-function loadPersistedChat(): PersistedChat {
+interface HistoryResponse {
+  session_id: string;
+  messages: ChatMessage[];
+}
+
+function chatStorageKey(username?: string): string {
+  return username ? `${CHAT_STORAGE_KEY_PREFIX}:${username}` : '';
+}
+
+/** Load the per-user localStorage fallback cache. */
+function loadPersistedChat(storageKey: string): PersistedChat {
+  if (!storageKey) return { messages: [], sessionID: '' };
   try {
-    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return { messages: [], sessionID: '' };
     const parsed = JSON.parse(raw) as PersistedChat;
     if (!Array.isArray(parsed.messages)) return { messages: [], sessionID: '' };
@@ -43,28 +54,77 @@ function loadPersistedChat(): PersistedChat {
 }
 
 export default function AIAssistant() {
-  const [initial] = useState(loadPersistedChat);
-  const [messages, setMessages] = useState<ChatMessage[]>(initial.messages);
+  const { user } = useAuth();
+  const storageKey = chatStorageKey(user?.username);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [sessionID, setSessionID] = useState<string>(initial.sessionID);
+  const [sessionID, setSessionID] = useState<string>('');
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [historyReadyFor, setHistoryReadyFor] = useState('');
 
-  // 持久化聊天记录到 localStorage（刷新页面后可恢复）
+  // Restore the current user's fallback cache first, then replace it with SQLite history.
+  // Do not write to localStorage until this restoration completes, or an empty initial
+  // React state could overwrite an existing fallback before it is read.
   useEffect(() => {
+    let cancelled = false;
+    if (!storageKey) {
+      setMessages([]);
+      setSessionID('');
+      setHistoryReadyFor('');
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const fallback = loadPersistedChat(storageKey);
+    setMessages(fallback.messages);
+    setSessionID(fallback.sessionID);
+    setHistoryReadyFor('');
+
+    const endpoint = fallback.sessionID
+      ? `/ovpn/ai/history?session_id=${encodeURIComponent(fallback.sessionID)}`
+      : '/ovpn/ai/history';
+    api
+      .get<HistoryResponse>(endpoint)
+      .then((history) => {
+        if (cancelled) return;
+        // A successful server response is authoritative, including an empty history.
+        setSessionID(history.session_id || '');
+        setMessages(history.messages || []);
+      })
+      .catch(() => {
+        // Keep the per-user local fallback if the durable history request fails.
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryReadyFor(storageKey);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey]);
+
+  // LocalStorage is only an immediate, per-user fallback for unavailable history requests.
+  useEffect(() => {
+    if (!storageKey || historyReadyFor !== storageKey) return;
     try {
+      if (!sessionID && messages.length === 0) {
+        localStorage.removeItem(storageKey);
+        return;
+      }
       localStorage.setItem(
-        CHAT_STORAGE_KEY,
+        storageKey,
         JSON.stringify({ messages, sessionID } satisfies PersistedChat),
       );
     } catch {
-      // localStorage 满或不可用时静默忽略
+      // Browser storage may be disabled or full; SQLite remains authoritative.
     }
-  }, [messages, sessionID]);
+  }, [historyReadyFor, messages, sessionID, storageKey]);
 
   // 健康状态订阅：
   // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）
@@ -90,10 +150,16 @@ export default function AIAssistant() {
     const offReset = realtimeHub.subscribe<{ reason?: string; message?: string }>(
       'ai:session_reset',
       (payload) => {
-        setSessionID('');
         setMessages([]);
+        setSessionID('');
         setStreaming('');
-        toast.info(payload?.message || 'AI 配置已更新，会话已重置');
+        setInput('');
+        try {
+          if (storageKey) localStorage.removeItem(storageKey);
+        } catch {
+          // SQLite remains authoritative when browser storage is unavailable.
+        }
+        toast.info(payload?.message || 'AI configuration updated; the next message will use a new session');
       },
     );
 
@@ -128,7 +194,7 @@ export default function AIAssistant() {
   // 发送消息
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || historyReadyFor !== storageKey) return;
 
     setInput('');
 
@@ -247,10 +313,25 @@ export default function AIAssistant() {
   };
 
   // 清空对话
-  const clearChat = () => {
+  const clearChat = async () => {
+    if (loading || historyReadyFor !== storageKey) return;
+    const currentSessionID = sessionID;
+    if (currentSessionID) {
+      try {
+        await api.delete(`/ovpn/ai/history?session_id=${encodeURIComponent(currentSessionID)}`);
+      } catch (err: any) {
+        toast.error(err.message || 'Failed to clear AI chat history');
+        return;
+      }
+    }
     setMessages([]);
     setSessionID('');
     setStreaming('');
+    try {
+      if (storageKey) localStorage.removeItem(storageKey);
+    } catch {
+      // SQLite remains authoritative when browser storage is unavailable.
+    }
   };
 
   // 键盘快捷键
@@ -292,7 +373,12 @@ export default function AIAssistant() {
             </Badge>
             {/* 清空按钮 */}
             {messages.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={clearChat}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearChat}
+                disabled={loading || historyReadyFor !== storageKey}
+              >
                 <Trash2 className="h-4 w-4 mr-1" />
                 清空对话
               </Button>
@@ -318,7 +404,7 @@ export default function AIAssistant() {
                     key={q}
                     variant="outline"
                     size="sm"
-                    disabled={!available}
+                    disabled={!available || historyReadyFor !== storageKey}
                     onClick={() => {
                       setInput(q);
                       inputRef.current?.focus();
@@ -396,7 +482,7 @@ export default function AIAssistant() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={available ? '输入消息，Enter 发送，Shift+Enter 换行' : 'AI 服务不可用'}
-                disabled={!available || loading}
+                disabled={!available || loading || historyReadyFor !== storageKey}
                 rows={1}
                 className="min-h-[40px] max-h-[120px] resize-none"
               />
@@ -407,7 +493,7 @@ export default function AIAssistant() {
               ) : (
                 <Button
                   size="icon"
-                  disabled={!input.trim() || !available}
+                  disabled={!input.trim() || !available || historyReadyFor !== storageKey}
                   onClick={sendMessage}
                 >
                   <Send className="h-4 w-4" />

@@ -83,3 +83,16 @@
 - source_spec: `spec-ai-settings-database-only-storage.md`
   summary: 存在非 ID=1 或缺失活动 provider profile 的损坏 AI 数据库时，初始化不会自动修复。
   evidence: `MigrateAISettings` 保持已有 SQLite 数据不覆盖的原则，异常数据库仍会在后续读取活动配置时返回错误。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-ai-health-and-chat-history-persistence.md`
+  summary: 同一用户同一会话的并发 AI 请求尚未串行化，可能导致模型上下文和落库顺序竞争。
+  evidence: 当前会话管理器可恢复和追加历史，但没有按 `username + session_id` 建立请求锁或队列；这是现有交互模型在高并发下的潜在一致性风险，并非本次修复引入。
+- source_spec: `_bmad-output/implementation-artifacts/spec-ai-health-and-chat-history-persistence.md`
+  summary: 聊天历史 API 尚未支持分页与最大响应条数，长会话会导致读取负载线性增长。
+  evidence: 最近会话恢复直接返回完整会话记录；大规模或长期使用时需要 cursor/limit 约束，但本次需求仅要求恢复最近会话。
+- source_spec: `_bmad-output/implementation-artifacts/spec-ai-health-and-chat-history-persistence.md`
+  summary: 持久化聊天记录尚未配置保留期限、配额或自动清理策略。
+  evidence: `ai_chat_messages` 会随对话持续增长；需要单独定义产品级保留策略，不能在本次 bugfix 中擅自删除用户记录。
+- source_spec: `_bmad-output/implementation-artifacts/spec-ai-health-and-chat-history-persistence.md`
+  summary: 聊天输入和持久化历史尚未设置显式单条/总字节大小上限。
+  evidence: 现有接口接受完整文本并回灌模型上下文；需要结合部署资源与模型上下文窗口确定限制，当前规格未给出唯一可实施的阈值。

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -9,39 +10,52 @@ import (
 	"google.golang.org/genai"
 )
 
-// ChatSessionManager 轻量会话管理器
-// 负责生成 sessionID、追踪活跃会话、从 ADK session.Service 提取历史消息。
-// 实际会话存储与上下文管理由 ADK 的 session.Service（在 AgentRunner 内部）负责。
-type ChatSessionManager struct {
-	mu          sync.RWMutex
-	activeUsers map[string]time.Time // username → 最后活跃时间（用于清理统计）
-	agentRunner *AgentRunner         // 用于读取 session events
+// ChatHistoryStore persists completed chat messages independently of the ADK in-memory session.
+type ChatHistoryStore interface {
+	Append(ctx context.Context, username, sessionID string, message HistoryMessage) error
+	SaveExchange(ctx context.Context, username, sessionID string, userMessage, assistantMessage HistoryMessage) error
+	List(ctx context.Context, username, sessionID string) ([]HistoryMessage, error)
+	LatestSession(ctx context.Context, username string) (string, error)
+	Delete(ctx context.Context, username, sessionID string) error
 }
 
-// NewChatSessionManager 创建会话管理器
-// agentRunner 可为 nil（此时 History 接口返回空列表）；启动后通过 SetAgentRunner 注入。
-func NewChatSessionManager(agentRunner *AgentRunner) *ChatSessionManager {
+// ChatSessionManager manages active ADK sessions while SQLite remains the source of truth for chat history.
+type ChatSessionManager struct {
+	mu           sync.RWMutex
+	activeUsers  map[string]time.Time // username to last activity time
+	agentRunner  *AgentRunner         // immediate model context and tool execution
+	historyStore ChatHistoryStore     // completed message persistence
+}
+
+// NewChatSessionManager creates a session manager.
+// agentRunner may be nil; persisted history is still available and a runner may be injected later.
+func NewChatSessionManager(agentRunner *AgentRunner, historyStore ...ChatHistoryStore) *ChatSessionManager {
+	var store ChatHistoryStore
+	if len(historyStore) > 0 {
+		store = historyStore[0]
+	}
 	return &ChatSessionManager{
-		activeUsers: make(map[string]time.Time),
-		agentRunner: agentRunner,
+		activeUsers:  make(map[string]time.Time),
+		agentRunner:  agentRunner,
+		historyStore: store,
 	}
 }
 
-// SetAgentRunner 注入或更新 AgentRunner（用于热切换后重新绑定）
+// SetAgentRunner injects or replaces the AgentRunner after a provider switch.
 func (m *ChatSessionManager) SetAgentRunner(r *AgentRunner) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.agentRunner = r
 }
 
-// GetAgentRunner 获取当前 AgentRunner（线程安全）
+// GetAgentRunner returns the current AgentRunner safely.
 func (m *ChatSessionManager) GetAgentRunner() *AgentRunner {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.agentRunner
 }
 
-// EnsureSession 确保会话存在并标记用户活跃
+// EnsureSession makes sure the session exists and updates the user's activity time.
 func (m *ChatSessionManager) EnsureSession(ctx context.Context, username, sessionID string) (string, error) {
 	m.mu.Lock()
 	m.activeUsers[username] = time.Now()
@@ -49,33 +63,68 @@ func (m *ChatSessionManager) EnsureSession(ctx context.Context, username, sessio
 	m.mu.Unlock()
 
 	if runner == nil {
-		// AgentRunner 未就绪时仅生成 sessionID，不实际创建 ADK session
+		// Before a runner is ready, generate an ID but do not create an ADK session.
 		if sessionID == "" {
 			sessionID = generateSessionID(username)
 		}
 		return sessionID, nil
 	}
-	return runner.EnsureSession(ctx, username, sessionID)
+
+	// ADK sessions are intentionally in memory. When a process restart, idle cleanup, or
+	// provider switch removed the ADK session, rebuild its model context from SQLite before
+	// accepting the follow-up prompt.
+	var history []HistoryMessage
+	if sessionID != "" {
+		m.mu.RLock()
+		store := m.historyStore
+		m.mu.RUnlock()
+		if store != nil {
+			var err error
+			history, err = store.List(ctx, username, sessionID)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	return runner.EnsureSessionWithHistory(ctx, username, sessionID, history)
 }
 
-// GetHistory 从 ADK session 提取历史消息
-// 返回 user/assistant 角色的文本消息列表（过滤工具调用中间事件）
-func (m *ChatSessionManager) GetHistory(ctx context.Context, username, sessionID string) ([]HistoryMessage, error) {
+// SaveExchange atomically persists a completed user/assistant turn. Persistence errors are returned to
+// callers so they can be logged without changing an otherwise successful chat response.
+func (m *ChatSessionManager) SaveExchange(ctx context.Context, username, sessionID string, userMessage, assistantMessage HistoryMessage) error {
 	m.mu.RLock()
+	store := m.historyStore
+	m.mu.RUnlock()
+	if store == nil || sessionID == "" {
+		return nil
+	}
+	return store.SaveExchange(ctx, username, sessionID, userMessage, assistantMessage)
+}
+
+// GetHistory reads the SQLite history authority. It only falls back to ADK when no history store was injected.
+func (m *ChatSessionManager) GetHistory(ctx context.Context, username, sessionID string) ([]HistoryMessage, error) {
+	if sessionID == "" {
+		return []HistoryMessage{}, nil
+	}
+
+	m.mu.RLock()
+	store := m.historyStore
 	runner := m.agentRunner
 	m.mu.RUnlock()
-
-	if runner == nil || sessionID == "" {
+	if store != nil {
+		return store.List(ctx, username, sessionID)
+	}
+	if runner == nil {
 		return []HistoryMessage{}, nil
 	}
 
 	resp, err := runner.sessionService.Get(ctx, &session.GetRequest{
-		AppName: AgentAppName,
-		UserID:  username,
+		AppName:   AgentAppName,
+		UserID:    username,
 		SessionID: sessionID,
 	})
 	if err != nil {
-		return []HistoryMessage{}, nil // 会话不存在时返回空列表
+		return []HistoryMessage{}, nil
 	}
 
 	events := resp.Session.Events()
@@ -84,11 +133,7 @@ func (m *ChatSessionManager) GetHistory(ctx context.Context, username, sessionID
 	}
 	msgs := make([]HistoryMessage, 0, events.Len())
 	for event := range events.All() {
-		// 跳过工具调用/响应事件、部分事件
-		if HasToolCall(event) || HasToolResponse(event) {
-			continue
-		}
-		if event.Partial {
+		if HasToolCall(event) || HasToolResponse(event) || event.Partial {
 			continue
 		}
 		text := ExtractEventText(event)
@@ -99,23 +144,45 @@ func (m *ChatSessionManager) GetHistory(ctx context.Context, username, sessionID
 		if event.Author == "user" {
 			role = "user"
 		}
-		msgs = append(msgs, HistoryMessage{
-			Role:    role,
-			Content: text,
-		})
+		msgs = append(msgs, HistoryMessage{Role: role, Content: text})
 	}
 	return msgs, nil
 }
 
-// DeleteSession 删除会话（用于"新会话"功能）
-func (m *ChatSessionManager) DeleteSession(ctx context.Context, username, sessionID string) error {
+// LatestSession returns the most recently active persisted session for a user.
+func (m *ChatSessionManager) LatestSession(ctx context.Context, username string) (string, error) {
 	m.mu.RLock()
-	runner := m.agentRunner
+	store := m.historyStore
 	m.mu.RUnlock()
-	if runner == nil || sessionID == "" {
+	if store == nil {
+		return "", nil
+	}
+	return store.LatestSession(ctx, username)
+}
+
+// DeleteSession removes only the specified user's persisted messages and its ADK session.
+func (m *ChatSessionManager) DeleteSession(ctx context.Context, username, sessionID string) error {
+	if sessionID == "" {
 		return nil
 	}
-	return runner.DeleteSession(ctx, username, sessionID)
+	m.mu.RLock()
+	store := m.historyStore
+	runner := m.agentRunner
+	m.mu.RUnlock()
+	if store != nil {
+		if err := store.Delete(ctx, username, sessionID); err != nil {
+			return err
+		}
+	}
+	if runner == nil {
+		return nil
+	}
+	// SQLite is authoritative. A stale in-memory session must not make a successful
+	// durable-history deletion look like a failed clear operation to the client.
+	if err := runner.DeleteSession(ctx, username, sessionID); err != nil {
+		log.Printf("delete AI in-memory session failed (user=%s, session=%s): %v", username, sessionID, err)
+	}
+	return nil
 }
 
 // CleanupIdle 清理空闲用户记录并同步删除其 ADK session，避免内存泄漏

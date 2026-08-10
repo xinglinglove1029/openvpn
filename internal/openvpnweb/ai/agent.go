@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -69,12 +70,12 @@ func NewAgentRunner(llm *OpenAIModel, tools []tool.Tool, cfg AgentConfig) (*Agen
 
 	// 创建 LLMAgent
 	agentInst, err := llmagent.New(llmagent.Config{
-		Name:                   AgentName,
-		Description:            "OpenVPN 智能运维助手，可协助配置、排障、分析，并能调用业务工具完成用户管理任务",
-		Model:                  llm,
-		Instruction:            cfg.SystemPrompt,
-		GenerateContentConfig:  genCfg,
-		Tools:                  tools,
+		Name:                  AgentName,
+		Description:           "OpenVPN 智能运维助手，可协助配置、排障、分析，并能调用业务工具完成用户管理任务",
+		Model:                 llm,
+		Instruction:           cfg.SystemPrompt,
+		GenerateContentConfig: genCfg,
+		Tools:                 tools,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("创建 LLMAgent 失败: %w", err)
@@ -116,46 +117,67 @@ func (a *AgentRunner) Run(ctx context.Context, userID, sessionID, message string
 }
 
 // EnsureSession 确保会话存在（不存在则创建），返回可用的 sessionID
-// 区分 NotFound（正常，创建新会话）与其他错误（返回，避免误创建）
+// EnsureSession ensures an ADK session exists without restoring durable history.
 func (a *AgentRunner) EnsureSession(ctx context.Context, userID, sessionID string) (string, error) {
+	return a.EnsureSessionWithHistory(ctx, userID, sessionID, nil)
+}
+
+// EnsureSessionWithHistory recreates a missing in-memory ADK session and hydrates it with
+// completed SQLite turns. It is used after a restart, idle cleanup, or provider switch so
+// displayed history and model context stay consistent.
+func (a *AgentRunner) EnsureSessionWithHistory(ctx context.Context, userID, sessionID string, history []HistoryMessage) (string, error) {
 	if userID == "" {
-		return "", fmt.Errorf("userID 不能为空")
+		return "", fmt.Errorf("userID ????")
 	}
 	if sessionID == "" {
 		sessionID = generateSessionID(userID)
 	}
 
-	// 尝试获取，不存在则创建（AutoCreateSession=true 时 Runner.Run 会自动创建，
-	// 但提前创建可确保 session 事件先返回 session_id 给前端）
-	_, err := a.sessionService.Get(ctx, &session.GetRequest{
+	resp, err := a.sessionService.Get(ctx, &session.GetRequest{
 		AppName:   AgentAppName,
 		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err == nil {
+		_ = resp
 		return sessionID, nil
 	}
-
-	// 区分 NotFound 与其他错误：NotFound 是预期行为（创建新会话），
-	// 其他错误（如网络/存储异常）不应继续创建，直接返回避免掩盖真实问题
 	if !isSessionNotFoundError(err) {
-		return "", fmt.Errorf("获取会话失败: %w", err)
+		return "", fmt.Errorf("??????: %w", err)
 	}
 
-	_, err = a.sessionService.Create(ctx, &session.CreateRequest{
+	created, err := a.sessionService.Create(ctx, &session.CreateRequest{
 		AppName:   AgentAppName,
 		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("创建会话失败: %w", err)
+		return "", fmt.Errorf("??????: %w", err)
+	}
+	for _, message := range history {
+		if message.Content == "" {
+			continue
+		}
+		role := genai.RoleModel
+		author := AgentName
+		if message.Role == "user" {
+			role = genai.RoleUser
+			author = genai.RoleUser
+		}
+		event := session.NewEvent("")
+		event.Author = author
+		event.LLMResponse = model.LLMResponse{Content: &genai.Content{
+			Role:  role,
+			Parts: []*genai.Part{{Text: message.Content}},
+		}}
+		if err := a.sessionService.AppendEvent(ctx, created.Session, event); err != nil {
+			_ = a.sessionService.Delete(ctx, &session.DeleteRequest{AppName: AgentAppName, UserID: userID, SessionID: sessionID})
+			return "", fmt.Errorf("????????: %w", err)
+		}
 	}
 	return sessionID, nil
 }
 
-// isSessionNotFoundError 判断错误是否为 session 不存在
-// ADK session.Service 的 Get 在 session 不存在时返回 error，
-// 通过字符串匹配兼容不同实现（ADK 未导出统一的 NotFound 错误）
 func isSessionNotFoundError(err error) bool {
 	if err == nil {
 		return false

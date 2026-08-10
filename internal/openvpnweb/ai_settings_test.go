@@ -236,12 +236,13 @@ func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) 
 	}
 }
 
-func TestOllamaBareURLUsesV1ChatCompletions(t *testing.T) {
+func TestOllamaBareURLUsesNativeTagsHealthCheck(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("path = %q, want /v1/chat/completions", r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/tags" {
+			t.Errorf("request = %s %q, want GET /api/tags", r.Method, r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"qwen2.5:7b"}]}`))
 	}))
 	defer server.Close()
 

@@ -29,6 +29,7 @@ func RegisterAIRoutes(rg *gin.RouterGroup,
 	rg.GET("/health", handler.Health)
 	rg.POST("/chat", handler.Chat)
 	rg.GET("/history", handler.History)
+	rg.DELETE("/history", handler.DeleteHistory)
 }
 
 // AIHandler AI 模块 HTTP handler
@@ -210,6 +211,16 @@ func (h *AIHandler) Chat(c *gin.Context) {
 		return
 	}
 
+	if finalText != "" {
+		// Persist only a completed pair so refresh never restores an orphaned prompt.
+		if err := h.chatMgr.SaveExchange(c.Request.Context(), usernameStr, sessionID,
+			HistoryMessage{Role: "user", Content: req.Message},
+			HistoryMessage{Role: "assistant", Content: finalText},
+		); err != nil {
+			log.Printf("save AI chat exchange failed (user=%s, session=%s): %v", usernameStr, sessionID, err)
+		}
+	}
+
 	fmt.Fprintf(c.Writer, "event: done\ndata: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -266,8 +277,9 @@ func (h *AIHandler) Health(c *gin.Context) {
 	}
 
 	timeout := 30 * time.Second
-	if client.Provider() == "ollama" {
-		timeout = 15 * time.Second
+	if strings.EqualFold(client.Provider(), "ollama") {
+		// Ollama Ping uses only /api/tags and never starts model inference.
+		timeout = 5 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
@@ -290,39 +302,67 @@ func (h *AIHandler) Health(c *gin.Context) {
 }
 
 // History 获取会话历史
+// History returns persisted chat history. Without session_id it restores the authenticated user's most recent session.
 // GET /ovpn/ai/history?session_id=xxx
 func (h *AIHandler) History(c *gin.Context) {
 	username, _ := c.Get("user")
 	usernameStr, ok := username.(string)
 	if !ok || usernameStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "not logged in"})
 		return
 	}
-
 	if h.chatMgr == nil {
-		c.JSON(http.StatusOK, HistoryResponse{
-			SessionID: "",
-			Messages:  []HistoryMessage{},
-		})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "AI session manager is not initialized"})
 		return
 	}
 
 	sessionID := c.Query("session_id")
 	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "缺少 session_id 参数"})
+		var err error
+		sessionID, err = h.chatMgr.LatestSession(c.Request.Context(), usernameStr)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to read the latest AI session"})
+			return
+		}
+	}
+	if sessionID == "" {
+		c.JSON(http.StatusOK, HistoryResponse{SessionID: "", Messages: []HistoryMessage{}})
 		return
 	}
 
-	msgs, _ := h.chatMgr.GetHistory(c.Request.Context(), usernameStr, sessionID)
-	c.JSON(http.StatusOK, HistoryResponse{
-		SessionID: sessionID,
-		Messages:  msgs,
-	})
+	msgs, err := h.chatMgr.GetHistory(c.Request.Context(), usernameStr, sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to read AI chat history"})
+		return
+	}
+	c.JSON(http.StatusOK, HistoryResponse{SessionID: sessionID, Messages: msgs})
 }
 
-// escapeSSEData 按 SSE 规范处理 data 字段中的换行
-// SSE 规范要求 data 字段不能包含裸换行，需用多行 data: 表示以保留换行格式
-// 注意：调用方负责写第一行的 "data: " 前缀，本函数仅处理中间换行处的 "data: " 追加
+// DeleteHistory deletes only the authenticated user's selected persisted conversation.
+// DELETE /ovpn/ai/history?session_id=xxx
+func (h *AIHandler) DeleteHistory(c *gin.Context) {
+	username, _ := c.Get("user")
+	usernameStr, ok := username.(string)
+	if !ok || usernameStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "not logged in"})
+		return
+	}
+	if h.chatMgr == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "AI session manager is not initialized"})
+		return
+	}
+	sessionID := c.Query("session_id")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "session_id is required"})
+		return
+	}
+	if err := h.chatMgr.DeleteSession(c.Request.Context(), usernameStr, sessionID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to delete AI chat history"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "AI chat history deleted"})
+}
+
 // 例如：escapeSSEData("a\nb") 返回 "a\ndata: b"，外层拼为 "data: a\ndata: b\n\n"
 func escapeSSEData(s string) string {
 	// 如果不包含换行，直接原样返回（调用方已写 data: 前缀）

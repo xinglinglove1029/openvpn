@@ -28,17 +28,17 @@ type HealthStatusChangeHandler func(status HealthStatus)
 // 设计目标：用户打开 AI 助手时无需等待 HTTP health 请求，直接读缓存；
 // 服务异常时主动通过 WebSocket 推送，前端弹出提示。
 type HealthChecker struct {
-	mu            sync.RWMutex
-	client        *AtomicClient
-	interval      time.Duration
-	onChange      HealthStatusChangeHandler
-	cached        HealthStatus
-	hasCached     bool
-	stopCh        chan struct{}
-	stoppedCh     chan struct{}
-	startOnce     sync.Once
-	stopOnce      sync.Once
-	started       atomic.Bool // 标记是否已启动，用于 Stop 时区分未启动场景
+	mu        sync.RWMutex
+	client    *AtomicClient
+	interval  time.Duration
+	onChange  HealthStatusChangeHandler
+	cached    HealthStatus
+	hasCached bool
+	stopCh    chan struct{}
+	stoppedCh chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+	started   atomic.Bool // 标记是否已启动，用于 Stop 时区分未启动场景
 }
 
 // HealthCheckerOption 自检器配置选项
@@ -164,8 +164,9 @@ func (h *HealthChecker) doCheck(ctx context.Context) HealthStatus {
 	}
 
 	timeout := 30 * time.Second
-	if client.Provider() == "ollama" {
-		timeout = 15 * time.Second
+	if strings.EqualFold(client.Provider(), "ollama") {
+		// Ollama only checks /api/tags, so it never loads a model; a short timeout detects an unreachable service quickly.
+		timeout = 5 * time.Second
 	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)

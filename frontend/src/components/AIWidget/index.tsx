@@ -37,6 +37,36 @@ interface HealthStatus {
   checkedAt?: string;
 }
 
+
+interface PersistedChat {
+  messages: ChatMessage[];
+  sessionID: string;
+}
+
+interface HistoryResponse {
+  session_id: string;
+  messages: ChatMessage[];
+}
+
+const CHAT_STORAGE_KEY_PREFIX = 'openvpn-ai-widget-chat';
+
+function chatStorageKey(username?: string): string {
+  return username ? `${CHAT_STORAGE_KEY_PREFIX}:${username}` : '';
+}
+
+function loadPersistedChat(storageKey: string): PersistedChat {
+  if (!storageKey) return { messages: [], sessionID: '' };
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return { messages: [], sessionID: '' };
+    const parsed = JSON.parse(raw) as PersistedChat;
+    if (!Array.isArray(parsed.messages)) return { messages: [], sessionID: '' };
+    return { messages: parsed.messages, sessionID: parsed.sessionID || '' };
+  } catch {
+    return { messages: [], sessionID: '' };
+  }
+}
+
 const HOT_TOPICS = [
   '如何查看当前在线客户端？',
   'OpenVPN 配置示例',
@@ -52,7 +82,8 @@ const RECOMMENDATIONS = [
 export default function AIWidget() {
   const navigate = useNavigate();
   const { theme } = useTheme();
-  const { hasPermission, aiEnabled } = useAuth();
+  const { hasPermission, aiEnabled, user } = useAuth();
+  const storageKey = chatStorageKey(user?.username);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -65,12 +96,71 @@ export default function AIWidget() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [historyReadyFor, setHistoryReadyFor] = useState('');
   // 记录上一次 WS 推送的 available 状态，用于"仅从可用→不可用时弹出提示"
   const prevAvailableRef = useRef<boolean | null>(null);
 
   // 健康状态订阅：
   // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）
-  // 2. 订阅 ai:health WS topic，状态变化时实时更新；仅当从"可用"变为"不可用"时弹出 toast 提示
+  // Restore the current user's fallback cache first, then replace it with SQLite history.
+  // Do not write to localStorage until this restoration completes, or an empty initial
+  // React state could overwrite an existing fallback before it is read.
+  useEffect(() => {
+    let cancelled = false;
+    if (!storageKey) {
+      setMessages([]);
+      setSessionID('');
+      setHistoryReadyFor('');
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const fallback = loadPersistedChat(storageKey);
+    setMessages(fallback.messages);
+    setSessionID(fallback.sessionID);
+    setHistoryReadyFor('');
+
+    const endpoint = fallback.sessionID
+      ? `/ovpn/ai/history?session_id=${encodeURIComponent(fallback.sessionID)}`
+      : '/ovpn/ai/history';
+    api
+      .get<HistoryResponse>(endpoint)
+      .then((history) => {
+        if (cancelled) return;
+        // A successful server response is authoritative, including an empty history.
+        setSessionID(history.session_id || '');
+        setMessages(history.messages || []);
+      })
+      .catch(() => {
+        // Keep the per-user local fallback if the durable history request fails.
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryReadyFor(storageKey);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey]);
+
+  // LocalStorage is only an immediate, per-user fallback for unavailable history requests.
+  useEffect(() => {
+    if (!storageKey || historyReadyFor !== storageKey) return;
+    try {
+      if (!sessionID && messages.length === 0) {
+        localStorage.removeItem(storageKey);
+        return;
+      }
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ messages, sessionID } satisfies PersistedChat),
+      );
+    } catch {
+      // Browser storage may be disabled or full; SQLite remains authoritative.
+    }
+  }, [historyReadyFor, messages, sessionID, storageKey]);
+
   useEffect(() => {
     let cancelled = false;
     // 初始拉取（静默，不弹提示）
@@ -102,10 +192,16 @@ export default function AIWidget() {
     const offReset = realtimeHub.subscribe<{ reason?: string; message?: string }>(
       'ai:session_reset',
       (payload) => {
-        setSessionID('');
         setMessages([]);
+        setSessionID('');
         setStreaming('');
-        toast.info(payload?.message || 'AI 配置已更新，会话已重置');
+        setInput('');
+        try {
+          if (storageKey) localStorage.removeItem(storageKey);
+        } catch {
+          // SQLite remains authoritative when browser storage is unavailable.
+        }
+        toast.info(payload?.message || 'AI configuration updated; the next message will start a new session');
       },
     );
 
@@ -129,7 +225,7 @@ export default function AIWidget() {
       offReset();
       offReconnect();
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -146,7 +242,7 @@ export default function AIWidget() {
 
   const sendMessage = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || loading) return;
+    if (!text || loading || historyReadyFor !== storageKey) return;
 
     setInput('');
     const userMsg: ChatMessage = { role: 'user', content: text };
@@ -260,11 +356,26 @@ export default function AIWidget() {
     abortRef.current = null;
   };
 
-  const newChat = () => {
+  const newChat = async () => {
+    if (loading || historyReadyFor !== storageKey) return;
+    const currentSessionID = sessionID;
+    if (currentSessionID) {
+      try {
+        await api.delete(`/ovpn/ai/history?session_id=${encodeURIComponent(currentSessionID)}`);
+      } catch (err: any) {
+        toast.error(err.message || 'Failed to clear AI chat history');
+        return;
+      }
+    }
     setMessages([]);
     setSessionID('');
     setStreaming('');
     setInput('');
+    try {
+      if (storageKey) localStorage.removeItem(storageKey);
+    } catch {
+      // SQLite remains authoritative when browser storage is unavailable.
+    }
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
@@ -403,7 +514,7 @@ export default function AIWidget() {
                       <button
                         key={q}
                         onClick={() => sendMessage(q)}
-                        disabled={!available || loading}
+                        disabled={!available || loading || historyReadyFor !== storageKey}
                         className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-card"
                       >
                         {q}
@@ -423,7 +534,7 @@ export default function AIWidget() {
                       <button
                         key={q}
                         onClick={() => sendMessage(q)}
-                        disabled={!available || loading}
+                        disabled={!available || loading || historyReadyFor !== storageKey}
                         className="text-left px-3 py-2.5 rounded-lg border bg-card hover:bg-accent transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-card"
                       >
                         {q}
@@ -525,14 +636,14 @@ export default function AIWidget() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="请您遇到的问题告诉我，使用 Shift + Enter 换行"
-                  disabled={loading}
+                  disabled={loading || historyReadyFor !== storageKey}
                   rows={3}
                   className="min-h-[80px] resize-none border-0 bg-transparent pr-12 pb-9 focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
                 <div className="absolute left-2.5 bottom-2 flex items-center gap-2">
                   <button
                     onClick={() => setDeepThink(!deepThink)}
-                    disabled={loading}
+                    disabled={loading || historyReadyFor !== storageKey}
                     className={`
                       flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
                       ${
@@ -556,7 +667,7 @@ export default function AIWidget() {
                     <Button
                       size="icon"
                       className="h-8 w-8"
-                      disabled={!input.trim()}
+                      disabled={!input.trim() || historyReadyFor !== storageKey}
                       onClick={() => sendMessage()}
                     >
                       <Send className="h-4 w-4" />
