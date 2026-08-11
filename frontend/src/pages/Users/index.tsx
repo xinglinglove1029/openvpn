@@ -1672,46 +1672,46 @@ function ResetPasswordDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>重置密码：{user?.username}</DialogTitle>
           <DialogDescription>设置新的登录密码</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="reset-password">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="reset-password" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               新密码 <span className="text-destructive">*</span>
             </Label>
-            <div className="relative">
-              <Input
-                clearable={false}
-                id="reset-password"
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
-                }}
-                autoFocus
-                placeholder="至少 12 位强密码"
-                className="pr-12"
-              />
-              <button
-                type="button"
-                aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
+            <div className="min-w-0 space-y-2">
+              <div className="relative">
+                <Input
+                  clearable={false}
+                  id="reset-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (errors.password) setErrors((prev) => { const n = { ...prev }; delete n.password; return n; });
+                  }}
+                  autoFocus
+                  placeholder="至少 12 位强密码"
+                  className="pr-12"
+                />
+                <button
+                  type="button"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-1 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
             </div>
-            {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-md border px-4 py-3">
-            <div>
-              <p className="font-medium">发送通知邮件</p>
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-4">
+            <Label className="text-left sm:text-right text-sm font-medium text-foreground/80">发送通知邮件</Label>
             <Switch checked={sendNotifyEmail} onCheckedChange={setSendNotifyEmail} />
           </div>
 

@@ -664,57 +664,61 @@ function RateLimitModal({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>限速：{getClientName(client)}</DialogTitle>
           <DialogDescription>设置客户端上传和下载速率限制</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSave} className="space-y-4">
-          <div className="space-y-2">
-            <Label>上传速率</Label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <div className="min-w-0 flex-1">
-                <Input
-                  value={upload}
-                  onChange={(ev) => { setUpload(ev.target.value); clearError('upload'); }}
-                  placeholder="速率值"
-                  aria-invalid={errors.upload ? 'true' : undefined}
-                  className={cn(errors.upload && 'border-destructive focus-visible:ring-destructive/40')}
-                />
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">上传速率</Label>
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    value={upload}
+                    onChange={(ev) => { setUpload(ev.target.value); clearError('upload'); }}
+                    placeholder="速率值"
+                    aria-invalid={errors.upload ? 'true' : undefined}
+                    className={cn(errors.upload && 'border-destructive focus-visible:ring-destructive/40')}
+                  />
+                </div>
+                <Select value={uploadUnit} onValueChange={setUploadUnit}>
+                  <SelectTrigger className="w-full sm:w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {unitOptions.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
-              <Select value={uploadUnit} onValueChange={setUploadUnit}>
-                <SelectTrigger className="w-full sm:w-[100px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {unitOptions.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {errors.upload && <p className="text-xs text-destructive">{errors.upload}</p>}
             </div>
-            {errors.upload && <p className="text-xs text-destructive">{errors.upload}</p>}
           </div>
-          <div className="space-y-2">
-            <Label>下载速率</Label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <div className="min-w-0 flex-1">
-                <Input
-                  value={download}
-                  onChange={(ev) => { setDownload(ev.target.value); clearError('download'); }}
-                  placeholder="速率值"
-                  aria-invalid={errors.download ? 'true' : undefined}
-                  className={cn(errors.download && 'border-destructive focus-visible:ring-destructive/40')}
-                />
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">下载速率</Label>
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    value={download}
+                    onChange={(ev) => { setDownload(ev.target.value); clearError('download'); }}
+                    placeholder="速率值"
+                    aria-invalid={errors.download ? 'true' : undefined}
+                    className={cn(errors.download && 'border-destructive focus-visible:ring-destructive/40')}
+                  />
+                </div>
+                <Select value={downloadUnit} onValueChange={setDownloadUnit}>
+                  <SelectTrigger className="w-full sm:w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {unitOptions.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
-              <Select value={downloadUnit} onValueChange={setDownloadUnit}>
-                <SelectTrigger className="w-full sm:w-[100px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {unitOptions.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {errors.download && <p className="text-xs text-destructive">{errors.download}</p>}
             </div>
-            {errors.download && <p className="text-xs text-destructive">{errors.download}</p>}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>取消</Button>

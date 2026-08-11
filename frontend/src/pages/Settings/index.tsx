@@ -1281,14 +1281,14 @@ function ClientPackagesTab() {
       {/* 上传对话框 */}
       {uploadOpen && (
         <Dialog open onOpenChange={(open) => !uploading && setUploadOpen(open)}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>上传客户端安装包</DialogTitle>
               <DialogDescription>选择要上传的安装包文件并填写相关信息</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-2">
-              <div>
-                <Label className="mb-1.5 block">平台</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+                <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">平台</Label>
                 <Select
                   value={uploadForm.platform}
                   onValueChange={(v) => setUploadForm((prev) => ({ ...prev, platform: v }))}
@@ -1303,16 +1303,16 @@ function ClientPackagesTab() {
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label className="mb-1.5 block">版本号</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+                <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">版本号</Label>
                 <Input
                   placeholder="如 v10.0.0"
                   value={uploadForm.version}
                   onChange={(e) => setUploadForm((prev) => ({ ...prev, version: e.target.value }))}
                 />
               </div>
-              <div>
-                <Label className="mb-1.5 block">安装包文件</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+                <Label htmlFor="pkg-file" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">安装包文件</Label>
                 <div className="border-2 border-dashed border-border rounded-lg p-4 text-center hover:border-accent transition-colors">
                   <input
                     type="file"
@@ -1568,20 +1568,66 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
 
       <Card>
         <CardHeader><CardTitle>AI 助手配置</CardTitle></CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center justify-between rounded-lg border p-4"><p className="font-medium">启用 AI 助手</p><Switch checked={enabled} onCheckedChange={setEnabled} /></div>
-          <Separator />
-          <div className="space-y-2"><Label>模型服务</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型服务" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
-
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /></div>
-            <div className="space-y-2"><Label htmlFor="ai-api-key">API 密钥</Label><div className="relative"><Input id="ai-api-key" type={editingAPIKey ? 'password' : 'text'} value={editingAPIKey ? apiKeyDraft : (activeProfile.apiKey ? '*'.repeat(activeProfile.apiKey.length) : '')} onFocus={(event) => { setAPIKeyDraft(activeProfile.apiKey); setEditingAPIKey(true); window.requestAnimationFrame(() => event.currentTarget.select()); }} onChange={(event) => { setAPIKeyDraft(event.target.value); updateProfile({ apiKey: event.target.value, clearAPIKey: event.target.value === '' }); }} onBlur={() => setEditingAPIKey(false)} placeholder="sk-xxx..." className="pr-10" /><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void copyAPIKey()} disabled={!activeProfile.apiKey} aria-label="复制 API 密钥" title="复制 API 密钥" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"><Copy className="h-4 w-4" /></button></div></div>
-            <div className="space-y-2"><Label>模型名称</Label><Select value={selectedModel} onValueChange={(value) => updateProfile({ model: value === '__custom__' ? '' : value })}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{presetModels.map((preset) => <SelectItem key={preset} value={preset}>{preset}</SelectItem>)}<SelectItem value="__custom__">自定义模型…</SelectItem></SelectContent></Select>{selectedModel === '__custom__' && <Input value={activeProfile.model} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="输入任意兼容模型 ID" className="mt-2" />}</div>
-            <div className="space-y-2"><Label htmlFor="ai-max-tokens">最大 Token 数</Label><Input id="ai-max-tokens" type="number" value={activeProfile.max_tokens} onChange={(event) => updateProfile({ max_tokens: Number(event.target.value) || 4096 })} min={256} max={128000} /></div>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-4">
+            <Label className="text-left sm:text-right text-sm font-medium text-foreground/80">启用 AI 助手</Label>
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
           </div>
-          <div className="space-y-2"><Label>温度参数：{activeProfile.temperature.toFixed(1)}</Label><input type="range" min={0} max={2} step={0.1} value={activeProfile.temperature} onChange={(event) => updateProfile({ temperature: Number(event.target.value) })} className="w-full accent-[var(--accent)]" /><div className="flex justify-between text-xs text-muted-foreground"><span>精确（0）</span><span>平衡（1）</span><span>创意（2）</span></div></div>
           <Separator />
-          <div className="space-y-2"><Label htmlFor="ai-system-prompt">系统提示词</Label><Textarea id="ai-system-prompt" value={activeProfile.system_prompt} onChange={(event) => updateProfile({ system_prompt: event.target.value })} placeholder="你是 OpenVPN 运维控制台的智能助手…" rows={4} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">模型服务</Label>
+            <Select value={provider} onValueChange={handleProviderChange}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="选择模型服务" /></SelectTrigger>
+              <SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="ai-base-url" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">接口地址（Base URL）</Label>
+            <Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="ai-api-key" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">API 密钥</Label>
+            <div className="relative">
+              <Input
+                clearable={false}
+                id="ai-api-key"
+                type={editingAPIKey ? 'password' : 'text'}
+                value={editingAPIKey ? apiKeyDraft : (activeProfile.apiKey ? '*'.repeat(activeProfile.apiKey.length) : '')}
+                onFocus={(event) => { setAPIKeyDraft(activeProfile.apiKey); setEditingAPIKey(true); window.requestAnimationFrame(() => event.currentTarget.select()); }}
+                onChange={(event) => { setAPIKeyDraft(event.target.value); updateProfile({ apiKey: event.target.value, clearAPIKey: event.target.value === '' }); }}
+                onBlur={() => setEditingAPIKey(false)}
+                placeholder="sk-xxx..."
+                className="pr-10"
+              />
+              <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void copyAPIKey()} disabled={!activeProfile.apiKey} aria-label="复制 API 密钥" title="复制 API 密钥" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"><Copy className="h-4 w-4" /></button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">模型名称</Label>
+            <div>
+              <Select value={selectedModel} onValueChange={(value) => updateProfile({ model: value === '__custom__' ? '' : value })}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="选择模型" /></SelectTrigger>
+                <SelectContent>{presetModels.map((preset) => <SelectItem key={preset} value={preset}>{preset}</SelectItem>)}<SelectItem value="__custom__">自定义模型…</SelectItem></SelectContent>
+              </Select>
+              {selectedModel === '__custom__' && <Input value={activeProfile.model} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="输入任意兼容模型 ID" className="mt-2" />}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="ai-max-tokens" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">最大 Token 数</Label>
+            <Input id="ai-max-tokens" type="number" value={activeProfile.max_tokens} onChange={(event) => updateProfile({ max_tokens: Number(event.target.value) || 4096 })} min={256} max={128000} />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">温度参数：{activeProfile.temperature.toFixed(1)}</Label>
+            <div>
+              <input type="range" min={0} max={2} step={0.1} value={activeProfile.temperature} onChange={(event) => updateProfile({ temperature: Number(event.target.value) })} className="w-full accent-[var(--accent)]" />
+              <div className="flex justify-between text-xs text-muted-foreground"><span>精确（0）</span><span>平衡（1）</span><span>创意（2）</span></div>
+            </div>
+          </div>
+          <Separator />
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="ai-system-prompt" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">系统提示词</Label>
+            <Textarea id="ai-system-prompt" value={activeProfile.system_prompt} onChange={(event) => updateProfile({ system_prompt: event.target.value })} placeholder="你是 OpenVPN 运维控制台的智能助手…" rows={4} />
+          </div>
         </CardContent>
       </Card>
 

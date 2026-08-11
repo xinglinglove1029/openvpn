@@ -384,101 +384,111 @@ function FirewallFormDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Source IP/CIDR */}
-          <div className="space-y-2">
-            <Label htmlFor="fw-sip">源 IP/CIDR</Label>
-            <Input
-              id="fw-sip"
-              value={sip}
-              onChange={(e) => { setSip(e.target.value); clearError('sip'); }}
-              placeholder="例如 10.8.0.0/24 或 10.8.0.10"
-            />
-            {errors.sip && <p className="text-sm text-destructive">{errors.sip}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="fw-sip" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">源 IP/CIDR</Label>
+            <div className="min-w-0 space-y-2">
+              <Input
+                id="fw-sip"
+                value={sip}
+                onChange={(e) => { setSip(e.target.value); clearError('sip'); }}
+                placeholder="例如 10.8.0.0/24 或 10.8.0.10"
+              />
+              {errors.sip && <p className="text-sm text-destructive">{errors.sip}</p>}
+            </div>
           </div>
 
           {/* Dest IP/CIDR */}
-          <div className="space-y-2">
-            <Label htmlFor="fw-dip">目的 IP/CIDR</Label>
-            <Input
-              id="fw-dip"
-              value={dip}
-              onChange={(e) => { setDip(e.target.value); clearError('dip'); }}
-              placeholder="例如 192.168.1.0/24"
-            />
-            {errors.dip && <p className="text-sm text-destructive">{errors.dip}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="fw-dip" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">目的 IP/CIDR</Label>
+            <div className="min-w-0 space-y-2">
+              <Input
+                id="fw-dip"
+                value={dip}
+                onChange={(e) => { setDip(e.target.value); clearError('dip'); }}
+                placeholder="例如 192.168.1.0/24"
+              />
+              {errors.dip && <p className="text-sm text-destructive">{errors.dip}</p>}
+            </div>
           </div>
 
           {/* Source group multi-select */}
           {groups.length > 0 && (
-            <div className="space-y-2">
-              <Label>源用户组</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
-                {groups.map((group) => (
-                  <label
-                    key={group.id}
-                    className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
-                    style={{ paddingLeft: group.depth * 12 }}
-                  >
-                    <Checkbox
-                      checked={sgSet.has(String(group.id))}
-                      onCheckedChange={() => toggleGroup(setSg, sgSet, group.id)}
-                    />
-                    <span>{group.depth ? `${'— '.repeat(group.depth)}${group.name}` : group.name}</span>
-                  </label>
-                ))}
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">源用户组</Label>
+              <div className="min-w-0 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
+                  {groups.map((group) => (
+                    <label
+                      key={group.id}
+                      className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
+                      style={{ paddingLeft: group.depth * 12 }}
+                    >
+                      <Checkbox
+                        checked={sgSet.has(String(group.id))}
+                        onCheckedChange={() => toggleGroup(setSg, sgSet, group.id)}
+                      />
+                      <span>{group.depth ? '— '.repeat(group.depth) + group.name : group.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {errors.sg && <p className="text-sm text-destructive">{errors.sg}</p>}
               </div>
-              {errors.sg && <p className="text-sm text-destructive">{errors.sg}</p>}
             </div>
           )}
 
           {/* Dest group multi-select */}
           {groups.length > 0 && (
-            <div className="space-y-2">
-              <Label>目的用户组</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
-                {groups.map((group) => (
-                  <label
-                    key={group.id}
-                    className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
-                    style={{ paddingLeft: group.depth * 12 }}
-                  >
-                    <Checkbox
-                      checked={dgSet.has(String(group.id))}
-                      onCheckedChange={() => toggleGroup(setDg, dgSet, group.id)}
-                    />
-                    <span>{group.depth ? `${'— '.repeat(group.depth)}${group.name}` : group.name}</span>
-                  </label>
-                ))}
+            <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+              <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">目的用户组</Label>
+              <div className="min-w-0 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-md border p-3 max-h-40 overflow-y-auto">
+                  {groups.map((group) => (
+                    <label
+                      key={group.id}
+                      className="flex flex-wrap items-center gap-2 text-sm cursor-pointer"
+                      style={{ paddingLeft: group.depth * 12 }}
+                    >
+                      <Checkbox
+                        checked={dgSet.has(String(group.id))}
+                        onCheckedChange={() => toggleGroup(setDg, dgSet, group.id)}
+                      />
+                      <span>{group.depth ? '— '.repeat(group.depth) + group.name : group.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {errors.dg && <p className="text-sm text-destructive">{errors.dg}</p>}
               </div>
-              {errors.dg && <p className="text-sm text-destructive">{errors.dg}</p>}
             </div>
           )}
 
           <Separator />
 
           {/* Policy select */}
-          <div className="space-y-2">
-            <Label>策略 <span className="text-destructive">*</span></Label>
-            <Select value={policy} onValueChange={(v) => { setPolicy(v); clearError('policy'); }}>
-              <SelectTrigger>
-                <SelectValue placeholder="选择策略" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="accept">允许 accept</SelectItem>
-                <SelectItem value="drop">拒绝 drop</SelectItem>
-              </SelectContent>
-            </Select>
-            {errors.policy && <p className="text-sm text-destructive">{errors.policy}</p>}
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">策略 <span className="text-destructive">*</span></Label>
+            <div className="min-w-0 space-y-2">
+              <Select value={policy} onValueChange={(v) => { setPolicy(v); clearError('policy'); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择策略" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="accept">允许 accept</SelectItem>
+                  <SelectItem value="drop">拒绝 drop</SelectItem>
+                </SelectContent>
+              </Select>
+              {errors.policy && <p className="text-sm text-destructive">{errors.policy}</p>}
+            </div>
           </div>
 
           {/* Status switch */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <Label htmlFor="fw-status">启用规则</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-center gap-4">
+            <Label htmlFor="fw-status" className="text-left sm:text-right text-sm font-medium text-foreground/80">启用规则</Label>
             <Switch id="fw-status" checked={status} onCheckedChange={setStatus} />
           </div>
 
           {/* Comment */}
-          <div className="space-y-2">
-            <Label htmlFor="fw-comment">备注</Label>
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4">
+            <Label htmlFor="fw-comment" className="pt-0 sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">备注</Label>
             <Textarea
               id="fw-comment"
               value={comment}

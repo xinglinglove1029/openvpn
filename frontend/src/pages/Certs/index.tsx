@@ -439,7 +439,7 @@ export default function CertsPage() {
 
       {/* 批量续签证书弹窗（基于列表勾选） */}
       <AlertDialog open={renewOpen} onOpenChange={(open) => !renewing && setRenewOpen(open)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="sm:max-w-xl">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-[var(--accent)]" />
@@ -465,23 +465,25 @@ export default function CertsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
 
-          <div className="space-y-2 py-2">
-            <Label htmlFor="global-renew-days" className="flex items-center gap-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4 py-2">
+            <Label htmlFor="global-renew-days" className="flex items-center gap-1.5 pt-0 sm:justify-end sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
               本次续签天数
             </Label>
-            <Input
-              id="global-renew-days"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={renewDays}
-              onChange={(e) => setRenewDays(e.target.value)}
-              placeholder="必须是大于 0 的整数，例如 365"
-            />
-            {renewDays && !isPositiveInteger(renewDays) && (
-              <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
-            )}
+            <div className="min-w-0 space-y-2">
+              <Input
+                id="global-renew-days"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                value={renewDays}
+                onChange={(e) => setRenewDays(e.target.value)}
+                placeholder="必须是大于 0 的整数，例如 365"
+              />
+              {renewDays && !isPositiveInteger(renewDays) && (
+                <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
+              )}
+            </div>
           </div>
 
           {/* 已选证书清单 */}
@@ -507,7 +509,7 @@ export default function CertsPage() {
 
       {/* 单证书续签弹窗 */}
       <AlertDialog open={rowRenewOpen} onOpenChange={(open) => !rowRenewing && setRowRenewOpen(open)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="sm:max-w-xl">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <RotateCw className="h-5 w-5 text-[var(--accent)]" />
@@ -527,23 +529,25 @@ export default function CertsPage() {
               </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="row-renew-days" className="flex items-center gap-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4 py-2">
+            <Label htmlFor="row-renew-days" className="flex items-center gap-1.5 pt-0 sm:justify-end sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
               <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
               续签天数
             </Label>
-            <Input
-              id="row-renew-days"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={rowRenewDays}
-              onChange={(e) => setRowRenewDays(e.target.value)}
-              placeholder="必须是大于 0 的整数，例如 365"
-            />
-            {rowRenewDays && !isPositiveInteger(rowRenewDays) && (
-              <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
-            )}
+            <div className="min-w-0 space-y-2">
+              <Input
+                id="row-renew-days"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                value={rowRenewDays}
+                onChange={(e) => setRowRenewDays(e.target.value)}
+                placeholder="必须是大于 0 的整数，例如 365"
+              />
+              {rowRenewDays && !isPositiveInteger(rowRenewDays) && (
+                <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
+              )}
+            </div>
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={rowRenewing}>取消</AlertDialogCancel>
