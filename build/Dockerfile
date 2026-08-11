@@ -39,12 +39,10 @@ RUN case "${TARGETVARIANT}" in \
     -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE} -X main.builtBy=docker" \
     -o /out/openvpn-web ./cmd/openvpn-web
 
-# Debian runtime image for OpenVPN and the web service.
-FROM debian:bookworm-slim
+# Alpine runtime image for OpenVPN and the web service.
+FROM alpine:3.23.4
 
-RUN set -eux \
-  && apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
     bash \
     ca-certificates \
     coreutils \
@@ -53,15 +51,15 @@ RUN set -eux \
     grep \
     iproute2 \
     iptables \
+    iptables-legacy \
     jq \
     mailcap \
     nftables \
     openssl \
     openvpn \
-    sqlite3 \
+    sqlite \
     supervisor \
     tzdata \
-  && rm -rf /var/lib/apt/lists/* \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone
 
