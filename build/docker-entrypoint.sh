@@ -31,7 +31,7 @@ init_config() {
 	OVPN_MAXCLIENTS=$(jq -r '.openvpn.ovpn_maxclients // "200"' $SYSTEM_CONFIG)
 	OVPN_MANAGEMENT=$(jq -r '.openvpn.ovpn_management // "127.0.0.1:7505"' $SYSTEM_CONFIG)
 	OVPN_IPV6=$(jq -r '.openvpn.ovpn_ipv6 // "false"' $SYSTEM_CONFIG)
-	OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "false"' $SYSTEM_CONFIG)
+	OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "true"' $SYSTEM_CONFIG)
 	OVPN_SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' $SYSTEM_CONFIG)
 	OVPN_SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // "fdaf:f178:e916:6dd0::/64"' $SYSTEM_CONFIG)
 	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' $SYSTEM_CONFIG)

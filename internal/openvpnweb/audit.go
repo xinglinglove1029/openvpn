@@ -109,6 +109,9 @@ func auditTarget(c *gin.Context) string {
 }
 
 func auditOperator(c *gin.Context) string {
+	if hasInternalFirewallHookIdentity(c) {
+		return internalFirewallHookAuditActor
+	}
 	if user, ok := sessions.Default(c).Get("user").(string); ok && user != "" {
 		return user
 	}
@@ -125,11 +128,14 @@ func recordAudit(c *gin.Context, module, action, target string, success bool, me
 	}
 
 	operator := auditOperator(c)
-	operatorID := GetUserIDByUsername(operator)
+	operatorID := uint(0)
+	if !hasInternalFirewallHookIdentity(c) {
+		operatorID = GetUserIDByUsername(operator)
+	}
 
 	// admin/system 已纳入 user 表，统一使用真实 user.id；
 	// 若解析失败（理论上不会发生，除非 user 表未初始化），记录告警
-	if operator != "" && operatorID == 0 {
+	if !hasInternalFirewallHookIdentity(c) && operator != "" && operatorID == 0 {
 		logger.Error(context.Background(), "[recordAudit] 无法解析操作人ID operator=%q module=%s action=%s target=%s", operator, module, action, target)
 	}
 

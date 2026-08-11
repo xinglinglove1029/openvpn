@@ -171,7 +171,7 @@ func initConfig() {
 	viper.SetDefault("openvpn.ovpn_proto", "udp")
 	viper.SetDefault("openvpn.ovpn_subnet", "10.8.0.0/24")
 	viper.SetDefault("openvpn.ovpn_max_clients", 200)
-	viper.SetDefault("openvpn.ovpn_gateway", false)
+	viper.SetDefault("openvpn.ovpn_gateway", true)
 	viper.SetDefault("openvpn.ovpn_management", "127.0.0.1:7505")
 	viper.SetDefault("openvpn.ovpn_ipv6", false)
 	viper.SetDefault("openvpn.ovpn_subnet6", "fdaf:f178:e916:6dd0::/64")

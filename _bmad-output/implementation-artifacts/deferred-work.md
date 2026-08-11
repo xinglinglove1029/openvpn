@@ -100,3 +100,7 @@
 - source_spec: `spec-ai-shortcuts-and-ollama-text-tools.md`
   summary: 自定义 provider 若通过反向代理或统一网关连接 Ollama，当前不启用文本式工具调用兼容。
   evidence: 兼容分支按 provider 名称严格限定为 `ollama`，而 `customize` 仍走同一 OpenAI-compatible 客户端；对该场景启用兼容需要可验证的端点能力识别，不能仅根据 URL 猜测。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-openvpn-gateway-default-and-firewall-callback-auth.md`
+  summary: docker-compose.yml ?? OVPN_GATEWAY ?????????????????? config.json ??????
+  evidence: `build/docker-entrypoint.sh` ?? jq ?? `.openvpn.ovpn_gateway`?`docker-compose.yml` ????? `OVPN_GATEWAY=false`????????????????????

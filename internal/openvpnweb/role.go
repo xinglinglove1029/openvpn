@@ -415,6 +415,14 @@ func LoadRolePermissionCodes(db *gorm.DB, roleID uint) ([]string, error) {
 // - 不匹配返回 403 并写审计日志
 func RequirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// The OpenVPN lifecycle hook receives only this narrowly scoped identity.
+		// It is not an administrator and cannot bypass permission checks elsewhere.
+		if code == "firewall:create" && c.Request.Method == http.MethodPost &&
+			c.Request.URL.Path == "/ovpn/firewall" && hasInternalFirewallHookIdentity(c) {
+			c.Next()
+			return
+		}
+
 		// 优先使用 AuthMiddleWare 已设置的 isAdmin 标志，单一真相源
 		if isAdmin, ok := c.Get("isAdmin"); ok {
 			if b, _ := isAdmin.(bool); b {

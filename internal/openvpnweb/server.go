@@ -579,17 +579,56 @@ func syncAdminFromConfig(db *gorm.DB, admin *User) {
 	}
 }
 
+const (
+	internalFirewallHookContextKey = "internalFirewallHook"
+	internalFirewallHookAuditActor = "openvpn-hook"
+)
+
+// hasMatchingLocalServiceToken verifies the configured internal service token without
+// allowing an unset token to authenticate a request.
+func hasMatchingLocalServiceToken(c *gin.Context) bool {
+	expected := viper.GetString("system.base.token")
+	actual := c.GetHeader("O-Token")
+	return expected != "" && actual != "" &&
+		subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
+}
+
+// isOpenVPNFirewallHookRequest recognizes only the two firewall operations invoked by
+// OpenVPN's local lifecycle hooks. It intentionally does not grant a user or admin role.
+func isOpenVPNFirewallHookRequest(c *gin.Context) bool {
+	if !IsLocalRequest(c) || !hasMatchingLocalServiceToken(c) ||
+		c.Request.Method != http.MethodPost || c.Request.URL.Path != "/ovpn/firewall" {
+		return false
+	}
+
+	switch c.Query("a") {
+	case "add_ovips", "delete_ovips":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasInternalFirewallHookIdentity(c *gin.Context) bool {
+	internal, ok := c.Get(internalFirewallHookContextKey)
+	return ok && internal == true
+}
+
 func AuthMiddleWare() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
 		user := session.Get("user")
 
-		if c.GetHeader("O-Token") == viper.GetString("system.base.token") {
-			if c.Request.URL.Path == "/ovpn/login" || c.Request.URL.Path == "/ovpn/history" || c.Request.URL.Path == "/ovpn/firewall" || c.Request.URL.Path == "/ovpn/notify" {
-				if IsLocalRequest(c) {
-					c.Next()
-					return
-				}
+		if isOpenVPNFirewallHookRequest(c) {
+			c.Set(internalFirewallHookContextKey, true)
+			c.Next()
+			return
+		}
+
+		if hasMatchingLocalServiceToken(c) && IsLocalRequest(c) {
+			if c.Request.URL.Path == "/ovpn/login" || c.Request.URL.Path == "/ovpn/history" || c.Request.URL.Path == "/ovpn/notify" {
+				c.Next()
+				return
 			}
 		}
 
