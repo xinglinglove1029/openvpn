@@ -87,6 +87,7 @@ export interface AIProviderProfile {
   max_tokens: number;
   temperature: number;
   has_api_key: boolean;
+  api_key: string;
 }
 
 /** AI 配置详情（来自 /settings/ai 独立接口） */
@@ -108,7 +109,7 @@ export interface AISettingsResponse {
   model: string;
 }
 
-export interface AIProviderProfileSave extends Omit<AIProviderProfile, 'has_api_key'> {
+export interface AIProviderProfileSave extends Omit<AIProviderProfile, 'has_api_key' | 'api_key'> {
   api_key?: string;
   clear_api_key?: boolean;
 }

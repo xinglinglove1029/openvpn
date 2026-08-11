@@ -1443,7 +1443,7 @@ func Run(info BuildInfo) {
 		})
 
 		// AI 设置接口
-		// GET  /ovpn/settings/ai - 获取 AI 配置（需要 settings:ai 权限，API Key 脱敏）
+		// GET  /ovpn/settings/ai - 获取 AI 配置（需要 settings:ai 权限，仅授权配置界面使用）
 		ovpn.GET("/settings/ai", RequirePermission("settings:ai"), func(c *gin.Context) {
 			response, err := aiSettingsAPIResponse(db, aiClient.Provider(), aiClient.Model())
 			if err != nil {

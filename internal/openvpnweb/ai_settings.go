@@ -62,7 +62,8 @@ type AIProviderProfileInput struct {
 	Temperature  float64 `json:"temperature"`
 }
 
-// AIProviderProfileResponse deliberately omits the API key value.
+// AIProviderProfileResponse is returned only by the settings:ai-protected endpoint.
+// APIKey is decrypted for the administrator UI so it can display a masked value and copy it.
 type AIProviderProfileResponse struct {
 	Provider     string  `json:"provider"`
 	BaseURL      string  `json:"base_url"`
@@ -71,6 +72,7 @@ type AIProviderProfileResponse struct {
 	MaxTokens    int     `json:"max_tokens"`
 	Temperature  float64 `json:"temperature"`
 	HasAPIKey    bool    `json:"has_api_key"`
+	APIKey       string  `json:"api_key"`
 }
 
 // AISettingsRequest keeps the previous flat payload compatible while accepting profiles.
@@ -269,13 +271,19 @@ func aiSettingsAPIResponse(database *gorm.DB, runtimeProvider, runtimeModel stri
 	}
 	response := AISettingsResponse{ActiveProvider: settings.ActiveProvider, Provider: runtimeProvider, Model: runtimeModel}
 	for _, profile := range profiles {
+		apiKey := ""
+		if profile.APIKeyEncrypted != "" {
+			apiKey, err = decryptAIKey(profile.APIKeyEncrypted)
+			if err != nil {
+				return AISettingsResponse{}, fmt.Errorf("decrypt %s API key: %w", profile.Provider, err)
+			}
+		}
 		response.Profiles = append(response.Profiles, AIProviderProfileResponse{
 			Provider: profile.Provider, BaseURL: profile.BaseURL, Model: profile.Model,
 			SystemPrompt: profile.SystemPrompt, MaxTokens: profile.MaxTokens,
-			Temperature: profile.Temperature, HasAPIKey: profile.APIKeyEncrypted != "",
+			Temperature: profile.Temperature, HasAPIKey: profile.APIKeyEncrypted != "", APIKey: apiKey,
 		})
 		if profile.Provider == settings.ActiveProvider {
-			// api_key is intentionally left empty; GET never returns plaintext or a usable key.
 			response.Config = AIConfig{Enabled: settings.Enabled, Provider: profile.Provider, BaseURL: profile.BaseURL, Model: profile.Model, SystemPrompt: profile.SystemPrompt, MaxTokens: profile.MaxTokens, Temperature: profile.Temperature}
 		}
 	}

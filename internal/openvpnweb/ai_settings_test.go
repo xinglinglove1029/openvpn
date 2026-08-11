@@ -240,7 +240,7 @@ func TestSaveAISettingsDoesNotDependOnLegacyViper(t *testing.T) {
 	}
 }
 
-func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) {
+func TestSaveAISettingsKeepsProfilesIndependentAndReturnsKeyToAuthorizedSettingsUI(t *testing.T) {
 	previousSecret := secretKey
 	secretKey = "test-secret-key"
 	t.Cleanup(func() { secretKey = previousSecret })
@@ -265,7 +265,17 @@ func TestSaveAISettingsKeepsProfilesIndependentAndNeverReturnsKey(t *testing.T) 
 		t.Fatal(err)
 	}
 	if response.Config.APIKey != "" {
-		t.Fatalf("GET response leaked API key: %q", response.Config.APIKey)
+		t.Fatalf("active config unexpectedly includes API key: %q", response.Config.APIKey)
+	}
+	var responseProfile AIProviderProfileResponse
+	for _, profile := range response.Profiles {
+		if profile.Provider == AIProviderDeepSeek {
+			responseProfile = profile
+			break
+		}
+	}
+	if responseProfile.APIKey != "deepseek-secret" || !responseProfile.HasAPIKey {
+		t.Fatalf("authorized response API key = %#v, want decrypted DeepSeek key", responseProfile)
 	}
 	var deepSeekProfile AIProviderProfile
 	if err := database.Where("provider = ?", AIProviderDeepSeek).First(&deepSeekProfile).Error; err != nil {

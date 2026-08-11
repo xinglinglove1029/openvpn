@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff, Bot, Zap, AlertCircle, Loader2 } from 'lucide-react';
+import { Settings, Shield, Server, Wrench, RefreshCw, FileCode2, Save, RotateCcw, Package, Upload, Trash2, CheckCircle2, Eye, EyeOff, Copy, Bot, Zap, AlertCircle, Loader2 } from 'lucide-react';
 
 import { api } from '@/api';
 import type { AIProvider, AIProviderProfile, AISettingsResponse, AISettingsSaveRequest, SettingsResponse } from '@/types';
@@ -1391,6 +1391,7 @@ function createDefaultProfiles(): AIProfileForms {
       max_tokens: 4096,
       temperature: 0.7,
       has_api_key: false,
+      api_key: '',
       apiKey: '',
       clearAPIKey: false,
     },
@@ -1406,7 +1407,8 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState<AIProvider>('deepseek');
   const [profiles, setProfiles] = useState<AIProfileForms>(createDefaultProfiles);
-  const [showKey, setShowKey] = useState(false);
+  const [editingAPIKey, setEditingAPIKey] = useState(false);
+  const [apiKeyDraft, setAPIKeyDraft] = useState('');
   const [currentProvider, setCurrentProvider] = useState('');
   const [currentModel, setCurrentModel] = useState('');
   const [originalSnapshot, setOriginalSnapshot] = useState('');
@@ -1431,7 +1433,7 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
       for (const saved of data.profiles || []) {
         if (PROVIDER_OPTIONS.some((option) => option.value === saved.provider)) {
           const savedProvider = saved.provider as AIProvider;
-          nextProfiles[savedProvider] = { ...nextProfiles[savedProvider], ...saved, provider: savedProvider, apiKey: '', clearAPIKey: false };
+          nextProfiles[savedProvider] = { ...nextProfiles[savedProvider], ...saved, provider: savedProvider, apiKey: saved.api_key || '', clearAPIKey: false };
         }
       }
       // Ignore retired provider profiles returned by older servers; they remain preserved in the database.
@@ -1447,6 +1449,8 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
       setProfiles(nextProfiles);
       setCurrentProvider(data.provider || '');
       setCurrentModel(data.model || '');
+      setEditingAPIKey(false);
+      setAPIKeyDraft('');
       setOriginalSnapshot(JSON.stringify({ enabled: data.config?.enabled ?? false, provider: activeProvider, profiles: nextProfiles }));
     } catch (err) {
       toast.error('加载 AI 配置失败: ' + messageOf(err));
@@ -1457,7 +1461,8 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
 
   function handleProviderChange(nextProvider: string) {
     setProvider(nextProvider as AIProvider);
-    setShowKey(false);
+    setEditingAPIKey(false);
+    setAPIKeyDraft('');
     setTestResult(null);
   }
 
@@ -1498,6 +1503,21 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
     }
   }
 
+  async function copyAPIKey() {
+    const apiKey = editingAPIKey ? apiKeyDraft : activeProfile.apiKey;
+    if (!apiKey) return;
+    if (!navigator.clipboard) {
+      toast.error('当前浏览器不支持剪贴板复制');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      toast.success('API 密钥已复制到剪贴板');
+    } catch (err) {
+      toast.error('复制失败: ' + messageOf(err));
+    }
+  }
+
   async function handleTest() {
     if (isDirty) {
       toast.error('请先保存当前 AI 配置，再测试连接');
@@ -1521,7 +1541,6 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
     setEnabled(original.enabled);
     setProvider(original.provider);
     setProfiles(original.profiles);
-    setShowKey(false);
     setTestResult(null);
   }
 
@@ -1548,21 +1567,21 @@ function AISettingsTab({ canSave }: { canSave: boolean }) {
       </div>}
 
       <Card>
-        <CardHeader><CardTitle>AI 助手配置</CardTitle><CardDescription>每个供应商都独立保存地址、模型、提示词、参数和密钥；切换时会自动恢复。</CardDescription></CardHeader>
+        <CardHeader><CardTitle>AI 助手配置</CardTitle></CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex items-center justify-between rounded-lg border p-4"><div><p className="font-medium">启用 AI 助手</p><p className="text-sm text-muted-foreground">开启后 AI 助手菜单和功能将可用</p></div><Switch checked={enabled} onCheckedChange={setEnabled} /></div>
+          <div className="flex items-center justify-between rounded-lg border p-4"><p className="font-medium">启用 AI 助手</p><Switch checked={enabled} onCheckedChange={setEnabled} /></div>
           <Separator />
-          <div className="space-y-2"><Label>模型服务</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型服务" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">所有模型都通过外部 API 配置；切换模型服务不会覆盖其他服务的配置。</p></div>
+          <div className="space-y-2"><Label>模型服务</Label><Select value={provider} onValueChange={handleProviderChange}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型服务" /></SelectTrigger><SelectContent>{PROVIDER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
 
           <div className="grid gap-6 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /><p className="text-xs text-muted-foreground">请填写容器网络可访问的外部模型 API 地址。</p></div>
-            <div className="space-y-2"><div className="flex items-center justify-between"><Label htmlFor="ai-api-key">API 密钥</Label>{activeProfile.has_api_key && !activeProfile.clearAPIKey && <span className="text-xs text-[var(--success)]">已安全保存</span>}</div><div className="relative"><Input id="ai-api-key" type={showKey ? 'text' : 'password'} value={activeProfile.apiKey} onChange={(event) => updateProfile({ apiKey: event.target.value, clearAPIKey: false })} placeholder={activeProfile.has_api_key ? '留空将保留已保存的密钥' : 'sk-xxx...'} className="pr-10" /><button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div>{activeProfile.has_api_key && <button type="button" className="text-xs text-muted-foreground underline" onClick={() => updateProfile({ clearAPIKey: !activeProfile.clearAPIKey })}>{activeProfile.clearAPIKey ? '取消清除密钥' : '清除已保存密钥'}</button>}<p className="text-xs text-muted-foreground">密钥加密存入数据库，读取时不会返回明文。</p></div>
+            <div className="space-y-2"><Label htmlFor="ai-base-url">接口地址（Base URL）</Label><Input id="ai-base-url" value={activeProfile.base_url} onChange={(event) => updateProfile({ base_url: event.target.value })} placeholder={PROVIDER_OPTIONS.find((option) => option.value === provider)?.hint} /></div>
+            <div className="space-y-2"><Label htmlFor="ai-api-key">API 密钥</Label><div className="relative"><Input id="ai-api-key" type={editingAPIKey ? 'password' : 'text'} value={editingAPIKey ? apiKeyDraft : (activeProfile.apiKey ? '*'.repeat(activeProfile.apiKey.length) : '')} onFocus={(event) => { setAPIKeyDraft(activeProfile.apiKey); setEditingAPIKey(true); window.requestAnimationFrame(() => event.currentTarget.select()); }} onChange={(event) => { setAPIKeyDraft(event.target.value); updateProfile({ apiKey: event.target.value, clearAPIKey: event.target.value === '' }); }} onBlur={() => setEditingAPIKey(false)} placeholder="sk-xxx..." className="pr-10" /><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => void copyAPIKey()} disabled={!activeProfile.apiKey} aria-label="复制 API 密钥" title="复制 API 密钥" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"><Copy className="h-4 w-4" /></button></div></div>
             <div className="space-y-2"><Label>模型名称</Label><Select value={selectedModel} onValueChange={(value) => updateProfile({ model: value === '__custom__' ? '' : value })}><SelectTrigger className="w-full"><SelectValue placeholder="选择模型" /></SelectTrigger><SelectContent>{presetModels.map((preset) => <SelectItem key={preset} value={preset}>{preset}</SelectItem>)}<SelectItem value="__custom__">自定义模型…</SelectItem></SelectContent></Select>{selectedModel === '__custom__' && <Input value={activeProfile.model} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="输入任意兼容模型 ID" className="mt-2" />}</div>
             <div className="space-y-2"><Label htmlFor="ai-max-tokens">最大 Token 数</Label><Input id="ai-max-tokens" type="number" value={activeProfile.max_tokens} onChange={(event) => updateProfile({ max_tokens: Number(event.target.value) || 4096 })} min={256} max={128000} /></div>
           </div>
           <div className="space-y-2"><Label>温度参数：{activeProfile.temperature.toFixed(1)}</Label><input type="range" min={0} max={2} step={0.1} value={activeProfile.temperature} onChange={(event) => updateProfile({ temperature: Number(event.target.value) })} className="w-full accent-[var(--accent)]" /><div className="flex justify-between text-xs text-muted-foreground"><span>精确（0）</span><span>平衡（1）</span><span>创意（2）</span></div></div>
           <Separator />
-          <div className="space-y-2"><Label htmlFor="ai-system-prompt">系统提示词</Label><Textarea id="ai-system-prompt" value={activeProfile.system_prompt} onChange={(event) => updateProfile({ system_prompt: event.target.value })} placeholder="你是 OpenVPN 运维控制台的智能助手…" rows={4} /><p className="text-xs text-muted-foreground">该提示词也按供应商独立保存。</p></div>
+          <div className="space-y-2"><Label htmlFor="ai-system-prompt">系统提示词</Label><Textarea id="ai-system-prompt" value={activeProfile.system_prompt} onChange={(event) => updateProfile({ system_prompt: event.target.value })} placeholder="你是 OpenVPN 运维控制台的智能助手…" rows={4} /></div>
         </CardContent>
       </Card>
 
