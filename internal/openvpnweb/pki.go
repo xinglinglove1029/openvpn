@@ -43,6 +43,30 @@ func revokedListPath() string {
 	return filepath.Join(ovData, pkiDirName, revokedListFile)
 }
 
+// crlReloadPendingPath records that revoked.json has changed and the running
+// OpenVPN process still needs a freshly generated CRL loaded. It is durable so
+// a failed management reload can be retried after a request or process restart.
+func crlReloadPendingPath() string {
+	return filepath.Join(pkiDir(), "crl.reload-pending")
+}
+
+func markCRLReloadPending() error {
+	return os.WriteFile(crlReloadPendingPath(), []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0600)
+}
+
+func hasCRLReloadPending() bool {
+	info, err := os.Lstat(crlReloadPendingPath())
+	return err == nil && !info.IsDir()
+}
+
+func clearCRLReloadPending() error {
+	err := os.Remove(crlReloadPendingPath())
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func loadRevokedList() ([]revokedEntry, error) {
 	var list []revokedEntry
 	data, err := os.ReadFile(revokedListPath())
@@ -458,6 +482,11 @@ func RevokeByName(name string) error {
 
 	if err := appendRevoked(cert); err != nil {
 		return fmt.Errorf("写入吊销记录失败: %w", err)
+	}
+	// Keep a durable marker until the running daemon accepts the refreshed CRL.
+	// If generation or SIGHUP fails, later cleanup calls can retry safely.
+	if err := markCRLReloadPending(); err != nil {
+		return fmt.Errorf("mark CRL pending reload: %w", err)
 	}
 	if err := generateCRL(); err != nil {
 		return fmt.Errorf("刷新 CRL 失败: %w", err)

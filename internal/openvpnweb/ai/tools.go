@@ -50,8 +50,14 @@ type ToolService interface {
 	ListFirewallRules(ctx agent.ToolContext, operator string) (ListFirewallRulesResult, error)
 	// ManageFirewall 管理防火墙规则（添加/删除黑名单、设置/移除限速）。要求相应 firewall 权限。
 	ManageFirewall(ctx agent.ToolContext, operator string, req ManageFirewallRequest) (ManageFirewallResult, error)
-	// ListCerts 列出 PKI 证书信息（CA、CRL、已签发证书）。要求 cert:view 权限。
+	// ListCerts lists PKI certificate metadata. Requires cert:view.
 	ListCerts(ctx agent.ToolContext, operator string) (ListCertsResult, error)
+	// DiagnoseClientConnection checks one client's configuration, certificate and runtime signals. Requires client:view and cert:view.
+	DiagnoseClientConnection(ctx agent.ToolContext, operator string, req DiagnoseClientConnectionRequest) (ClientConnectionDiagnosis, error)
+	// DiagnoseOpenVPNServer checks server.conf, managed PKI prerequisites and the management interface. Requires settings:service:config.
+	DiagnoseOpenVPNServer(ctx agent.ToolContext, operator string) (OpenVPNServerDiagnosis, error)
+	// RepairOpenVPNServer applies only a reviewed, fixed repair action. Requires settings:service:config.
+	RepairOpenVPNServer(ctx agent.ToolContext, operator string, req RepairOpenVPNServerRequest) (OpenVPNServerRepairResult, error)
 	// ListChannels 列出通知渠道配置。要求 channel:view 权限。
 	ListChannels(ctx agent.ToolContext, operator string) (ListChannelsResult, error)
 	// ManageChannel 管理通知渠道（创建/更新/删除/测试）。要求相应 channel 权限。
@@ -326,6 +332,52 @@ type CertInfo struct {
 type ListCertsResult struct {
 	Certs []CertInfo `json:"certs"`
 	Total int        `json:"total"`
+}
+
+type DiagnoseClientConnectionRequest struct {
+	Name string `json:"name" jsonschema:"Client name or certificate common name to diagnose."`
+}
+
+type ClientConnectionDiagnosis struct {
+	ClientName        string   `json:"clientName"`
+	ClientConfigFound bool     `json:"clientConfigFound"`
+	CertificateFound  bool     `json:"certificateFound"`
+	CertificateStatus string   `json:"certificateStatus"`
+	UserFound         bool     `json:"userFound"`
+	UserEnabled       bool     `json:"userEnabled"`
+	MFAEnabled        bool     `json:"mfaEnabled"`
+	Online            bool     `json:"online"`
+	ManagementOK      bool     `json:"managementOk"`
+	Findings          []string `json:"findings"`
+	SuggestedActions  []string `json:"suggestedActions"`
+}
+
+type OpenVPNServerIssue struct {
+	Code         string `json:"code"`
+	Severity     string `json:"severity"`
+	Message      string `json:"message"`
+	RepairAction string `json:"repairAction,omitempty"`
+}
+
+type OpenVPNServerDiagnosis struct {
+	ConfigFound  bool                 `json:"configFound"`
+	ManagementOK bool                 `json:"managementOk"`
+	ServerStatus string               `json:"serverStatus,omitempty"`
+	Issues       []OpenVPNServerIssue `json:"issues"`
+}
+
+type RepairOpenVPNServerRequest struct {
+	Action string `json:"action" jsonschema:"Only restore_required_directives, repair_crl_reference, or reload. Diagnose first and use only an action returned by diagnosis."`
+}
+
+type OpenVPNServerRepairResult struct {
+	Success           bool                   `json:"success"`
+	Action            string                 `json:"action"`
+	Message           string                 `json:"message"`
+	BackupPath        string                 `json:"backupPath,omitempty"`
+	ChangedDirectives []string               `json:"changedDirectives,omitempty"`
+	Reloaded          bool                   `json:"reloaded"`
+	Diagnosis         OpenVPNServerDiagnosis `json:"diagnosis"`
 }
 
 // ChannelInfo 通知渠道信息
@@ -676,6 +728,45 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("创建 list_certs 工具失败: %w", err)
 	}
 
+	diagnoseClientConnectionTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "diagnose_client_connection",
+			Description: "Diagnose why one named VPN client cannot connect. This is read-only and checks client config, certificate state, account state, MFA, online state, and management availability. Use before regenerating a client configuration or changing settings.",
+		},
+		func(ctx agent.ToolContext, args DiagnoseClientConnectionRequest) (ClientConnectionDiagnosis, error) {
+			return svc.DiagnoseClientConnection(ctx, ctx.UserID(), args)
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create diagnose_client_connection tool: %w", err)
+	}
+
+	diagnoseOpenVPNServerTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "diagnose_openvpn_server",
+			Description: "Read-only OpenVPN Server self-check. Inspect server.conf directives, managed PKI prerequisites, and the management interface before any repair. Never claim a server is healthy without calling this tool.",
+		},
+		func(ctx agent.ToolContext, _ struct{}) (OpenVPNServerDiagnosis, error) {
+			return svc.DiagnoseOpenVPNServer(ctx, ctx.UserID())
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create diagnose_openvpn_server tool: %w", err)
+	}
+
+	repairOpenVPNServerTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "repair_openvpn_server",
+			Description: "Apply one safe, fixed OpenVPN Server repair action after diagnose_openvpn_server and explicit user approval. It backs up server.conf, never accepts raw configuration, never alters CA/server keys/certificates/CRL, and reloads only after repair. Allowed actions: restore_required_directives, repair_crl_reference, reload. The repair only restores missing or broken managed PKI directives; it never overrides valid custom server settings.",
+		},
+		func(ctx agent.ToolContext, args RepairOpenVPNServerRequest) (OpenVPNServerRepairResult, error) {
+			return svc.RepairOpenVPNServer(ctx, ctx.UserID(), args)
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create repair_openvpn_server tool: %w", err)
+	}
+
 	listChannelsTool, err := functiontool.New(
 		functiontool.Config{
 			Name:        "list_channels",
@@ -760,6 +851,9 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		listFirewallTool,
 		manageFirewallTool,
 		listCertsTool,
+		diagnoseClientConnectionTool,
+		diagnoseOpenVPNServerTool,
+		repairOpenVPNServerTool,
 		listChannelsTool,
 		manageChannelTool,
 		queryAuditLogsTool,

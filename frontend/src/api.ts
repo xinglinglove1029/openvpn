@@ -90,6 +90,7 @@ export const api = {
   postJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'POST', json: body }),
   putJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'PUT', json: body }),
   delete: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
+  deleteJson: <T>(url: string, body: unknown) => request<T>(url, { method: 'DELETE', json: body }),
   multipart: <T>(url: string, body: FormData) => request<T>(url, { method: 'POST', body }),
 
   clientPackages: {

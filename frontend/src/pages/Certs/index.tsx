@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Search, ShieldCheck, RotateCw, CalendarClock } from 'lucide-react';
+import { RefreshCw, Search, ShieldCheck, RotateCw, CalendarClock, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../api';
 import { useAsync } from '@/hooks/useAsync';
@@ -42,10 +42,10 @@ function certStatus(status?: string): 'success' | 'warning' | 'danger' | 'neutra
 
 export default function CertsPage() {
   const [reloadKey, setReloadKey] = useState(0);
-  const [renewOpen, setRenewOpen] = useState(false);
-  const [renewing, setRenewing] = useState(false);
-  const [renewDays, setRenewDays] = useState<string>('365');
   const [selectedCerts, setSelectedCerts] = useState<Set<string>>(new Set());
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteTargets, setDeleteTargets] = useState<string[]>([]);
 
   // 单证书续签弹窗
   const [rowRenewOpen, setRowRenewOpen] = useState(false);
@@ -71,7 +71,6 @@ export default function CertsPage() {
   useEffect(() => {
     if (settingsState.data?.system?.base?.renew_days && settingsState.data.system.base.renew_days > 0) {
       const defaultDays = String(settingsState.data.system.base.renew_days);
-      setRenewDays((prev) => (prev === '365' ? defaultDays : prev));
       setRowRenewDays((prev) => (prev === '365' ? defaultDays : prev));
     }
   }, [settingsState.data]);
@@ -105,24 +104,19 @@ export default function CertsPage() {
   const certs = filteredCerts;
   const pagination = usePagination(certs, `certs-${reloadKey}-${searchText}-${filterStatus}`);
 
-  // 可续签的证书：基于搜索过滤结果
-  const renewableCerts = useMemo(() => {
-    return certs.filter((c) => {
-      const status = (c.status ?? '').toLowerCase();
-      return status !== '已过期';
-    });
-  }, [certs]);
+  // A selection must never survive a search/status scope change. Keeping hidden names
+  // would make the destructive bulk action include certificates the operator cannot see.
+  useEffect(() => {
+    setSelectedCerts(new Set());
+  }, [searchText, filterStatus]);
 
-  const allRenewSelected = renewableCerts.length > 0 && renewableCerts.every((c) => selectedCerts.has(c.name ?? ''));
-
-  function openRenewDialog() {
-    if (selectedCerts.size === 0) {
-      toast.error('请先在列表中勾选需要续签的证书');
-      return;
-    }
-    setRenewOpen(true);
-  }
-
+  // 表格勾选仅用于安全批量删除客户端证书。
+  const deletableCerts = useMemo(
+    () => certs.filter((cert) => cert.deletable === true && Boolean(cert.name)),
+    [certs],
+  );
+  const allDeleteSelected =
+    deletableCerts.length > 0 && deletableCerts.every((cert) => selectedCerts.has(cert.name ?? ''));
   function toggleCert(name: string) {
     setSelectedCerts((prev) => {
       const next = new Set(prev);
@@ -133,49 +127,52 @@ export default function CertsPage() {
   }
 
   function toggleAllCerts() {
-    if (allRenewSelected) {
+    if (allDeleteSelected) {
       setSelectedCerts(new Set());
     } else {
-      setSelectedCerts(new Set(renewableCerts.map((c) => c.name ?? '').filter(Boolean)));
+      setSelectedCerts(new Set(deletableCerts.map((cert) => cert.name ?? '').filter(Boolean)));
     }
   }
+  function openDeleteDialog(names: string[]) {
+    const byName = new Map(certs.map((cert) => [cert.name ?? '', cert]));
+    const targets = Array.from(new Set(names.filter(Boolean))).filter((name) => byName.get(name)?.deletable === true);
+    if (targets.length === 0) {
+      toast.error('没有可删除的客户端证书；CA、服务端证书和 CRL 已受保护。');
+      return;
+    }
+    setDeleteTargets(targets);
+    setDeleteOpen(true);
+  }
 
-  async function handleRenew() {
-    if (!isPositiveInteger(renewDays)) {
-      toast.error('续签天数必须是大于 0 的整数');
-      return;
+  async function handleDelete() {
+    if (deleteTargets.length === 0) return;
+    setDeleting(true);
+    try {
+      const response = await api.deleteJson<{ results?: Array<{ name: string; success: boolean; message: string }>; successCount?: number; total?: number }>(
+        '/ovpn/certs',
+        { names: deleteTargets },
+      );
+      const results = response.results ?? [];
+      const failed = results.filter((result) => !result.success);
+      const successCount = response.successCount ?? results.length - failed.length;
+      if (successCount > 0) toast.success(`已清理 ${successCount} 个客户端证书`);
+      if (failed.length > 0) toast.warning(`部分清理失败：${failed.map((result) => `${result.name}: ${result.message}`).join('；')}`);
+      setSelectedCerts((prev) => {
+        const next = new Set(prev);
+        deleteTargets.forEach((name) => next.delete(name));
+        return next;
+      });
+      setReloadKey((value) => value + 1);
+      setDeleteOpen(false);
+      setDeleteTargets([]);
+    } catch (error) {
+      toast.error(`删除证书失败：${messageOf(error)}`);
+      // Refresh after a rejected request: server-side revocation may already be durable
+      // while the running daemon still needs an operator to restore CRL reload.
+      setReloadKey((value) => value + 1);
+    } finally {
+      setDeleting(false);
     }
-    const names = Array.from(selectedCerts).filter(Boolean);
-    if (names.length === 0) {
-      toast.error('请至少选择一个证书');
-      return;
-    }
-    setRenewing(true);
-    let successCount = 0;
-    const errors: string[] = [];
-    for (const name of names) {
-      try {
-        await api.postForm<{ message: string }>('/ovpn/server', {
-          action: 'renewCertByName',
-          name,
-          day: renewDays,
-        });
-        successCount++;
-      } catch (error) {
-        errors.push(`${name}: ${messageOf(error)}`);
-      }
-    }
-    if (successCount === names.length) {
-      toast.success(`已成功续签 ${successCount} 个证书`);
-    } else if (successCount > 0) {
-      toast.warning(`部分续签成功（${successCount}/${names.length}），失败：${errors.join('；')}`);
-    } else {
-      toast.error(`续签失败：${errors.join('；')}`);
-    }
-    setReloadKey((v) => v + 1);
-    setRenewing(false);
-    setRenewOpen(false);
-    setSelectedCerts(new Set());
   }
 
   function openRowRenew(cert: CertRecord) {
@@ -218,33 +215,33 @@ export default function CertsPage() {
         key: 'select',
         header: (
           <Checkbox
-            checked={allRenewSelected ? true : selectedCerts.size > 0 ? 'indeterminate' : false}
+            checked={allDeleteSelected ? true : selectedCerts.size > 0 ? 'indeterminate' : false}
             onCheckedChange={toggleAllCerts}
-            aria-label="全选可续签证书"
+            aria-label="全选可删除客户端证书"
           />
         ),
         mobileHeader: null,
         render: (cert) => {
           const name = cert.name ?? '';
-          const isExpired = (cert.status ?? '').toLowerCase() === '已过期';
-          if (isExpired) return null;
           return (
             <Checkbox
               checked={selectedCerts.has(name)}
               onCheckedChange={() => toggleCert(name)}
-              aria-label={`选择 ${name}`}
+              disabled={!cert.deletable}
+              aria-label={cert.deletable ? `选择 ${name}` : cert.protectedReason || `${name} 不可删除`}
+              title={cert.protectedReason}
             />
           );
         },
         mobileRender: (cert) => {
           const name = cert.name ?? '';
-          const isExpired = (cert.status ?? '').toLowerCase() === '已过期';
-          if (isExpired) return null;
           return (
             <Checkbox
               checked={selectedCerts.has(name)}
               onCheckedChange={() => toggleCert(name)}
-              aria-label={`选择 ${name}`}
+              disabled={!cert.deletable}
+              aria-label={cert.deletable ? `选择 ${name}` : cert.protectedReason || `${name} 不可删除`}
+              title={cert.protectedReason}
             />
           );
         },
@@ -319,6 +316,22 @@ export default function CertsPage() {
         mobileClassName: 'grid-cols-1',
         render: (cert) => (
           <div className="flex items-center gap-1">
+            <HasPermission code="cert:delete">
+              {cert.deletable ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-destructive hover:text-destructive"
+                  onClick={() => openDeleteDialog([cert.name ?? ''])}
+                  title="删除客户端证书"
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  删除
+                </Button>
+              ) : (
+                <span className="text-xs text-muted-foreground" title={cert.protectedReason}>受保护</span>
+              )}
+            </HasPermission>
             <HasPermission code="cert:renew">
               <Button
                 size="sm"
@@ -334,22 +347,34 @@ export default function CertsPage() {
           </div>
         ),
         mobileRender: (cert) => (
-          <HasPermission code="cert:renew">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-9 w-full"
-              onClick={() => openRowRenew(cert)}
-            >
-              <RotateCw className="mr-1 h-4 w-4" />
-              续签「{cert.name || '-'}」
-            </Button>
-          </HasPermission>
+          <div className="grid grid-cols-1 gap-2">
+            <HasPermission code="cert:delete">
+              {cert.deletable ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 w-full border-destructive/40 text-destructive hover:text-destructive"
+                  onClick={() => openDeleteDialog([cert.name ?? ''])}
+                >
+                  <Trash2 className="mr-1 h-4 w-4" />
+                  删除 ({cert.name || '-'})
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">{cert.protectedReason || '系统证书不可删除'}</p>
+              )}
+            </HasPermission>
+            <HasPermission code="cert:renew">
+              <Button size="sm" variant="outline" className="h-9 w-full" onClick={() => openRowRenew(cert)}>
+                <RotateCw className="mr-1 h-4 w-4" />
+                续签 ({cert.name || '-'})
+              </Button>
+            </HasPermission>
+          </div>
         ),
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [settingsState.data, selectedCerts, allRenewSelected],
+    [settingsState.data, selectedCerts, allDeleteSelected],
   );
 
   return (
@@ -385,15 +410,11 @@ export default function CertsPage() {
               刷新
             </Button>
           </HasPermission>
-          <HasPermission code="cert:renew">
-            <Button size="sm" onClick={openRenewDialog} className="w-full sm:w-auto">
-              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-              更新证书
-              {selectedCerts.size > 0 && (
-                <span className="ml-1 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1 rounded-full bg-primary-foreground/20 text-[10px] font-medium leading-none">
-                  {selectedCerts.size}
-                </span>
-              )}
+          <HasPermission code="cert:delete">
+            <Button size="sm" variant="destructive" onClick={() => openDeleteDialog(Array.from(selectedCerts))} className="w-full sm:w-auto" disabled={selectedCerts.size === 0}>
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              删除证书
+              {selectedCerts.size > 0 && <span className="ml-1 text-[10px]">{selectedCerts.size}</span>}
             </Button>
           </HasPermission>
         </div>
@@ -436,78 +457,27 @@ export default function CertsPage() {
           </p>
         </div>
       )}
-
-      {/* 批量续签证书弹窗（基于列表勾选） */}
-      <AlertDialog open={renewOpen} onOpenChange={(open) => !renewing && setRenewOpen(open)}>
+      {/* 批量删除客户端证书确认 */}
+      <AlertDialog open={deleteOpen} onOpenChange={(open) => !deleting && setDeleteOpen(open)}>
         <AlertDialogContent className="sm:max-w-xl">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-[var(--accent)]" />
-              更新证书
-            </AlertDialogTitle>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive"><Trash2 className="h-5 w-5" />删除客户端证书</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
-              <p>
-                即将对选中的 <span className="font-medium text-foreground">{selectedCerts.size}</span> 个证书执行续签，将依次处理。CA 证书续签会自动同步服务器证书和 CRL。
-              </p>
-              {settingsState.data?.system?.base?.renew_days ? (
-                <p className="text-xs text-muted-foreground">
-                  当前系统配置「证书续签默认天数」为{' '}
-                  <span className="font-medium text-foreground">
-                    {settingsState.data.system.base.renew_days}
-                  </span>{' '}
-                  天。你也可以在下方修改本次续签天数。
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  默认续签天数可前往「系统设置 → 基本」页面调整，默认为 1095 天（3 年）。
-                </p>
-              )}
+              <p>活跃客户端证书会先吊销并刷新 CRL，再删除对应的私钥、.ovpn、CCD 和请求文件。CA、OpenVPN Server 和 CRL 受保护，不能删除。</p>
+              <div className="max-h-[200px] overflow-y-auto rounded-md border bg-muted/20 px-3 py-2 space-y-1">
+                {deleteTargets.map((name) => <div key={name} className="font-medium break-all text-sm">{name}</div>)}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
-
-          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] items-start gap-4 py-2">
-            <Label htmlFor="global-renew-days" className="flex items-center gap-1.5 pt-0 sm:justify-end sm:pt-2 text-left sm:text-right text-sm font-medium text-foreground/80">
-              <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
-              本次续签天数
-            </Label>
-            <div className="min-w-0 space-y-2">
-              <Input
-                id="global-renew-days"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                value={renewDays}
-                onChange={(e) => setRenewDays(e.target.value)}
-                placeholder="必须是大于 0 的整数，例如 365"
-              />
-              {renewDays && !isPositiveInteger(renewDays) && (
-                <p className="text-xs text-destructive">续签天数必须是大于 0 的整数</p>
-              )}
-            </div>
-          </div>
-
-          {/* 已选证书清单 */}
-          <div className="max-h-[200px] overflow-y-auto rounded-md border bg-muted/20 px-3 py-2 space-y-1">
-            {Array.from(selectedCerts).map((name) => (
-              <div key={name} className="flex items-center justify-between text-sm">
-                <span className="font-medium break-all">{name}</span>
-              </div>
-            ))}
-          </div>
-
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={renewing}>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleRenew}
-              disabled={renewing || !isPositiveInteger(renewDays) || selectedCerts.size === 0}
-            >
-              {renewing ? `续签中... (${selectedCerts.size})` : `开始续签 (${selectedCerts.size})`}
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} disabled={deleting || deleteTargets.length === 0} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {deleting ? '删除中...' : `确认删除 (${deleteTargets.length})`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 单证书续签弹窗 */}
       <AlertDialog open={rowRenewOpen} onOpenChange={(open) => !rowRenewing && setRowRenewOpen(open)}>
         <AlertDialogContent className="sm:max-w-xl">
           <AlertDialogHeader>

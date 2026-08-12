@@ -305,7 +305,11 @@ export interface AuditLogRecord {
 export interface CertRecord {
   name?: string;
   type?: string;
+  kind?: 'ca' | 'server' | 'crl' | 'client' | string;
   status?: string;
+  lifecycle?: 'active' | 'revoked' | 'orphaned' | string;
+  deletable?: boolean;
+  protectedReason?: string;
   notBefore?: string;
   notAfter?: string;
   expiresIn?: number | string;

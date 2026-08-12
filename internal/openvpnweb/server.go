@@ -88,15 +88,19 @@ type Params struct {
 }
 
 type CertData struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Subject   string `json:"subject"`
-	Issuer    string `json:"issuer"`
-	NotBefore string `json:"notBefore"`
-	NotAfter  string `json:"notAfter"`
-	ExpiresIn string `json:"expiresIn"`
-	Status    string `json:"status"`
-	SerialNo  string `json:"serialNo"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Kind            string `json:"kind"`
+	Subject         string `json:"subject"`
+	Issuer          string `json:"issuer"`
+	NotBefore       string `json:"notBefore"`
+	NotAfter        string `json:"notAfter"`
+	ExpiresIn       string `json:"expiresIn"`
+	Status          string `json:"status"`
+	Lifecycle       string `json:"lifecycle,omitempty"`
+	Deletable       bool   `json:"deletable"`
+	ProtectedReason string `json:"protectedReason,omitempty"`
+	SerialNo        string `json:"serialNo"`
 }
 
 type ovpn struct {
@@ -156,25 +160,36 @@ func (ov *ovpn) sendCommand(command string) (string, error) {
 
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(time.Second * 3))
-	conn.Write([]byte(fmt.Sprintf("%s\n", command)))
+	if err := conn.SetDeadline(time.Now().Add(time.Second * 3)); err != nil {
+		return data, err
+	}
+	if _, err := conn.Write([]byte(fmt.Sprintf("%s\n", command))); err != nil {
+		return data, err
+	}
 
+	infoLine := regexp.MustCompile(`>INFO.*\r?\n`)
 	for {
 		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
-
-		re := regexp.MustCompile(">INFO(.)*\r\n")
-		if str := re.ReplaceAllString(string(buf[:n]), ""); str != "" {
-			sb.Write([]byte(str))
+		n, readErr := conn.Read(buf)
+		if n > 0 {
+			if str := infoLine.ReplaceAllString(string(buf[:n]), ""); str != "" {
+				sb.WriteString(str)
+			}
 		}
 
-		if err != nil || strings.HasSuffix(sb.String(), "\r\nEND\r\n") || strings.HasPrefix(sb.String(), "SUCCESS:") {
+		response := sb.String()
+		if strings.HasPrefix(response, "ERROR:") || strings.HasPrefix(response, "FAILURE:") {
+			return "", fmt.Errorf("OpenVPN management command rejected: %s", strings.TrimSpace(response))
+		}
+		if strings.HasSuffix(response, "\r\nEND\r\n") || strings.HasSuffix(response, "\nEND\n") || strings.HasPrefix(response, "SUCCESS:") {
 			break
+		}
+		if readErr != nil {
+			return data, readErr
 		}
 	}
 
 	data = strings.TrimPrefix(strings.TrimSuffix(strings.TrimSuffix(sb.String(), "\r\nEND\r\n"), "\r\n"), "SUCCESS: ")
-
 	return data, nil
 }
 
@@ -377,12 +392,64 @@ func parseCert(certPath string) (*CertData, error) {
 	}, nil
 }
 
+func enrichCertificateData(cert *CertData) {
+	if cert == nil {
+		return
+	}
+	serverName := viperGetString("system.base.server_name", "server")
+	isServerCertificate := cert.Name == "server" || cert.Name == serverName
+	isCACertificate := cert.Name == "ca"
+	if parsed, err := parseCertificateFile(filepath.Join(pkiIssuedDir(), cert.Name+".crt")); err == nil {
+		isCACertificate = isCACertificate || parsed.IsCA
+		for _, usage := range parsed.ExtKeyUsage {
+			if usage == x509.ExtKeyUsageServerAuth {
+				isServerCertificate = true
+				break
+			}
+		}
+	}
+	switch {
+	case isCACertificate:
+		cert.Kind = "ca"
+		cert.Deletable = false
+		cert.ProtectedReason = "CA certificate is protected and cannot be deleted"
+	case cert.Name == "crl":
+		cert.Kind = "crl"
+		cert.Deletable = false
+		cert.ProtectedReason = "CRL is required for OpenVPN and cannot be deleted"
+	case isServerCertificate:
+		cert.Kind = "server"
+		cert.Deletable = false
+		cert.ProtectedReason = "OpenVPN Server certificate is protected and cannot be deleted"
+	default:
+		cert.Kind = "client"
+		cert.Deletable = true
+		cert.Lifecycle = "active"
+		if parsed, err := parseCertificateFile(clientCertPath(cert.Name)); err == nil {
+			if revoked, err := isCertificateRevoked(parsed); err == nil && revoked {
+				cert.Status = "Revoked"
+				cert.Lifecycle = "revoked"
+			}
+		}
+		if cert.Lifecycle == "active" && !fileExists(filepath.Join(ovData, "clients", cert.Name+".ovpn")) {
+			var count int64
+			if db != nil {
+				db.Model(&User{}).Where("username = ? OR ovpn_config = ?", cert.Name, cert.Name+".ovpn").Count(&count)
+			}
+			if count == 0 {
+				cert.Lifecycle = "orphaned"
+			}
+		}
+	}
+}
+
 func getCerts(ovData string) []CertData {
 	cers := make([]CertData, 0)
 	pkiDir := filepath.Join(ovData, "pki")
 
 	caPath := filepath.Join(pkiDir, "ca.crt")
 	if cert, err := parseCert(caPath); err == nil {
+		enrichCertificateData(cert)
 		cers = append(cers, *cert)
 	} else {
 		logger.Error(context.Background(), err.Error())
@@ -390,6 +457,7 @@ func getCerts(ovData string) []CertData {
 
 	crlPath := filepath.Join(pkiDir, "crl.pem")
 	if cert, err := parseCrl(crlPath); err == nil {
+		enrichCertificateData(cert)
 		cers = append(cers, *cert)
 	} else {
 		logger.Error(context.Background(), err.Error())
@@ -401,6 +469,7 @@ func getCerts(ovData string) []CertData {
 			if strings.HasSuffix(file.Name(), ".crt") {
 				certPath := filepath.Join(issuedDir, file.Name())
 				if cert, err := parseCert(certPath); err == nil {
+					enrichCertificateData(cert)
 					cers = append(cers, *cert)
 				} else {
 					logger.Error(context.Background(), err.Error())
@@ -2564,27 +2633,44 @@ func Run(info BuildInfo) {
 			if clientName == "" {
 				clientName = username
 			}
-
-			// 1. 撤销客户端证书（纯 Go 实现，不再依赖 easyrsa）
-			if revErr := RevokeByName(clientName); revErr != nil {
-				// 证书可能不存在（例如用户还未生成过 ovpn 客户端文件），这里只记录警告不阻断删除
-				logger.Warn(context.Background(), "revoke client cert failed (may not exist): "+revErr.Error())
-			} else {
-				// 吊销成功，发送 SIGHUP 通知 openvpn 重新加载 CRL
-				ov.sendCommand("signal SIGHUP")
-				if err := removeClientCredentials(clientName); err != nil {
-					logger.Warn(context.Background(), "remove revoked client credentials failed: "+err.Error())
-				}
+			if _, nameErr := validateCertificateName(clientName); nameErr != nil {
+				// Historical database data can be malformed. Never derive a filesystem
+				// path from it; delete only the account record and leave PKI untouched.
+				logger.Warn(context.Background(), "skip client artifact cleanup for invalid user VPN config: "+nameErr.Error())
+				clientName = ""
 			}
 
-			// 2. 删除客户端配置文件和 ccd 目录
-			dataRoot, err := os.OpenRoot(ovData)
-			if err == nil {
-				dataRoot.Remove(filepath.Join("clients", fmt.Sprintf("%s.ovpn", clientName)))
-				dataRoot.Remove(filepath.Join("ccd", clientName))
-				dataRoot.Close()
-			} else {
-				logger.Warn(context.Background(), "remove client files failed: "+err.Error())
+			var deleteErr error
+			if clientName != "" {
+				// Revoke and remove client artifacts through the shared safe deletion path.
+				// Missing certificates are allowed for legacy users, but protected PKI material is never touched.
+				_, deleteErr = DeleteClientCertificate(clientName)
+				if hasCRLReloadPending() {
+					if reloadErr := synchronizePendingCRL(&ov); reloadErr != nil {
+						logger.Warn(context.Background(), "reload OpenVPN CRL after user deletion failed: "+reloadErr.Error())
+						c.JSON(http.StatusServiceUnavailable, gin.H{"message": reloadErr.Error()})
+						return
+					}
+				}
+			}
+			if deleteErr != nil {
+				// A legacy fallback is safe only when the certificate is truly absent.
+				// Never erase same-named artifacts after a valid certificate (including
+				// a non-default ServerAuth certificate) was deliberately protected.
+				if certificateProtectionReason(clientName, nil) != "" {
+					c.JSON(http.StatusBadRequest, gin.H{"message": deleteErr.Error()})
+					return
+				}
+				if _, certErr := parseCertificateFile(clientCertPath(clientName)); certErr == nil || !os.IsNotExist(certErr) {
+					c.JSON(http.StatusBadRequest, gin.H{"message": deleteErr.Error()})
+					return
+				}
+				logger.Warn(context.Background(), "remove legacy user client certificate artifacts failed: "+deleteErr.Error())
+				if _, nameErr := validateCertificateName(clientName); nameErr == nil {
+					if cleanupErr := cleanupClientArtifacts(clientName); cleanupErr != nil {
+						logger.Warn(context.Background(), "remove legacy user client artifacts failed: "+cleanupErr.Error())
+					}
+				}
 			}
 
 			// 3. 删除用户
@@ -2905,7 +2991,11 @@ func Run(info BuildInfo) {
 				}
 				logger.Warn(context.Background(), "吊销证书失败，继续清理客户端文件: %s", revErr.Error())
 			} else {
-				ov.sendCommand("signal SIGHUP")
+				if reloadErr := synchronizePendingCRL(&ov); reloadErr != nil {
+					logger.Error(context.Background(), "reload OpenVPN CRL after client deletion failed: "+reloadErr.Error())
+					c.JSON(http.StatusServiceUnavailable, gin.H{"message": reloadErr.Error()})
+					return
+				}
 				if err := removeClientCredentials(name); err != nil {
 					logger.Warn(context.Background(), "remove revoked client credentials failed: "+err.Error())
 				}
@@ -3182,6 +3272,41 @@ func Run(info BuildInfo) {
 
 		ovpn.GET("/certs", RequirePermission("cert:view"), func(c *gin.Context) {
 			c.JSON(http.StatusOK, getCerts(ovData))
+		})
+
+		ovpn.DELETE("/certs", RequirePermission("cert:delete"), func(c *gin.Context) {
+			var request struct {
+				Names []string `json:"names"`
+			}
+			if err := c.ShouldBindJSON(&request); err != nil || len(request.Names) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "names must contain at least one client certificate"})
+				return
+			}
+			if len(request.Names) > 50 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "at most 50 certificates may be deleted at once"})
+				return
+			}
+			results := DeleteClientCertificates(request.Names)
+			if hasCRLReloadPending() {
+				if reloadErr := synchronizePendingCRL(&ov); reloadErr != nil {
+					logger.Warn(context.Background(), "reload OpenVPN CRL after certificate deletion failed: "+reloadErr.Error())
+					successCount := markCertificateReloadPending(results, reloadErr)
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"message":      reloadErr.Error(),
+						"results":      results,
+						"successCount": successCount,
+						"total":        len(results),
+					})
+					return
+				}
+			}
+			successCount := 0
+			for _, result := range results {
+				if result.Success {
+					successCount++
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"results": results, "successCount": successCount, "total": len(results)})
 		})
 
 		// 角色管理：CRUD + 分配权限

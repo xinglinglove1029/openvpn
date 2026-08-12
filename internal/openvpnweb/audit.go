@@ -53,6 +53,7 @@ var auditTargets = []struct {
 	{http.MethodPost, regexp.MustCompile(`^/ovpn/client$`), "client", "create"},
 	{http.MethodPut, regexp.MustCompile(`^/ovpn/client/[^/]+/(ccd|config)$`), "client", "update-config"},
 	{http.MethodDelete, regexp.MustCompile(`^/ovpn/client/[^/]+$`), "client", "delete"},
+	{http.MethodDelete, regexp.MustCompile(`^/ovpn/certs$`), "cert", "delete"},
 	{http.MethodPost, regexp.MustCompile(`^/ovpn/firewall$`), "firewall", "create"},
 	{http.MethodPatch, regexp.MustCompile(`^/ovpn/firewall$`), "firewall", "update"},
 	{http.MethodDelete, regexp.MustCompile(`^/ovpn/firewall/[^/]+$`), "firewall", "delete"},

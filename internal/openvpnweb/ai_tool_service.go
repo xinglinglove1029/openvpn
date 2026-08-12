@@ -722,64 +722,55 @@ func (s *AIToolService) UpdateUser(ctx agent.ToolContext, operator string, req a
 // DeleteUser 删除用户（实现 ai.ToolService 接口）
 func (s *AIToolService) DeleteUser(ctx agent.ToolContext, operator string, req ai.DeleteUserRequest) (ai.DeleteUserResult, error) {
 	if !s.hasPermission(ctx, operator, "user:delete") {
-		return ai.DeleteUserResult{Success: false, Message: "无 user:delete 权限"}, fmt.Errorf("权限不足: 需要 user:delete 权限")
+		return ai.DeleteUserResult{Success: false, Message: "missing user:delete permission"}, fmt.Errorf("missing permission: user:delete")
 	}
 	username := strings.TrimSpace(req.Username)
 	if username == "" {
-		return ai.DeleteUserResult{Success: false, Message: "username 不能为空"}, fmt.Errorf("username 不能为空")
+		return ai.DeleteUserResult{Success: false, Message: "username is required"}, fmt.Errorf("username is required")
 	}
 	if username == adminUsername {
-		return ai.DeleteUserResult{Success: false, Message: "内置 admin 用户不可删除"}, fmt.Errorf("禁止删除 admin")
+		return ai.DeleteUserResult{Success: false, Message: "the built-in admin user cannot be deleted"}, fmt.Errorf("cannot delete built-in admin")
 	}
 	var target User
 	if err := db.WithContext(ctx).Where("username = ?", username).First(&target).Error; err != nil {
-		return ai.DeleteUserResult{Success: false, Message: fmt.Sprintf("用户 %s 不存在", username)}, fmt.Errorf("用户不存在: %w", err)
+		return ai.DeleteUserResult{Success: false, Message: fmt.Sprintf("user %s does not exist", username)}, fmt.Errorf("find user: %w", err)
 	}
 
-	// 与页面删除用户流程对齐：先清理客户端配置和证书，再删数据库记录
-	// 客户端配置名：优先使用 ovpn_config 字段，兜底用 username
-	clientName := target.OvpnConfig
+	clientName := strings.TrimSuffix(strings.TrimSpace(target.OvpnConfig), ".ovpn")
 	if clientName == "" {
 		clientName = username
 	}
-
-	// 1. 撤销客户端证书（证书可能不存在，只记录警告不阻断）
-	certRevoked := false
-	if revErr := RevokeByName(clientName); revErr != nil {
-		logger.Warn(context.Background(), fmt.Sprintf("DeleteUser: 撤销证书 %s 失败（可能不存在）: %s", clientName, revErr.Error()))
+	deletedArtifacts := false
+	if result, err := DeleteClientCertificate(clientName); err != nil {
+		if certificateProtectionReason(clientName, nil) != "" {
+			return ai.DeleteUserResult{Success: false, Message: err.Error()}, err
+		}
+		logger.Warn(context.Background(), "AI DeleteUser: client certificate cleanup failed (may be legacy residue): "+err.Error())
+		if _, nameErr := validateCertificateName(clientName); nameErr == nil {
+			if cleanupErr := cleanupClientArtifacts(clientName); cleanupErr != nil {
+				logger.Warn(context.Background(), "AI DeleteUser: legacy client artifact cleanup failed: "+cleanupErr.Error())
+			} else {
+				deletedArtifacts = true
+			}
+		}
 	} else {
-		certRevoked = true
-		if s.ov != nil {
-			s.ov.sendCommand("signal SIGHUP")
-		}
-		if err := removeClientCredentials(clientName); err != nil {
-			logger.Warn(context.Background(), fmt.Sprintf("DeleteUser: remove revoked client credentials for %s: %s", clientName, err.Error()))
+		deletedArtifacts = true
+		if result.ReloadRequired {
+			if reloadErr := reloadOpenVPNCRL(s.ov); reloadErr != nil {
+				logger.Warn(context.Background(), "AI DeleteUser: reload CRL failed: "+reloadErr.Error())
+				return ai.DeleteUserResult{Success: false, Message: reloadErr.Error()}, reloadErr
+			}
 		}
 	}
 
-	// 2. 删除客户端配置文件和 CCD 目录
-	ovpnFile := filepath.Join(ovData, "clients", clientName+".ovpn")
-	ccdDir := filepath.Join(ovData, "ccd", clientName)
-	ovpnRemoved := false
-	if os.Remove(ovpnFile) == nil {
-		ovpnRemoved = true
-	}
-	os.Remove(ccdDir)
-
-	// 3. 删除用户数据库记录
 	if err := target.Delete(fmt.Sprintf("%d", target.ID)); err != nil {
-		return ai.DeleteUserResult{Success: false, Message: fmt.Sprintf("删除失败: %v", err)}, err
+		return ai.DeleteUserResult{Success: false, Message: fmt.Sprintf("delete user: %v", err)}, err
 	}
-
-	// 构造结果消息
-	parts := []string{fmt.Sprintf("用户 %s 已删除", username)}
-	if ovpnRemoved {
-		parts = append(parts, fmt.Sprintf("客户端配置 %s.ovpn 已删除", clientName))
+	message := fmt.Sprintf("user %s deleted", username)
+	if deletedArtifacts {
+		message += "; associated client artifacts were removed"
 	}
-	if certRevoked {
-		parts = append(parts, "客户端证书已吊销")
-	}
-	return ai.DeleteUserResult{Success: true, Message: strings.Join(parts, "，")}, nil
+	return ai.DeleteUserResult{Success: true, Message: message}, nil
 }
 
 // ListOnlineClients 列出在线 VPN 客户端
@@ -858,32 +849,22 @@ func (s *AIToolService) ListClients(ctx agent.ToolContext, operator string) (ai.
 // DeleteClient 删除客户端配置并吊销证书
 func (s *AIToolService) DeleteClient(ctx agent.ToolContext, operator string, req ai.DeleteClientRequest) (ai.DeleteClientResult, error) {
 	if !s.hasPermission(ctx, operator, "client:delete") {
-		return ai.DeleteClientResult{Success: false, Message: "无 client:delete 权限"}, fmt.Errorf("权限不足: 需要 client:delete 权限")
+		return ai.DeleteClientResult{Success: false, Message: "missing client:delete permission"}, fmt.Errorf("missing permission: client:delete")
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		return ai.DeleteClientResult{Success: false, Message: "name 不能为空"}, fmt.Errorf("name 不能为空")
+		return ai.DeleteClientResult{Success: false, Message: "name is required"}, fmt.Errorf("name is required")
 	}
-	ovpnFile := filepath.Join(ovData, "clients", name+".ovpn")
-	if !fileExists(ovpnFile) {
-		return ai.DeleteClientResult{Success: false, Message: fmt.Sprintf("客户端 %s 不存在", name)}, fmt.Errorf("客户端不存在")
+	result, err := DeleteClientCertificate(name)
+	if err != nil {
+		return ai.DeleteClientResult{Success: false, Message: result.Message}, err
 	}
-	if revErr := RevokeByName(name); revErr != nil {
-		if fileExists(ovpnFile) || fileExists(clientCertPath(name)) {
-			return ai.DeleteClientResult{Success: false, Message: fmt.Sprintf("吊销证书失败: %v", revErr)}, revErr
-		}
-		logger.Warn(context.Background(), fmt.Sprintf("吊销证书失败，继续清理: %s", revErr.Error()))
-	} else {
-		if s.ov != nil {
-			s.ov.sendCommand("signal SIGHUP")
-		}
-		if err := removeClientCredentials(name); err != nil {
-			logger.Warn(context.Background(), fmt.Sprintf("DeleteClient: remove revoked client credentials for %s: %s", name, err.Error()))
+	if result.ReloadRequired {
+		if reloadErr := reloadOpenVPNCRL(s.ov); reloadErr != nil {
+			return ai.DeleteClientResult{Success: false, Message: reloadErr.Error()}, reloadErr
 		}
 	}
-	os.Remove(ovpnFile)
-	os.Remove(filepath.Join(ovData, "ccd", name))
-	return ai.DeleteClientResult{Success: true, Message: fmt.Sprintf("客户端 %s 已删除", name)}, nil
+	return ai.DeleteClientResult{Success: true, Message: fmt.Sprintf("client %s deleted", result.Name)}, nil
 }
 
 // UpdateCCD 更新客户端 CCD 配置
@@ -1024,6 +1005,126 @@ func (s *AIToolService) ListCerts(ctx agent.ToolContext, operator string) (ai.Li
 		})
 	}
 	return ai.ListCertsResult{Certs: infos, Total: len(infos)}, nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+// DiagnoseClientConnection is read-only. It intentionally reports status rather than secrets,
+// raw OpenVPN configuration, authentication data, or certificate/key material.
+func (s *AIToolService) DiagnoseClientConnection(ctx agent.ToolContext, operator string, req ai.DiagnoseClientConnectionRequest) (ai.ClientConnectionDiagnosis, error) {
+	if !s.hasPermission(ctx, operator, "client:view") || !s.hasPermission(ctx, operator, "cert:view") {
+		return ai.ClientConnectionDiagnosis{}, fmt.Errorf("missing permission: client:view and cert:view are required")
+	}
+	name, err := validateCertificateName(req.Name)
+	if err != nil {
+		return ai.ClientConnectionDiagnosis{}, err
+	}
+	diagnosis := ai.ClientConnectionDiagnosis{
+		ClientName: name, CertificateStatus: "missing", Findings: []string{}, SuggestedActions: []string{},
+	}
+	diagnosis.ClientConfigFound = fileExists(filepath.Join(ovData, "clients", name+".ovpn"))
+	if !diagnosis.ClientConfigFound {
+		diagnosis.Findings = append(diagnosis.Findings, "Client configuration file is missing")
+		diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "Regenerate and download a fresh .ovpn configuration after administrator approval")
+	}
+
+	cert, certErr := parseCertificateFile(clientCertPath(name))
+	if certErr != nil {
+		diagnosis.Findings = append(diagnosis.Findings, "Client certificate is missing or unreadable")
+		diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "Issue a new client certificate/configuration; do not reuse unknown certificate files")
+	} else {
+		diagnosis.CertificateFound = true
+		diagnosis.CertificateStatus = "active"
+		if revoked, err := isCertificateRevoked(cert); err != nil {
+			diagnosis.Findings = append(diagnosis.Findings, "Certificate revocation status could not be verified: "+err.Error())
+		} else if revoked {
+			diagnosis.CertificateStatus = "revoked"
+			diagnosis.Findings = append(diagnosis.Findings, "Client certificate is revoked")
+			diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "Generate a new client certificate and download a new .ovpn file; a revoked certificate cannot be restored")
+		} else if time.Now().After(cert.NotAfter) {
+			diagnosis.CertificateStatus = "expired"
+			diagnosis.Findings = append(diagnosis.Findings, "Client certificate has expired")
+			diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "Renew the client certificate and download the replacement .ovpn file")
+		} else if time.Now().Before(cert.NotBefore) {
+			diagnosis.CertificateStatus = "not_yet_valid"
+			diagnosis.Findings = append(diagnosis.Findings, "Client certificate is not valid yet; check client and server time")
+		} else {
+			diagnosis.Findings = append(diagnosis.Findings, "Client certificate is active")
+		}
+	}
+
+	var user User
+	if err := db.WithContext(ctx).Where("username = ? OR ovpn_config = ?", name, name+".ovpn").First(&user).Error; err == nil {
+		diagnosis.UserFound = true
+		diagnosis.UserEnabled = user.IsEnable != nil && *user.IsEnable
+		diagnosis.MFAEnabled = user.IsMFAEnabled()
+		if !diagnosis.UserEnabled {
+			diagnosis.Findings = append(diagnosis.Findings, "Associated user account is disabled")
+			diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "An authorized administrator must enable the user account before retrying")
+		}
+	} else {
+		diagnosis.Findings = append(diagnosis.Findings, "No associated user account was found")
+	}
+
+	if s.ov == nil {
+		diagnosis.Findings = append(diagnosis.Findings, "OpenVPN management interface is unavailable to the web service")
+		return diagnosis, nil
+	}
+	clients, managementOK := s.ov.safeOnlineClients()
+	diagnosis.ManagementOK = managementOK
+	for _, client := range clients {
+		if client.CommonName == name || client.Username == name {
+			diagnosis.Online = true
+			break
+		}
+	}
+	if !managementOK {
+		diagnosis.Findings = append(diagnosis.Findings, "OpenVPN management interface did not return client status")
+		diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "Run the OpenVPN Server self-check before changing client settings")
+	} else if diagnosis.Online {
+		diagnosis.Findings = append(diagnosis.Findings, "Client is currently connected")
+	} else {
+		diagnosis.SuggestedActions = appendUnique(diagnosis.SuggestedActions, "If credentials and certificate are valid, verify server address/port, network reachability, and the client-side OpenVPN log")
+	}
+	return diagnosis, nil
+}
+
+func convertServerDiagnosis(d OpenVPNServerDiagnosis) ai.OpenVPNServerDiagnosis {
+	result := ai.OpenVPNServerDiagnosis{ConfigFound: d.ConfigFound, ManagementOK: d.ManagementOK, ServerStatus: d.ServerStatus, Issues: make([]ai.OpenVPNServerIssue, 0, len(d.Issues))}
+	for _, issue := range d.Issues {
+		result.Issues = append(result.Issues, ai.OpenVPNServerIssue{Code: issue.Code, Severity: issue.Severity, Message: issue.Message, RepairAction: issue.RepairAction})
+	}
+	return result
+}
+
+func (s *AIToolService) DiagnoseOpenVPNServer(ctx agent.ToolContext, operator string) (ai.OpenVPNServerDiagnosis, error) {
+	if !s.hasPermission(ctx, operator, "settings:service:config") {
+		return ai.OpenVPNServerDiagnosis{}, fmt.Errorf("missing permission: settings:service:config")
+	}
+	if s.ov == nil {
+		return ai.OpenVPNServerDiagnosis{}, fmt.Errorf("OpenVPN runtime is not initialized")
+	}
+	return convertServerDiagnosis(s.ov.DiagnoseOpenVPNServer()), nil
+}
+
+func (s *AIToolService) RepairOpenVPNServer(ctx agent.ToolContext, operator string, req ai.RepairOpenVPNServerRequest) (ai.OpenVPNServerRepairResult, error) {
+	if !s.hasPermission(ctx, operator, "settings:service:config") {
+		return ai.OpenVPNServerRepairResult{}, fmt.Errorf("missing permission: settings:service:config")
+	}
+	if s.ov == nil {
+		return ai.OpenVPNServerRepairResult{}, fmt.Errorf("OpenVPN runtime is not initialized")
+	}
+	result, err := s.ov.RepairOpenVPNServer(req.Action)
+	return ai.OpenVPNServerRepairResult{
+		Success: result.Success, Action: result.Action, Message: result.Message, BackupPath: result.BackupPath, ChangedDirectives: result.ChangedDirectives, Reloaded: result.Reloaded, Diagnosis: convertServerDiagnosis(result.Diagnosis),
+	}, err
 }
 
 // ListChannels 列出通知渠道

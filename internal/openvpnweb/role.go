@@ -150,6 +150,7 @@ var buttonPermissions = []permissionSeedItem{
 	// 证书（2）
 	{"menu:certs", "cert:view", "查看证书", "button", "", "", 1},
 	{"menu:certs", "cert:renew", "续签证书", "button", "", "", 2},
+	{"menu:certs", "cert:delete", "删除证书", "button", "", "", 3},
 	// 审计（1）
 	{"menu:audit", "audit:view", "查看审计", "button", "", "", 1},
 	// 系统设置（7）
