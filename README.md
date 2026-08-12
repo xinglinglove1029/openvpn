@@ -391,8 +391,8 @@ frontend/src/
 ### Docker Compose（推荐）
 
 ```bash
-git clone https://github.com/xinglinglove1029/openvpn-web.git
-cd openvpn-web
+git clone https://github.com/xinglinglove1029/openvpn
+cd openvpn
 docker compose up -d --build
 docker compose logs -f
 ```
