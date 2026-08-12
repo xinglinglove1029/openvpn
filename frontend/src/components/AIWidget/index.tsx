@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type PointerEvent as ReactPointerEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@/store/theme';
 import { useAuth } from '@/store/auth';
@@ -49,6 +49,44 @@ interface HistoryResponse {
 }
 
 const CHAT_STORAGE_KEY_PREFIX = 'openvpn-ai-widget-chat';
+const WIDGET_POSITION_STORAGE_KEY = 'openvpn-ai-widget-position';
+const WIDGET_POSITION_MARGIN = 16;
+const WIDGET_DRAG_THRESHOLD = 4;
+
+interface WidgetPosition {
+  left: number;
+  top: number;
+}
+
+interface WidgetDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startLeft: number;
+  startTop: number;
+  width: number;
+  height: number;
+  dragging: boolean;
+}
+
+function clampWidgetPosition(position: WidgetPosition, width: number, height: number): WidgetPosition {
+  return {
+    left: Math.min(Math.max(WIDGET_POSITION_MARGIN, position.left), Math.max(WIDGET_POSITION_MARGIN, window.innerWidth - width - WIDGET_POSITION_MARGIN)),
+    top: Math.min(Math.max(WIDGET_POSITION_MARGIN, position.top), Math.max(WIDGET_POSITION_MARGIN, window.innerHeight - height - WIDGET_POSITION_MARGIN)),
+  };
+}
+
+function loadWidgetPosition(): WidgetPosition | null {
+  try {
+    const raw = localStorage.getItem(WIDGET_POSITION_STORAGE_KEY);
+    if (!raw) return null;
+    const position = JSON.parse(raw) as Partial<WidgetPosition>;
+    if (!Number.isFinite(position.left) || !Number.isFinite(position.top)) return null;
+    return { left: position.left as number, top: position.top as number };
+  } catch {
+    return null;
+  }
+}
 
 function chatStorageKey(username?: string): string {
   return username ? `${CHAT_STORAGE_KEY_PREFIX}:${username}` : '';
@@ -86,6 +124,9 @@ export default function AIWidget() {
   const storageKey = chatStorageKey(user?.username);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [widgetPosition, setWidgetPosition] = useState<WidgetPosition | null>(null);
+  const [widgetPositionReady, setWidgetPositionReady] = useState(false);
+  const [draggingWidget, setDraggingWidget] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState('');
@@ -96,12 +137,102 @@ export default function AIWidget() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const widgetTriggerRef = useRef<HTMLButtonElement>(null);
+  const widgetDragRef = useRef<WidgetDragState | null>(null);
+  const suppressWidgetOpenRef = useRef(false);
   const [historyReadyFor, setHistoryReadyFor] = useState('');
   // 记录上一次 WS 推送的 available 状态，用于"仅从可用→不可用时弹出提示"
   const prevAvailableRef = useRef<boolean | null>(null);
 
   // 健康状态订阅：
   // 1. 组件挂载时拉取一次 /ovpn/ai/health 作为初始值（避免 WS 未连接时显示空白）
+  // Keep the collapsed entry where the user last placed it. Position is UI-only and
+  // intentionally shared by browser profile rather than being sent to the server.
+  useEffect(() => {
+    setWidgetPosition(loadWidgetPosition());
+    setWidgetPositionReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!widgetPositionReady || !widgetPosition) return;
+    try {
+      localStorage.setItem(WIDGET_POSITION_STORAGE_KEY, JSON.stringify(widgetPosition));
+    } catch {
+      // Position persistence is optional; dragging should still work when storage is unavailable.
+    }
+  }, [widgetPosition, widgetPositionReady]);
+
+  useEffect(() => {
+    if (!widgetPosition) return;
+    const keepWidgetVisible = () => {
+      const trigger = widgetTriggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      setWidgetPosition((current) => {
+        if (!current) return current;
+        const clamped = clampWidgetPosition(current, rect.width, rect.height);
+        return clamped.left === current.left && clamped.top === current.top ? current : clamped;
+      });
+    };
+    window.addEventListener('resize', keepWidgetVisible);
+    return () => window.removeEventListener('resize', keepWidgetVisible);
+  }, [widgetPosition]);
+
+  const handleWidgetPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    widgetDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: rect.left,
+      startTop: rect.top,
+      width: rect.width,
+      height: rect.height,
+      dragging: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleWidgetPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = widgetDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.dragging && Math.hypot(deltaX, deltaY) < WIDGET_DRAG_THRESHOLD) return;
+
+    drag.dragging = true;
+    suppressWidgetOpenRef.current = true;
+    setDraggingWidget(true);
+    setWidgetPosition(
+      clampWidgetPosition(
+        { left: drag.startLeft + deltaX, top: drag.startTop + deltaY },
+        drag.width,
+        drag.height,
+      ),
+    );
+    event.preventDefault();
+  };
+
+  const finishWidgetDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = widgetDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (drag.dragging) suppressWidgetOpenRef.current = true;
+    widgetDragRef.current = null;
+    setDraggingWidget(false);
+  };
+
+  const handleWidgetClick = () => {
+    if (suppressWidgetOpenRef.current) {
+      suppressWidgetOpenRef.current = false;
+      return;
+    }
+    setOpen(true);
+  };
+
   // Restore the current user's fallback cache first, then replace it with SQLite history.
   // Do not write to localStorage until this restoration completes, or an empty initial
   // React state could overwrite an existing fallback before it is read.
@@ -407,18 +538,27 @@ export default function AIWidget() {
       {/* 悬浮入口 */}
       {!open && (
         <button
-          onClick={() => setOpen(true)}
+          ref={widgetTriggerRef}
+          onClick={handleWidgetClick}
+          onPointerDown={handleWidgetPointerDown}
+          onPointerMove={handleWidgetPointerMove}
+          onPointerUp={finishWidgetDrag}
+          onPointerCancel={finishWidgetDrag}
+          style={widgetPosition ? { left: widgetPosition.left, top: widgetPosition.top, right: 'auto', bottom: 'auto' } : undefined}
           className={`
             fixed bottom-6 right-6 z-50
             flex items-center gap-2
             px-4 py-3 rounded-full
+            select-none touch-none
+            ${draggingWidget ? 'cursor-grabbing scale-105' : 'cursor-grab'}
             shadow-lg shadow-black/20
-            transition-all duration-200
+            transition-[box-shadow,transform] duration-200
             hover:scale-105 hover:shadow-xl
             active:scale-95
             ${isDark ? 'bg-white text-black' : 'bg-[#4b70e2] text-white'}
           `}
-          aria-label="打开 AI 助手"
+          aria-label="打开 AI 助手（可拖动调整位置）"
+          title="拖动可调整位置，点击打开 AI 助手"
         >
           <Sparkles className="h-5 w-5" />
           <span className="font-medium text-sm">AI 助理</span>
