@@ -186,14 +186,19 @@ func RepairNotifyReadUserIDs() {
 	// 策略：逐条迁移，对同一 scope 下 admin 已存在的记录（UNIQUE 冲突）直接删除 system 那条（admin 已读优先级更高）
 	if adminID > 0 {
 		// 1. 先尝试把不会冲突的记录迁过去（WHERE admin 同 scope 下不存在）
+		// 注意：子查询不能直接引用目标表 user_notify_read（MySQL Error 1093），
+		// 需用派生表包裹一层，SQLite/PostgreSQL/MySQL 均兼容。
 		result := db.WithContext(context.Background()).Exec(`
 			UPDATE user_notify_read
 			SET user_id = ?, username = ?
 			WHERE (username = ? OR user_id = ? OR user_id = ?)
 			  AND username != ?
 			  AND NOT EXISTS (
-				SELECT 1 FROM user_notify_read AS t2
-				WHERE t2.username = ? AND t2.scope = user_notify_read.scope
+				SELECT 1 FROM (
+					SELECT scope FROM user_notify_read AS t2
+					WHERE t2.username = ?
+				) AS admin_scopes
+				WHERE admin_scopes.scope = user_notify_read.scope
 			  )
 		`, adminID, adminUsername, "system", 0, SystemAuditOperatorID, adminUsername, adminUsername)
 		if result.Error != nil {

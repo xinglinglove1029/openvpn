@@ -186,10 +186,11 @@ func dashboardTrends(since int64) []DashboardTrendPoint {
 	default: // sqlite
 		hourExpr = "strftime('%Y%m%d%H', datetime(time_unix, 'unixepoch', 'localtime'))"
 	}
+	// 按完整表达式分组，而非引用 SELECT 别名：PostgreSQL 不允许 GROUP BY 别名（SQLSTATE 42803）。
 	db.WithContext(context.Background()).Model(&History{}).
 		Select(hourExpr+" as hour, COUNT(*) as connections, COALESCE(SUM(bytes_received), 0) as received, COALESCE(SUM(bytes_sent), 0) as sent").
 		Where("time_unix >= ?", since).
-		Group("hour").
+		Group(hourExpr).
 		Scan(&rows)
 
 	for _, row := range rows {
@@ -208,10 +209,12 @@ func dashboardTopUsers(since int64) []DashboardTopUser {
 		Username string
 		Bytes    float64
 	}
+	// 同上：PostgreSQL 不允许 GROUP BY 引用 SELECT 别名，按完整表达式分组。
+	userExpr := "COALESCE(NULLIF(username, ''), common_name, 'unknown')"
 	db.WithContext(context.Background()).Model(&History{}).
-		Select("COALESCE(NULLIF(username, ''), common_name, 'unknown') as username, COALESCE(SUM(bytes_received + bytes_sent), 0) as bytes").
+		Select(userExpr+" as username, COALESCE(SUM(bytes_received + bytes_sent), 0) as bytes").
 		Where("time_unix >= ?", since).
-		Group("username").
+		Group(userExpr).
 		Order("bytes DESC").
 		Limit(5).
 		Scan(&rows)

@@ -29,8 +29,10 @@ type UserRole struct {
 func (UserRole) TableName() string { return "user_role" }
 
 type User struct {
-	ID           uint       `gorm:"primarykey" json:"id" form:"id" uri:"id"`
-	Username     string     `gorm:"uniqueIndex;column:username" json:"username" form:"username"`
+	ID uint `gorm:"primarykey" json:"id" form:"id" uri:"id"`
+	// size:191：MySQL 不允许对 TEXT 列建唯一索引（Error 1170），
+	// 需限定为 varchar(191)（utf8mb4 下 191 字符 = 764 字节，唯一索引上限）。
+	Username     string     `gorm:"uniqueIndex;column:username;size:191" json:"username" form:"username"`
 	Password     string     `form:"password" json:"password"`
 	IsEnable     *bool      `gorm:"default:true" form:"isEnable" json:"isEnable"`
 	Name         string     `json:"name" form:"name"`

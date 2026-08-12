@@ -51,6 +51,9 @@ func dialectAndDSN(cfg DatabaseConfig, dataDir string) (dialect string, dsn stri
 			Net:    "tcp",
 			Addr:   net.JoinHostPort(cfg.Host, strconv.Itoa(port)), // 兼容 IPv6（[::1]:3306）
 			DBName: cfg.Name,
+			// go-sql-driver v1.8+ 默认拒绝 mysql_native_password；老账号（如 MySQL 5.7 / 8.0 默认插件）
+			// 仍需该插件认证，显式开启以兼容。
+			AllowNativePasswords: true,
 			Params: map[string]string{
 				"charset":   charset,
 				"parseTime": "True",
