@@ -75,6 +75,22 @@ type OvpnConfig struct {
 	OvpnPushDns2   string `json:"ovpn_push_dns2" mapstructure:"ovpn_push_dns2"`
 }
 
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+	Type            string `json:"type" mapstructure:"type"`     // sqlite | mysql | postgres
+	Host            string `json:"host" mapstructure:"host"`     // mysql/postgres 主机
+	Port            int    `json:"port" mapstructure:"port"`     // mysql/postgres 端口，0 表示按类型取默认（3306/5432）
+	User            string `json:"user" mapstructure:"user"`     // mysql/postgres 用户名
+	Password        string `json:"password" mapstructure:"password"`
+	Name            string `json:"name" mapstructure:"name"`     // mysql/postgres 数据库名
+	Path            string `json:"path" mapstructure:"path"`     // sqlite 文件路径（相对 OVPN_DATA 或绝对路径）
+	Charset         string `json:"charset" mapstructure:"charset"` // mysql 字符集
+	SSLMode         string `json:"ssl_mode" mapstructure:"ssl_mode"` // postgres sslmode
+	MaxOpenConns    int    `json:"max_open_conns" mapstructure:"max_open_conns"`
+	MaxIdleConns    int    `json:"max_idle_conns" mapstructure:"max_idle_conns"`
+	ConnMaxLifetime int    `json:"conn_max_lifetime_seconds" mapstructure:"conn_max_lifetime_seconds"` // 秒
+}
+
 // AIConfig AI 助手配置
 type AIConfig struct {
 	Enabled      bool    `json:"enabled" mapstructure:"enabled"`
@@ -97,8 +113,9 @@ type config struct {
 	Client struct {
 		ClientUrl ClientUrlConfig `json:"client_url" mapstructure:"client_url"`
 	} `json:"client" mapstructure:"client"`
-	Openvpn OvpnConfig `json:"openvpn" mapstructure:"openvpn"`
-	AI      AIConfig   `json:"ai" mapstructure:"ai"`
+	Openvpn  OvpnConfig     `json:"openvpn" mapstructure:"openvpn"`
+	AI       AIConfig       `json:"ai" mapstructure:"ai"`
+	Database DatabaseConfig `json:"database" mapstructure:"database"`
 }
 
 var (
@@ -179,6 +196,19 @@ func initConfig() {
 	viper.SetDefault("openvpn.ovpn_push_dns2", "2001:4860:4860::8888")
 
 	// AI 助手配置
+	viper.SetDefault("database.type", "sqlite")
+	viper.SetDefault("database.path", "ovpn.db")
+	viper.SetDefault("database.host", "127.0.0.1")
+	viper.SetDefault("database.port", 0)
+	viper.SetDefault("database.user", "root")
+	viper.SetDefault("database.password", "")
+	viper.SetDefault("database.name", "openvpn-web")
+	viper.SetDefault("database.charset", "utf8mb4")
+	viper.SetDefault("database.ssl_mode", "disable")
+	viper.SetDefault("database.max_open_conns", 0)
+	viper.SetDefault("database.max_idle_conns", 0)
+	viper.SetDefault("database.conn_max_lifetime_seconds", 0)
+
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
 	viper.SetConfigPermissions(0600)

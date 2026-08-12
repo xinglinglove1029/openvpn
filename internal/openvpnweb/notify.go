@@ -142,24 +142,11 @@ func migrateNotifyLogChannelName() {
 	if db == nil {
 		return
 	}
-	// 先检查旧表是否存在 channel_type 列（SQLite 下直接 PRAGMA 查询）
+	// 先检查旧表是否存在 channel_type 列（跨方言查询 information_schema / pragma）
 	ctx := context.Background()
-	var hasChannelType bool
-	rows, err := db.WithContext(ctx).Raw("PRAGMA table_info(notify_logs)").Rows()
-	if err == nil && rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var cid int
-			var name, ctype string
-			var notnull, pk int
-			var dflt_value interface{}
-			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err == nil {
-				if name == "channel_type" {
-					hasChannelType = true
-					break
-				}
-			}
-		}
+	hasChannelType, err := columnExists(db, "notify_logs", "channel_type")
+	if err != nil {
+		logger.Error(ctx, "检查 notify_logs.channel_type 列存在性失败: %s", err.Error())
 	}
 	if !hasChannelType {
 		// 新版数据库已删除旧 channel_type 列，跳过迁移

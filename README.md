@@ -239,7 +239,7 @@
 │  └──────────┬───────────┘    └──────────────────────────────┘    │
 │             │                                                    │
 │  ┌──────────▼─────────────────────────────────────────────────┐  │
-│  │              GORM + SQLite (data/openvpn.db)              │  │
+│  │          GORM (SQLite / MySQL / PostgreSQL)               │  │
 │  └──────────┬─────────────────────────────────────────────────┘  │
 │             │                                                    │
 │  ┌──────────▼──────────┐    ┌──────────────────────────────┐    │
@@ -468,6 +468,79 @@ npm run dev          # 启动 Vite dev server (默认 http://127.0.0.1:5173)
 
 修改 `frontend` 后必须重新执行 `npm run build`，并重启 Go 服务或重新打包二进制。
 Go 使用 `go:embed` 嵌入静态资源，仅刷新浏览器不会更新已嵌入的前端资源。
+
+---
+
+## 数据库配置
+
+默认使用 SQLite（`$OVPN_DATA/ovpn.db`），零配置即可运行；也可通过 `$OVPN_DATA/config.json` 的 `database` 节点切换为 MySQL 或 PostgreSQL。
+
+```jsonc
+{
+  "database": {
+    "type": "sqlite",              // sqlite | mysql | postgres，默认 sqlite
+    "host": "127.0.0.1",
+    "port": 0,                     // 0 表示按类型取默认（mysql:3306 / postgres:5432）
+    "user": "root",
+    "password": "",
+    "name": "openvpn-web",         // mysql/postgres 数据库名
+    "path": "ovpn.db",             // sqlite 文件路径（相对 OVPN_DATA 或绝对路径）
+    "charset": "utf8mb4",          // mysql 字符集
+    "ssl_mode": "disable",         // postgres sslmode：disable | require | verify-ca | verify-full
+    "max_open_conns": 0,
+    "max_idle_conns": 0,
+    "conn_max_lifetime_seconds": 0
+  }
+}
+```
+
+> `type`、`path`、`host`、`port` 等键缺省时均有内置默认值；`type` 缺省或为空即 SQLite，老部署无需修改任何配置。
+
+### MySQL 示例
+
+```json
+{
+  "database": {
+    "type": "mysql",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "openvpn",
+    "password": "your-password",
+    "name": "openvpn-web",
+    "charset": "utf8mb4",
+    "max_open_conns": 20,
+    "max_idle_conns": 5
+  }
+}
+```
+
+需要先创建数据库：`CREATE DATABASE IF NOT EXISTS openvpn-web CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
+
+### PostgreSQL 示例
+
+```json
+{
+  "database": {
+    "type": "postgres",
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "openvpn",
+    "password": "your-password",
+    "name": "openvpn-web",
+    "ssl_mode": "disable"
+  }
+}
+```
+
+需要先创建数据库：`CREATE DATABASE "openvpn-web";`
+
+### 注意事项
+
+- 应用启动时会自动建表（GORM AutoMigrate）并写入种子数据（角色/权限/默认管理员），MySQL/PostgreSQL 需确保账号有建表权限。
+- 用户/分组等递归查询使用 `WITH RECURSIVE`：MySQL 需 8.0 及以上，PostgreSQL 需 8.4 及以上（现代版本均满足）。
+- 切换数据库类型不会自动迁移旧数据；如需从 SQLite 迁出，请自行使用数据库迁移工具或导入导出 SQL。
+- 控制台「在线趋势」按小时统计：SQLite 使用应用本地时区；MySQL/PostgreSQL 使用数据库会话时区。若数据库服务器时区与应用时区不一致，趋势图小时桶会整体偏移，请将数据库会话时区设置为应用时区（MySQL：`SET time_zone = '+08:00'`；PostgreSQL：`SET TIME ZONE 'Asia/Shanghai'` 或连接参数 `TimeZone`）。
+- `cmd/permcheck`、`cmd/notifycheck`、`cmd/resetpass` 等离线运维工具仍只针对本地 SQLite 文件。
 
 ---
 

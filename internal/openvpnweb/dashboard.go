@@ -173,8 +173,21 @@ func dashboardTrends(since int64) []DashboardTrendPoint {
 		Received    float64
 		Sent        float64
 	}
+	// 按方言生成按小时取整的表达式（SQLite strftime / MySQL DATE_FORMAT / PostgreSQL TO_CHAR）
+	// 注意：SQLite 使用进程本地时区（'localtime'）；MySQL 用数据库会话时区（FROM_UNIXTIME），
+	// PostgreSQL 用会话 TimeZone。若 MySQL/PG 服务器时区与应用时区不一致，趋势图小时桶会整体偏移，
+	// 需将数据库会话时区设置为应用时区（见 README「数据库配置」注意事项）。
+	var hourExpr string
+	switch db.Dialector.Name() {
+	case "mysql":
+		hourExpr = "DATE_FORMAT(FROM_UNIXTIME(time_unix), '%Y%m%d%H')"
+	case "postgres":
+		hourExpr = "TO_CHAR(to_timestamp(time_unix), 'YYYYMMDDHH24')"
+	default: // sqlite
+		hourExpr = "strftime('%Y%m%d%H', datetime(time_unix, 'unixepoch', 'localtime'))"
+	}
 	db.WithContext(context.Background()).Model(&History{}).
-		Select("strftime('%Y%m%d%H', datetime(time_unix, 'unixepoch', 'localtime')) as hour, COUNT(*) as connections, COALESCE(SUM(bytes_received), 0) as received, COALESCE(SUM(bytes_sent), 0) as sent").
+		Select(hourExpr+" as hour, COUNT(*) as connections, COALESCE(SUM(bytes_received), 0) as received, COALESCE(SUM(bytes_sent), 0) as sent").
 		Where("time_unix >= ?", since).
 		Group("hour").
 		Scan(&rows)

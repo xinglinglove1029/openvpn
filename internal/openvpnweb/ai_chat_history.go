@@ -22,12 +22,20 @@ type AIChatMessage struct {
 
 func (AIChatMessage) TableName() string { return "ai_chat_messages" }
 
-// MigrateAIChatHistory creates the SQLite chat-history table without touching existing AI settings or VPN history.
+// MigrateAIChatHistory creates the chat-history table without touching existing AI settings or VPN history.
 func MigrateAIChatHistory(database *gorm.DB) error {
 	if err := database.AutoMigrate(&AIChatMessage{}); err != nil {
 		return err
 	}
-	return database.Exec(`CREATE INDEX IF NOT EXISTS idx_ai_chat_user_created ON ai_chat_messages(username, created_at DESC, id DESC)`).Error
+	// MySQL 不支持 CREATE INDEX IF NOT EXISTS，需先检查索引是否存在
+	exists, err := indexExists(database, "ai_chat_messages", "idx_ai_chat_user_created")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	return database.Exec(`CREATE INDEX idx_ai_chat_user_created ON ai_chat_messages(username, created_at DESC, id DESC)`).Error
 }
 
 type sqliteAIChatHistoryStore struct {

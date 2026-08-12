@@ -33,7 +33,6 @@ import (
 	"github.com/gin-contrib/sessions"
 	gormsessions "github.com/gin-contrib/sessions/gorm"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/patrickmn/go-cache"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
@@ -777,9 +776,7 @@ func Run(info BuildInfo) {
 	}
 
 	var err error
-	db, err = gorm.Open(sqlite.Open(filepath.Join(ovData, "ovpn.db")+"?_pragma=foreign_keys(1)"), &gorm.Config{
-		Logger: logger,
-	})
+	db, err = OpenDatabase(conf.Database, ovData, logger)
 
 	if err != nil {
 		panic(err)
@@ -828,14 +825,14 @@ func Run(info BuildInfo) {
 	// 历史升级兼容：将 user.role_id（旧模型）数据回填并迁移到 user_role 表
 	// 全新部署时 user 表无 role_id 列，跳过迁移；仅在列存在时执行（避免 SQL 报错）
 	defaultRoleID := GetDefaultRoleID(db)
-	var hasRoleIDColumn bool
-	if err := db.Raw("SELECT COUNT(*) FROM pragma_table_info('user') WHERE name = 'role_id'").Scan(&hasRoleIDColumn).Error; err != nil {
+	hasRoleIDColumn, err := columnExists(db, "user", "role_id")
+	if err != nil {
 		logger.Error(context.Background(), "检查 user.role_id 列存在性失败: %s", err.Error())
 	}
 	if hasRoleIDColumn {
 		// 历史用户 role_id 为 NULL 时回填到普通用户角色 ID
 		if defaultRoleID > 0 {
-			result := db.Exec("UPDATE user SET role_id = ? WHERE role_id IS NULL", defaultRoleID)
+			result := db.Exec("UPDATE "+userIdent(db)+" SET role_id = ? WHERE role_id IS NULL", defaultRoleID)
 			if result.Error != nil {
 				logger.Error(context.Background(), "回填历史用户 role_id 失败: %s", result.Error.Error())
 			} else if result.RowsAffected > 0 {
@@ -846,19 +843,19 @@ func Run(info BuildInfo) {
 		}
 
 		// 迁移历史 user.role_id 到 user_role 表
-		if err := db.Exec("INSERT OR IGNORE INTO user_role (user_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM user WHERE role_id IS NOT NULL AND role_id > 0").Error; err != nil {
+		if err := insertIgnore(db, "INTO user_role (user_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM "+userIdent(db)+" WHERE role_id IS NOT NULL AND role_id > 0").Error; err != nil {
 			logger.Error(context.Background(), "迁移历史 user.role_id 到 user_role 表失败: %s", err.Error())
 		}
 	}
 
 	// 历史升级兼容：将 group.role_id（旧单角色模型）迁移到 group_role 多对多关联表
 	// group.role_id 字段保留但不再使用，新代码通过 group_role 表管理组-角色关联
-	var hasGroupRoleIDColumn bool
-	if err := db.Raw("SELECT COUNT(*) FROM pragma_table_info('group') WHERE name = 'role_id'").Scan(&hasGroupRoleIDColumn).Error; err != nil {
+	hasGroupRoleIDColumn, err := columnExists(db, "group", "role_id")
+	if err != nil {
 		logger.Error(context.Background(), "检查 group.role_id 列存在性失败: %s", err.Error())
 	}
 	if hasGroupRoleIDColumn {
-		result := db.Exec("INSERT OR IGNORE INTO group_role (group_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM \"group\" WHERE role_id IS NOT NULL AND role_id > 0")
+		result := insertIgnore(db, "INTO group_role (group_id, role_id, created_at) SELECT id, role_id, CURRENT_TIMESTAMP FROM "+groupIdent(db)+" WHERE role_id IS NOT NULL AND role_id > 0")
 		if result.Error != nil {
 			logger.Error(context.Background(), "迁移历史 group.role_id 到 group_role 表失败: %s", result.Error.Error())
 		} else if result.RowsAffected > 0 {

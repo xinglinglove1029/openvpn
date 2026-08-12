@@ -537,27 +537,35 @@ func saveNftConfig() error {
 func getUserFirewallSetName(username string) []FirewallSet {
 	var fs []FirewallSet
 
+	// 跨方言：'f' || f.id || '_src' 在 MySQL 中 || 是逻辑或，需改用 CONCAT
+	srcExpr := "'f' || f.id || '_src'"
+	dstExpr := "'f' || f.id || '_dst'"
+	if db.Dialector.Name() == "mysql" {
+		srcExpr = "CONCAT('f', f.id, '_src')"
+		dstExpr = "CONCAT('f', f.id, '_dst')"
+	}
+
 	db.Raw(`
 		WITH RECURSIVE group_tree AS (
 			SELECT g.id, g.parent_id
-			FROM "group" g
-			JOIN user u ON u.gid = g.id
+			FROM `+groupIdent(db)+` g
+			JOIN `+userIdent(db)+` u ON u.gid = g.id
 			WHERE u.username = ?
 
 			UNION ALL
 
 			SELECT g.id, g.parent_id
-			FROM "group" g
+			FROM `+groupIdent(db)+` g
 			INNER JOIN group_tree gt ON g.id = gt.parent_id
 		)
-		SELECT 'f' || f.id || '_src' AS set_name
+		SELECT `+srcExpr+` AS set_name
 		FROM firewall f
 		JOIN firewall_sgroup fs ON fs.firewall_id = f.id
 		WHERE fs.group_id IN (SELECT id FROM group_tree)
 
 		UNION ALL
 
-		SELECT 'f' || f.id || '_dst' AS set_name
+		SELECT `+dstExpr+` AS set_name
 		FROM firewall f
 		JOIN firewall_dgroup fd ON fd.firewall_id = f.id
 		WHERE fd.group_id IN (SELECT id FROM group_tree)

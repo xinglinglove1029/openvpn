@@ -176,13 +176,13 @@ func (g *Group) GetUsers(id string) []User {
 			gid IN (
 				WITH RECURSIVE group_tree AS (
 					SELECT id, parent_id
-					FROM "group"
+					FROM `+groupIdent(db)+`
 					WHERE id = ?
 		
 					UNION ALL
 		
 					SELECT g.id, g.parent_id
-					FROM "group" g
+					FROM `+groupIdent(db)+` g
 					JOIN group_tree gt ON g.parent_id = gt.id
 				)
 				SELECT id FROM group_tree
@@ -216,13 +216,13 @@ func GetSubtreeIDs(groupID uint) []uint {
 	result := db.Raw(`
 		WITH RECURSIVE group_tree AS (
 			SELECT id, parent_id
-			FROM "group"
+			FROM `+groupIdent(db)+`
 			WHERE id = ?
 
 			UNION ALL
 
 			SELECT g.id, g.parent_id
-			FROM "group" g
+			FROM `+groupIdent(db)+` g
 			JOIN group_tree gt ON g.parent_id = gt.id
 		)
 		SELECT id FROM group_tree

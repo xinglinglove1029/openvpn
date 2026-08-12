@@ -394,30 +394,40 @@ func (u *User) Login(clogin bool) error {
 			}
 
 			var ovconfig sql.NullString
-			db.Raw(`
+			// 跨方言：不使用 GROUP_CONCAT（MySQL 语法不同、PostgreSQL 无此函数），
+			// 改为取出分组链上的全部 config，在 Go 侧按行替换 \n 并拼接
+			var groupConfigs []struct {
+				Config string
+			}
+			err := db.Raw(`
 				WITH RECURSIVE group_up AS (
 					SELECT
 						id,
 						parent_id,
 						config,
 						0 AS level
-					FROM "group"
+					FROM `+groupIdent(db)+`
 					WHERE id = ?
-			
+		
 					UNION ALL
-			
+		
 					SELECT
 						g.id,
 						g.parent_id,
 						g.config,
 						gu.level + 1
-					FROM "group" g
+					FROM `+groupIdent(db)+` g
 					JOIN group_up gu ON g.id = gu.parent_id
 				)
-				SELECT GROUP_CONCAT(REPLACE(config, '\n', CHAR(10)), CHAR(10)) AS configs
-				FROM group_up
-				WHERE config IS NOT NULL
-			`, u.Gid).Scan(&ovconfig)
+				SELECT config FROM group_up WHERE config IS NOT NULL
+			`, u.Gid).Scan(&groupConfigs).Error
+			if err == nil && len(groupConfigs) > 0 {
+				parts := make([]string, 0, len(groupConfigs))
+				for _, gc := range groupConfigs {
+					parts = append(parts, strings.ReplaceAll(gc.Config, "\\n", "\n"))
+				}
+				ovconfig = sql.NullString{String: strings.Join(parts, "\n"), Valid: true}
+			}
 
 			if ovconfig.Valid {
 				os.WriteFile(path.Join(ovData, ".ovc"), []byte(ovconfig.String), 0644)
@@ -446,14 +456,14 @@ func (u *User) GetGroups() []Group {
 	db.Raw(`
 		WITH RECURSIVE group_tree AS (
 			SELECT g.*
-			FROM "group" g
-			INNER JOIN user u ON u.gid = g.id
+			FROM `+groupIdent(db)+` g
+			INNER JOIN `+userIdent(db)+` u ON u.gid = g.id
 			WHERE u.username = ?
 
 			UNION ALL
 
 			SELECT g.*
-			FROM "group" g
+			FROM `+groupIdent(db)+` g
 			INNER JOIN group_tree gt ON g.id = gt.parent_id
 		)
 		SELECT DISTINCT id FROM group_tree

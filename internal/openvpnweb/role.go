@@ -985,9 +985,11 @@ func roleListHandler(c *gin.Context) {
 		Count  int64
 	}
 	var userCounts []roleCount
+	// user 是 PostgreSQL 保留字，表名须按方言加引号
+	userT := userIdent(db)
 	userCountQuery := db.Table("user_role").
 		Select("user_role.role_id AS role_id, COUNT(*) as count").
-		Joins("INNER JOIN user ON user.id = user_role.user_id")
+		Joins("INNER JOIN " + userT + " ON " + userT + ".id = user_role.user_id")
 	userCountQuery.Group("user_role.role_id").Scan(&userCounts)
 	userCountMap := make(map[uint]int64, len(userCounts))
 	for _, uc := range userCounts {
