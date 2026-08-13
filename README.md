@@ -17,6 +17,7 @@
 - [快速启动](#快速启动)
 - [本地开发](#本地开发)
 - [构建打包](#构建打包)
+- [Linux 完整 Server 安装包](#linux-完整-server-安装包)
 - [GitHub 自动发布](#github-自动发布)
 - [项目结构](#项目结构)
 - [文档](#文档)
@@ -565,6 +566,34 @@ dist/openvpn-web-darwin-aarch64.tar.gz
 dist/openvpn-web_sha256_checksums.txt
 ```
 
+### Linux 完整 Server 安装包
+
+`openvpn-web-linux-*` 是轻量 **Web-only** 包：它只包含管理控制台二进制，不会安装或启动 OpenVPN Server，适合已有 OpenVPN 环境或仅需要 Web/API 功能的场景。
+
+完整的 Linux Server 交付物由 GoReleaser 生成，包含安装/卸载脚本、systemd 单元及运行时脚本；安装时通过宿主机包管理器安装 OpenVPN、EasyRSA、防火墙工具等依赖。可在 Linux/WSL 中执行以下命令做本地快照构建：
+
+```bash
+goreleaser release --snapshot --clean
+```
+
+同一次构建会生成 Web-only 压缩包、`openvpn-web-full-linux-*.tar.gz`、`.deb`、`.rpm` 及 SHA-256 校验文件。完整 bundle 的使用方式：
+
+```bash
+tar -xzf openvpn-web-full-linux-x86_64.tar.gz
+cd openvpn-web-full-linux-x86_64
+sudo ./install.sh
+```
+
+首次原生安装会创建 `admin` 账户，并将随机初始密码保存在 root-only 文件中：
+
+```bash
+sudo cat /etc/openvpn-web/initial-admin-password
+# 使用 admin 登录并修改密码后：
+sudo rm -f /etc/openvpn-web/initial-admin-password
+```
+
+升级已有安装不会覆盖 `config.json`、数据库、PKI、客户端配置或管理员密码。Docker 部署保持原有初始化行为；不要让原生服务与 Docker 容器同时使用同一数据目录或端口。
+
 ### 单架构 Docker 镜像
 
 ```bash
@@ -602,9 +631,11 @@ DOCKERHUB_USERNAME=xinglinglove1029
 DOCKERHUB_TOKEN=<Docker Hub Access Token>
 ```
 
-发布完成后生成：
+发布完成后，同一个 GitHub Release 会**同时**包含以下附件；完整 Server 包不会替代或隐藏原有轻量 Web-only 包：
 
-- GitHub Release 压缩包：Linux、Windows、macOS 多平台版本
+- Web-only 压缩包：`openvpn-web-linux-*`、`openvpn-web-windows-*`、`openvpn-web-darwin-*`
+- Linux 完整 Server bundle：`openvpn-web-full-linux-*.tar.gz`
+- Linux 原生软件包：`*.deb`、`*.rpm`
 - GitHub Release 校验文件：`openvpn-web_sha256_checksums.txt`
 - Docker Hub 镜像：`xinglinglove1029/openvpn:latest`
 - Docker Hub 镜像：`xinglinglove1029/openvpn:<tag>`

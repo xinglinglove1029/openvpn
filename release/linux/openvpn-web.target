@@ -1,0 +1,7 @@
+[Unit]
+Description=OpenVPN Web Full Service
+Requires=openvpn-web.service openvpn-server.service
+After=openvpn-web.service openvpn-server.service
+
+[Install]
+WantedBy=multi-user.target

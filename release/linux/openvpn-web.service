@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenVPN Web Management Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/openvpn-web/openvpn-web.env
+WorkingDirectory=/var/lib/openvpn-web
+ExecStart=/usr/local/bin/openvpn-web
+Restart=on-failure
+RestartSec=5s
+User=root
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

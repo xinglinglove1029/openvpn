@@ -19,7 +19,10 @@ FROM --platform=$BUILDPLATFORM golang:1.25.4-alpine AS backend-builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+# 默认使用国内 Go 模块代理（goproxy.cn），可通过 --build-arg GOPROXY=... 覆盖；
+# 否则直连 proxy.golang.org 在国内网络下容易 stream INTERNAL_ERROR 中断。
+ARG GOPROXY=https://goproxy.cn,direct
+RUN GOPROXY=${GOPROXY} go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
@@ -68,7 +71,12 @@ COPY build/openvpn-auth /usr/lib/openvpn/plugins/openvpn-auth
 COPY build/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY --from=backend-builder /out/openvpn-web /usr/local/bin/openvpn-web
 
-RUN chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth
+# Windows 下编辑保存的 shell 脚本常为 CRLF 行尾，Linux 内核无法直接执行
+# （容器启动报 "no such file or directory"），统一转换为 LF 后再 chmod。
+RUN sed -i 's/\r$//' /usr/bin/docker-entrypoint.sh \
+ && sed -i 's/\r$//' /usr/lib/openvpn/plugins/openvpn-auth \
+ && sed -i 's/\r$//' /etc/supervisor/conf.d/supervisord.conf \
+ && chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth
 
 VOLUME ["/data"]
 

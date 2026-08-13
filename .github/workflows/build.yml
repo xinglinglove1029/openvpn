@@ -37,7 +37,14 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build
 
-      - name: Build openvpn-web
+      - name: Validate release configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: check
+
+      - name: Build openvpn-web and Linux packages
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser

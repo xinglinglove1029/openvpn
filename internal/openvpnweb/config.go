@@ -2,7 +2,11 @@ package openvpnweb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -77,14 +81,14 @@ type OvpnConfig struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Type            string `json:"type" mapstructure:"type"`     // sqlite | mysql | postgres
-	Host            string `json:"host" mapstructure:"host"`     // mysql/postgres 主机
-	Port            int    `json:"port" mapstructure:"port"`     // mysql/postgres 端口，0 表示按类型取默认（3306/5432）
-	User            string `json:"user" mapstructure:"user"`     // mysql/postgres 用户名
+	Type            string `json:"type" mapstructure:"type"` // sqlite | mysql | postgres
+	Host            string `json:"host" mapstructure:"host"` // mysql/postgres 主机
+	Port            int    `json:"port" mapstructure:"port"` // mysql/postgres 端口，0 表示按类型取默认（3306/5432）
+	User            string `json:"user" mapstructure:"user"` // mysql/postgres 用户名
 	Password        string `json:"password" mapstructure:"password"`
-	Name            string `json:"name" mapstructure:"name"`     // mysql/postgres 数据库名
-	Path            string `json:"path" mapstructure:"path"`     // sqlite 文件路径（相对 OVPN_DATA 或绝对路径）
-	Charset         string `json:"charset" mapstructure:"charset"` // mysql 字符集
+	Name            string `json:"name" mapstructure:"name"`         // mysql/postgres 数据库名
+	Path            string `json:"path" mapstructure:"path"`         // sqlite 文件路径（相对 OVPN_DATA 或绝对路径）
+	Charset         string `json:"charset" mapstructure:"charset"`   // mysql 字符集
 	SSLMode         string `json:"ssl_mode" mapstructure:"ssl_mode"` // postgres sslmode
 	MaxOpenConns    int    `json:"max_open_conns" mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `json:"max_idle_conns" mapstructure:"max_idle_conns"`
@@ -138,9 +142,76 @@ var (
 	ovManage string
 )
 
+// initialAdminPassword reads a native-install bootstrap password from a root-only
+// file. Docker keeps the historical admin/admin first-start behavior because it
+// does not set OPENVPN_WEB_INITIAL_ADMIN_PASSWORD_FILE.
+func initialAdminPassword() string {
+	passwordFile := strings.TrimSpace(os.Getenv("OPENVPN_WEB_INITIAL_ADMIN_PASSWORD_FILE"))
+	if passwordFile == "" {
+		return "admin"
+	}
+
+	info, err := os.Stat(passwordFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			panic(fmt.Sprintf("initial admin password file %s is required while config.json has no administrator password", passwordFile))
+		}
+		panic(fmt.Sprintf("read initial admin password file: %v", err))
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		panic(fmt.Sprintf("initial admin password file %s must be a root-only regular file", passwordFile))
+	}
+
+	password, err := os.ReadFile(passwordFile)
+	if err != nil {
+		panic(fmt.Sprintf("read initial admin password file: %v", err))
+	}
+	value := strings.TrimSpace(string(password))
+	if len(value) < 16 {
+		panic("initial admin password must contain at least 16 characters")
+	}
+	return value
+}
+
+// configHasAdminPassword reports whether an existing config already owns the
+// admin credential. It lets native operators remove the bootstrap password
+// file after the first successful initialization without weakening a future
+// first-start after accidental data loss.
+func configHasAdminPassword(configFile string) bool {
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		panic(fmt.Sprintf("read config file %s: %v", configFile, err))
+	}
+
+	var raw struct {
+		System struct {
+			Base struct {
+				AdminPassword string `json:"admin_password"`
+			} `json:"base"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(content, &raw); err != nil {
+		// ReadInConfig below remains responsible for reporting malformed JSON.
+		// Treat it as incomplete here so native first-start never silently falls
+		// back to a weak password while an explicit bootstrap file is configured.
+		return false
+	}
+	return strings.TrimSpace(raw.System.Base.AdminPassword) != ""
+}
+
 func initConfig() {
 	sk := genRandomString(50)
-	passwd, _ := bcrypt.GenerateFromPassword([]byte("admin"), 12)
+	initialPassword := "admin"
+	if !configHasAdminPassword(filepath.Join(ovData, "config.json")) {
+		initialPassword = initialAdminPassword()
+	}
+	passwd, err := bcrypt.GenerateFromPassword([]byte(initialPassword), 12)
+	if err != nil {
+		panic(fmt.Sprintf("hash initial admin password: %v", err))
+	}
 
 	viper.SetDefault("system.base.site_url", "http://127.0.0.1:8888")
 	viper.SetDefault("system.base.web_port", "8888")
@@ -216,7 +287,7 @@ func initConfig() {
 
 	viper.SafeWriteConfig()
 
-	err := viper.ReadInConfig()
+	err = viper.ReadInConfig()
 	if err != nil {
 		panic(err)
 	}

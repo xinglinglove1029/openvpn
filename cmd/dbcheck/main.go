@@ -11,14 +11,15 @@ import (
 func main() {
 	os.Setenv("OVPN_DATA", "F:/develop/openvpn/data")
 
+	// 注意：以下为脱敏占位数据，请勿将真实连接信息提交到仓库。
 	check("mysql", openvpnweb.DatabaseConfig{
-		Type: "mysql", Host: "10.100.100.168", Port: 3306,
-		User: "ymeet", Password: "xiaobingbing123456", Name: "yb_meeting",
+		Type: "mysql", Host: "192.0.2.10", Port: 3306,
+		User: "db_user", Password: "change-me", Name: "openvpn-web",
 		Charset: "utf8mb4",
 	})
 	check("postgres", openvpnweb.DatabaseConfig{
-		Type: "postgres", Host: "10.50.16.133", Port: 30432,
-		User: "postgres", Password: "LrUoXQCJAdFkbtrG5DaGFztz", Name: "medipaas",
+		Type: "postgres", Host: "198.51.100.10", Port: 5432,
+		User: "db_user", Password: "change-me", Name: "openvpn-web",
 		SSLMode: "disable",
 	})
 }
@@ -61,7 +62,7 @@ func check(label string, cfg openvpnweb.DatabaseConfig) {
 			fmt.Println()
 		}
 		var grants string
-		db.Raw("SELECT GROUP_CONCAT(privilege_type) FROM information_schema.user_privileges WHERE grantee LIKE '%ymeeet%'").Scan(&grants)
+		db.Raw("SELECT GROUP_CONCAT(privilege_type) FROM information_schema.user_privileges WHERE grantee LIKE '%db_user%'").Scan(&grants)
 		fmt.Println("user privileges:", grants)
 	} else {
 		db.Raw("SELECT version()").Scan(&version)

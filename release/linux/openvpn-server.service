@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenVPN Server managed by openvpn-web
+Requires=openvpn-web.service
+After=openvpn-web.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/openvpn-web/openvpn-web.env
+WorkingDirectory=/var/lib/openvpn-web
+ExecStart=/usr/lib/openvpn-web/openvpn-web-entrypoint.sh /usr/sbin/openvpn
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+User=root
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

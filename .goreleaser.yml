@@ -26,9 +26,32 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
+
+  # Linux-only build used by the complete native bundle and deb/rpm packages.
+  - id: openvpn-web-native
+    binary: openvpn-web
+    main: ./cmd/openvpn-web
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - 6
+      - 7
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.builtBy=goreleaser
+
 dist: dist
+
 archives:
-  - formats: ['tar.gz']
+  - id: web
+    ids:
+      - openvpn-web
+    formats: ['tar.gz']
     name_template: >-
       openvpn-web-
       {{- .Os }}-
@@ -42,9 +65,118 @@ archives:
     files:
       - README.md
       - LICENSE
+
+  - id: full-linux
+    ids:
+      - openvpn-web-native
+    formats: ['tar.gz']
+    name_template: >-
+      openvpn-web-full-
+      {{- .Os }}-
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm64" }}aarch64
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}l
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - src: release/linux/install.sh
+        dst: install.sh
+      - src: release/linux/uninstall.sh
+        dst: uninstall.sh
+      - src: release/linux/README.md
+        dst: README-linux-server.md
+      - src: release/linux/openvpn-web.service
+        dst: openvpn-web.service
+      - src: release/linux/openvpn-server.service
+        dst: openvpn-server.service
+      - src: release/linux/openvpn-web.target
+        dst: openvpn-web.target
+      - src: release/linux/package-postinstall.sh
+        dst: package-postinstall.sh
+      - src: release/linux/package-preremove.sh
+        dst: package-preremove.sh
+      - src: release/linux/package-postremove.sh
+        dst: package-postremove.sh
+      - src: build/docker-entrypoint.sh
+        dst: openvpn-web-entrypoint.sh
+      - src: build/openvpn-auth
+        dst: openvpn-auth
+
 checksum:
   name_template: 'openvpn-web_sha256_checksums.txt'
   algorithm: sha256
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - openvpn-web-native
+    package_name: openvpn-web
+    # Keep armv6 and armv7 package artifacts distinct: nFPM maps both to armhf
+    # when using its conventional Debian filename.
+    file_name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    vendor: XING-LING-LOVE
+    homepage: https://github.com/xinglinglove1029/openvpn
+    maintainer: XING-LING-LOVE <xinglinglove1029@163.com>
+    description: OpenVPN Web management UI and OpenVPN Server integration
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    section: net
+    priority: optional
+    bindir: /usr/local/bin
+    release: 1
+    dependencies:
+      - bash
+      - ca-certificates
+      - curl
+      - jq
+      - openssl
+      - openvpn
+      - iptables
+      - nftables
+      - sqlite3
+      - easy-rsa
+    overrides:
+      rpm:
+        dependencies:
+          - bash
+          - ca-certificates
+          - curl
+          - jq
+          - openssl
+          - openvpn
+          - iproute
+          - iptables
+          - nftables
+          - sqlite
+          - easy-rsa
+    contents:
+      - src: build/docker-entrypoint.sh
+        dst: /usr/lib/openvpn-web/openvpn-web-entrypoint.sh
+        file_info:
+          mode: 0755
+      - src: build/openvpn-auth
+        dst: /usr/lib/openvpn-web/openvpn-auth
+        file_info:
+          mode: 0755
+      - src: release/linux/openvpn-web.service
+        dst: /etc/systemd/system/openvpn-web.service
+      - src: release/linux/openvpn-server.service
+        dst: /etc/systemd/system/openvpn-server.service
+      - src: release/linux/openvpn-web.target
+        dst: /etc/systemd/system/openvpn-web.target
+      - src: LICENSE
+        dst: /usr/share/doc/openvpn-web/LICENSE
+      - src: release/linux/README.md
+        dst: /usr/share/doc/openvpn-web/README.md
+    scripts:
+      postinstall: release/linux/package-postinstall.sh
+      preremove: release/linux/package-preremove.sh
+      postremove: release/linux/package-postremove.sh
+
 changelog:
   sort: asc
   filters:
@@ -53,13 +185,13 @@ changelog:
       - '^test:'
   groups:
     - title: 'Features'
-      regexp: '^feat(\(.*\))??:|^perf(\(.*\))??:'
+      regexp: '^feat(\\(.*\\))??:|^perf(\\(.*\\))??:'
       order: 1
     - title: 'Fixes'
-      regexp: '^fix(\(.*\))??:'
+      regexp: '^fix(\\(.*\\))??:'
       order: 2
     - title: 'Changes'
-      regexp: '^refactor(\(.*\))??:|^chore(\(.*\))??:'
+      regexp: '^refactor(\\(.*\\))??:|^chore(\\(.*\\))??:'
       order: 3
     - title: 'Others'
       order: 999
