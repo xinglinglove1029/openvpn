@@ -18,9 +18,10 @@ type History struct {
 	Vip6          string    `gorm:"column:vip6;comment:'VPN IPV6'" json:"vip6" form:"vip6"`
 	Rip           string    `gorm:"column:rip;comment:'用户 IP'" json:"rip" form:"rip"`
 	Rip6          string    `gorm:"column:rip6;comment:'用户 IPV6'" json:"rip6" form:"rip6"`
-	RipRegion     string    `gorm:"-" json:"ripRegion"` // 非数据库字段，运行时计算
+	RipRegion     string    `gorm:"-" json:"ripRegion"`  // 非数据库字段，运行时计算
 	Rip6Region    string    `gorm:"-" json:"rip6Region"` // 非数据库字段，运行时计算
 	CommonName    string    `gorm:"column:common_name;comment:'客户端名称'" json:"common_name" form:"common_name"`
+	ConnectionID  string    `gorm:"column:connection_id;index;comment:'OpenVPN 连接 ID'" json:"connection_id" form:"connection_id"`
 	Username      string    `gorm:"column:username;comment:'用户名'" json:"username" form:"username"`
 	BytesReceived float64   `gorm:"comment:'下行流量'" form:"bytes_received" json:"bytes_received"`
 	BytesSent     float64   `gorm:"comment:'上传流量'" json:"bytes_sent" form:"bytes_sent"`

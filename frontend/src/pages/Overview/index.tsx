@@ -39,7 +39,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
 import { ConfirmDialog, type ConfirmState } from '@/components/ConfirmDialog';
 import { CardGlow } from '@/components/CardGlow';
-import { DashboardTrendChart } from '@/components/DashboardTrendChart';
+import { DashboardTrafficUsers } from '@/components/DashboardTrafficUsers';
 import SystemMonitor from '@/components/SystemMonitor';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
@@ -331,7 +331,7 @@ export default function OverviewPage() {
           icon={LogIn}
           loading={!dashboard}
           value={stats?.todayConnections ?? 0}
-          description={`24h ${stats?.bytesReceived24h || '0 B'} / ${stats?.bytesSent24h || '0 B'}`}
+          description="当天成功建立的连接次数"
         />
       </div>
 
@@ -367,41 +367,19 @@ export default function OverviewPage() {
         </div>
       )}
 
-      {/* ---- Trends & Top Users ---- */}
+      {/* ---- Time-range user traffic ---- */}
       {dashboard && (
         <CardGlow>
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <TrendingUp className="h-5 w-5" />
-                近 24 小时趋势
+                用户流量分析
               </CardTitle>
-              <CardDescription>连接数、流量与 Top 用户聚合统计</CardDescription>
+              <CardDescription>在选定时间段内按用户汇总下载、上传和在线时长</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(260px,0.8fr)]">
-                <DashboardTrendChart points={dashboard.trends ?? []} />
-
-                {/* top users */}
-                <div>
-                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-                    <Users className="h-3.5 w-3.5" />
-                    Top 流量用户
-                  </p>
-                  {(dashboard.topUsers ?? []).length ? (
-                    <div className="space-y-2">
-                      {(dashboard.topUsers ?? []).map((user) => (
-                        <div key={user.username} className="flex flex-wrap items-start justify-between gap-2 text-sm">
-                          <span className="truncate">{user.username}</span>
-                          <Badge variant="secondary" className="ml-2 shrink-0">{user.text}</Badge>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">暂无 24 小时流量记录</p>
-                  )}
-                </div>
-              </div>
+              <DashboardTrafficUsers />
             </CardContent>
           </Card>
         </CardGlow>

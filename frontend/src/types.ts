@@ -250,17 +250,44 @@ export interface DashboardSummary {
     expiringUsers: number;
     firewallRules: number;
     todayConnections: number;
-    bytesReceived24h: string;
-    bytesSent24h: string;
     serverStatus: string;
     managementOk: boolean;
   };
-  trends: Array<{ hour: string; connections: number; received: number; sent: number }>;
-  topUsers: Array<{ username: string; bytes: number; text: string }>;
   risks: Array<{ level: 'danger' | 'warning' | 'info' | string; title: string; message: string }>;
 }
 
 // 概览页 WebSocket 实时推送载荷（topic: dashboard:stats）
+export interface DashboardTrafficUser {
+  username: string;
+  commonName?: string;
+  online: boolean;
+  connections: number;
+  onlineSeconds: number;
+  received: number;
+  sent: number;
+  total: number;
+  receivedText: string;
+  sentText: string;
+  totalText: string;
+  lastSeen: number;
+}
+
+export interface DashboardTrafficUsersResponse {
+  start: number;
+  end: number;
+  sampleSeconds: number;
+  users: DashboardTrafficUser[];
+  totals: {
+    activeUsers: number;
+    received: number;
+    sent: number;
+    total: number;
+    receivedText: string;
+    sentText: string;
+    totalText: string;
+  };
+}
+
 export interface DashboardStatsPayload {
   summary: DashboardSummary;
   online: OnlineClient[];

@@ -788,6 +788,9 @@ func Run(info BuildInfo) {
 		if err != nil {
 			logger.Error(context.Background(), err.Error())
 		}
+		if err := (ClientTrafficSample{}).Clear(); err != nil {
+			logger.Error(context.Background(), err.Error())
+		}
 	})
 	c.AddFunc("@daily", func() {
 		checkAndSendExpireReminders()
@@ -798,7 +801,7 @@ func Run(info BuildInfo) {
 
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
-	db.AutoMigrate(&User{}, &History{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
+	db.AutoMigrate(&User{}, &History{}, &ClientTrafficSample{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
 	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &GroupRole{})
 	if err := MigrateAISettings(db); err != nil {
 		panic(fmt.Errorf("initialize AI provider settings: %w", err))
@@ -1330,6 +1333,7 @@ func Run(info BuildInfo) {
 	{
 		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
+		ovpn.GET("/dashboard/traffic-users", RequirePermission("menu:overview"), ov.dashboardTrafficUsers)
 		ovpn.GET("/system-stats/history", RequirePermission("menu:overview"), func(c *gin.Context) {
 			history, latest := GetSystemStatsHistory()
 			c.JSON(http.StatusOK, gin.H{

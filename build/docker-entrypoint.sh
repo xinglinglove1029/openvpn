@@ -310,7 +310,7 @@ add_history() {
 	#https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html#environmental-variables
 	set +e
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
-	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
+	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&connection_id=$connection_id&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
 	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $ovpn_history_api -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
 		echo "[CLIENT-DISCONNECT] $0:$LINENO 保存历史记录出错，请检查！"
@@ -323,7 +323,7 @@ send_notify() {
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	event="$1"
 	api="${ovpn_notify_api:-http://127.0.0.1:$(jq -r '.system.base.web_port // "8888"' $ovpn_data/config.json)/ovpn/notify}"
-	data="event=$event&vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
+	data="event=$event&vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&connection_id=$connection_id&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
 	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $api -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
 		echo "[CLIENT-$event] $0:$LINENO send notify failed"

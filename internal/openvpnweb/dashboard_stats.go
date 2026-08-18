@@ -55,6 +55,27 @@ func StartDashboardStatsCollector(ov *ovpn, interval time.Duration) {
 	}()
 
 	go c.loop()
+	go c.trafficLoop()
+}
+
+// trafficLoop samples cumulative management counters once per minute. The
+// regular dashboard collector remains lightweight and continues to run every
+// five seconds for UI updates.
+func (c *dashboardStatsCollector) trafficLoop() {
+	sample := func() {
+		clients, ok := c.ov.safeOnlineClients()
+		if !ok {
+			return
+		}
+		c.sampleOnlineTraffic(clients)
+	}
+
+	sample()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		sample()
+	}
 }
 
 func (c *dashboardStatsCollector) loop() {

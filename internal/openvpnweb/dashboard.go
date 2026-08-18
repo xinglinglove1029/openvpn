@@ -5,20 +5,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/gavintan/gopkg/tools"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 )
 
 type DashboardSummary struct {
-	Stats    DashboardStats        `json:"stats"`
-	Trends   []DashboardTrendPoint `json:"trends"`
-	TopUsers []DashboardTopUser    `json:"topUsers"`
-	Risks    []DashboardRisk       `json:"risks"`
+	Stats DashboardStats  `json:"stats"`
+	Risks []DashboardRisk `json:"risks"`
 }
 
 type DashboardStats struct {
@@ -30,23 +26,8 @@ type DashboardStats struct {
 	ExpiringUsers    int64  `json:"expiringUsers"`
 	FirewallRules    int64  `json:"firewallRules"`
 	TodayConnections int64  `json:"todayConnections"`
-	BytesReceived24h string `json:"bytesReceived24h"`
-	BytesSent24h     string `json:"bytesSent24h"`
 	ServerStatus     string `json:"serverStatus"`
 	ManagementOK     bool   `json:"managementOk"`
-}
-
-type DashboardTrendPoint struct {
-	Hour        string  `json:"hour"`
-	Connections int64   `json:"connections"`
-	Received    float64 `json:"received"`
-	Sent        float64 `json:"sent"`
-}
-
-type DashboardTopUser struct {
-	Username string  `json:"username"`
-	Bytes    float64 `json:"bytes"`
-	Text     string  `json:"text"`
 }
 
 type DashboardRisk struct {
@@ -59,7 +40,6 @@ type DashboardRisk struct {
 // 由 HTTP handler 和 WebSocket 周期采集器共同复用，避免逻辑分叉。
 func (ov *ovpn) buildDashboardSummary() DashboardSummary {
 	now := time.Now()
-	since24h := now.Add(-24 * time.Hour).Unix()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 
 	clients, managementOK := ov.safeOnlineClients()
@@ -103,21 +83,9 @@ func (ov *ovpn) buildDashboardSummary() DashboardSummary {
 		risks = append(risks, DashboardRisk{Level: "warning", Title: "今日上线统计异常", Message: err.Error()})
 	}
 
-	var traffic struct {
-		Received float64
-		Sent     float64
-	}
-	if err := db.WithContext(context.Background()).Model(&History{}).Select("COALESCE(SUM(bytes_received), 0) as received, COALESCE(SUM(bytes_sent), 0) as sent").Where("time_unix >= ?", since24h).Scan(&traffic).Error; err != nil {
-		risks = append(risks, DashboardRisk{Level: "warning", Title: "历史流量统计异常", Message: err.Error()})
-	}
-	stats.BytesReceived24h = tools.FormatBytes(traffic.Received)
-	stats.BytesSent24h = tools.FormatBytes(traffic.Sent)
-
 	return DashboardSummary{
-		Stats:    stats,
-		Trends:   dashboardTrends(since24h),
-		TopUsers: dashboardTopUsers(since24h),
-		Risks:    risks,
+		Stats: stats,
+		Risks: risks,
 	}
 }
 
@@ -154,79 +122,4 @@ func countClientConfigs() int {
 		}
 	}
 	return count
-}
-
-func dashboardTrends(since int64) []DashboardTrendPoint {
-	points := make([]DashboardTrendPoint, 24)
-	now := time.Now().Truncate(time.Hour)
-	indexByHour := map[string]int{}
-	for i := 23; i >= 0; i-- {
-		hour := now.Add(-time.Duration(i) * time.Hour)
-		key := hour.Format("2006010215")
-		points[23-i] = DashboardTrendPoint{Hour: hour.Format("15:00")}
-		indexByHour[key] = 23 - i
-	}
-
-	var rows []struct {
-		Hour        string
-		Connections int64
-		Received    float64
-		Sent        float64
-	}
-	// 按方言生成按小时取整的表达式（SQLite strftime / MySQL DATE_FORMAT / PostgreSQL TO_CHAR）
-	// 注意：SQLite 使用进程本地时区（'localtime'）；MySQL 用数据库会话时区（FROM_UNIXTIME），
-	// PostgreSQL 用会话 TimeZone。若 MySQL/PG 服务器时区与应用时区不一致，趋势图小时桶会整体偏移，
-	// 需将数据库会话时区设置为应用时区（见 README「数据库配置」注意事项）。
-	var hourExpr string
-	switch db.Dialector.Name() {
-	case "mysql":
-		hourExpr = "DATE_FORMAT(FROM_UNIXTIME(time_unix), '%Y%m%d%H')"
-	case "postgres":
-		hourExpr = "TO_CHAR(to_timestamp(time_unix), 'YYYYMMDDHH24')"
-	default: // sqlite
-		hourExpr = "strftime('%Y%m%d%H', datetime(time_unix, 'unixepoch', 'localtime'))"
-	}
-	// 按完整表达式分组，而非引用 SELECT 别名：PostgreSQL 不允许 GROUP BY 别名（SQLSTATE 42803）。
-	db.WithContext(context.Background()).Model(&History{}).
-		Select(hourExpr+" as hour, COUNT(*) as connections, COALESCE(SUM(bytes_received), 0) as received, COALESCE(SUM(bytes_sent), 0) as sent").
-		Where("time_unix >= ?", since).
-		Group(hourExpr).
-		Scan(&rows)
-
-	for _, row := range rows {
-		if index, ok := indexByHour[row.Hour]; ok {
-			points[index].Connections = row.Connections
-			points[index].Received = row.Received
-			points[index].Sent = row.Sent
-		}
-	}
-
-	return points
-}
-
-func dashboardTopUsers(since int64) []DashboardTopUser {
-	var rows []struct {
-		Username string
-		Bytes    float64
-	}
-	// 同上：PostgreSQL 不允许 GROUP BY 引用 SELECT 别名，按完整表达式分组。
-	userExpr := "COALESCE(NULLIF(username, ''), common_name, 'unknown')"
-	db.WithContext(context.Background()).Model(&History{}).
-		Select(userExpr+" as username, COALESCE(SUM(bytes_received + bytes_sent), 0) as bytes").
-		Where("time_unix >= ?", since).
-		Group(userExpr).
-		Order("bytes DESC").
-		Limit(5).
-		Scan(&rows)
-
-	topUsers := make([]DashboardTopUser, 0, len(rows))
-	for _, row := range rows {
-		username := strings.TrimSpace(row.Username)
-		if username == "" {
-			username = "unknown"
-		}
-		topUsers = append(topUsers, DashboardTopUser{Username: username, Bytes: row.Bytes, Text: tools.FormatBytes(row.Bytes)})
-	}
-	sort.SliceStable(topUsers, func(i, j int) bool { return topUsers[i].Bytes > topUsers[j].Bytes })
-	return topUsers
 }
