@@ -1266,6 +1266,47 @@ func legacyAuditRedirectRules() [][]string {
 	return [][]string{{"-t", "nat", "PREROUTING", "-i", "tun0", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"}, {"-t", "nat", "PREROUTING", "-i", "tun0", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"}}
 }
 
+// auditRedirectRuleArgs returns a removable PREROUTING rule only when it has
+// the exact ownership signature used by this feature. It intentionally accepts
+// any destination address so a process restart can remove an orphaned redirect
+// after the configured upstream DNS servers have changed or the audit switch
+// was turned off while the web process was unavailable.
+func auditRedirectRuleArgs(line string) ([]string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != "-A" || fields[1] != "PREROUTING" {
+		return nil, false
+	}
+	values := make(map[string]string, 5)
+	for i := 2; i+1 < len(fields); i++ {
+		switch fields[i] {
+		case "-i", "-p", "--dport", "-j", "--to-ports":
+			values[fields[i]] = fields[i+1]
+			i++
+		}
+	}
+	if values["-i"] != "tun0" || (values["-p"] != "udp" && values["-p"] != "tcp") || values["--dport"] != "53" || values["-j"] != "REDIRECT" || values["--to-ports"] != "5353" {
+		return nil, false
+	}
+	return append([]string{"-t", "nat"}, fields[1:]...), true
+}
+
+// discoverAuditRedirectRules finds stale audit redirect rules without relying
+// on the current config. This is necessary because NAT state survives a web
+// process restart, while in-memory status does not.
+func discoverAuditRedirectRules(ipt string) [][]string {
+	out, err := exec.Command(ipt, "-t", "nat", "-S", "PREROUTING").Output()
+	if err != nil {
+		return nil
+	}
+	rules := make([][]string, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		if rule, ok := auditRedirectRuleArgs(line); ok {
+			rules = append(rules, rule)
+		}
+	}
+	return rules
+}
+
 func (s *webAuditDNSService) ensureRedirectFamily(enable, ipv6 bool, upstreams []string) error {
 	ipt, err := preferredAuditIPTables(ipv6)
 	if err != nil {
@@ -1276,9 +1317,20 @@ func (s *webAuditDNSService) ensureRedirectFamily(enable, ipv6 bool, upstreams [
 	}
 	rules := auditRedirectRules(ipv6, upstreams)
 	if !enable {
+		// Remove both the rules we can derive from the old status snapshot and
+		// any matching orphan that survived a previous web process restart.
+		// The latter covers disabling the feature through a direct config-file
+		// edit before a restart, when status has no old upstream list yet.
 		rules = append(rules, legacyAuditRedirectRules()...)
+		rules = append(rules, discoverAuditRedirectRules(ipt)...)
 	}
+	seen := make(map[string]struct{}, len(rules))
 	for _, rule := range rules {
+		key := strings.Join(rule, "\x00")
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
 		check := append([]string{"-t", "nat", "-C"}, rule[2:]...)
 		exists := exec.Command(ipt, check...).Run() == nil
 		if enable && !exists {

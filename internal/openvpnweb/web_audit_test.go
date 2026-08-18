@@ -471,6 +471,32 @@ func TestReserveAuditStorageDropsOnlyAuditEventsAtCapacity(t *testing.T) {
 	}
 }
 
+func TestAuditRedirectRuleArgsRecognizesOnlyOwnedRules(t *testing.T) {
+	for _, line := range []string{
+		"-A PREROUTING -d 8.8.8.8/32 -i tun0 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -d 2001:4860:4860::8888/128 -i tun0 -p tcp -m tcp --dport 53 -j REDIRECT --to-ports 5353",
+	} {
+		rule, ok := auditRedirectRuleArgs(line)
+		if !ok {
+			t.Fatalf("expected owned audit redirect rule for %q", line)
+		}
+		joined := strings.Join(rule, " ")
+		if !strings.HasPrefix(joined, "-t nat PREROUTING ") || !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "--to-ports 5353") {
+			t.Fatalf("unexpected removable rule args: %q", joined)
+		}
+	}
+
+	for _, line := range []string{
+		"-A PREROUTING -i eth0 -p udp --dport 53 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -i tun0 -p udp --dport 54 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -i tun0 -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:5353",
+		"-A OUTPUT -i tun0 -p udp --dport 53 -j REDIRECT --to-ports 5353",
+	} {
+		if rule, ok := auditRedirectRuleArgs(line); ok {
+			t.Fatalf("unexpectedly accepted non-audit rule %q as %v", line, rule)
+		}
+	}
+}
 func TestWebAuditFirewallRulesAreRestrictedToVPNDNS(t *testing.T) {
 	guardRules := auditIngressGuardRules()
 	if len(guardRules) != 2 {
