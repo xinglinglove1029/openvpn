@@ -12,7 +12,6 @@ import {
   ShieldBan,
   ShieldCheck,
   TrendingUp,
-  BarChart3,
   Wifi,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/ui/card';
@@ -40,6 +39,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { DataTable, type Column } from '@/components/DataTable';
 import { ConfirmDialog, type ConfirmState } from '@/components/ConfirmDialog';
 import { CardGlow } from '@/components/CardGlow';
+import { DashboardTrendChart } from '@/components/DashboardTrendChart';
 import SystemMonitor from '@/components/SystemMonitor';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
@@ -379,35 +379,8 @@ export default function OverviewPage() {
               <CardDescription>连接数、流量与 Top 用户聚合统计</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* trend bars */}
-                <div>
-                  <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-                    <BarChart3 className="h-3.5 w-3.5" />
-                    连接数趋势
-                  </p>
-                  <div className="flex items-end gap-1 h-32">
-                    {(dashboard.trends ?? []).map((point) => {
-                      const max = Math.max(1, ...(dashboard.trends ?? []).map((t) => t.connections));
-                      return (
-                        <div
-                          key={point.hour}
-                          className="flex-1 bg-primary/70 rounded-t-sm min-h-[4px] hover:bg-primary transition-colors"
-                          style={{ height: `${Math.max(4, (point.connections / max) * 100)}%` }}
-                          title={`${point.hour} · ${point.connections} 次`}
-                        />
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between mt-1 text-[10px] text-muted-foreground">
-                    {(dashboard.trends ?? []).length > 0 && (
-                      <>
-                        <span>{dashboard.trends?.[0]?.hour}</span>
-                        <span>{dashboard.trends?.[dashboard.trends.length - 1]?.hour}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(260px,0.8fr)]">
+                <DashboardTrendChart points={dashboard.trends ?? []} />
 
                 {/* top users */}
                 <div>
