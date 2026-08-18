@@ -105,5 +105,5 @@
   summary: docker-compose.yml ?? OVPN_GATEWAY ?????????????????? config.json ??????
   evidence: `build/docker-entrypoint.sh` ?? jq ?? `.openvpn.ovpn_gateway`?`docker-compose.yml` ????? `OVPN_GATEWAY=false`????????????????????
 - source_spec: `_bmad-output/implementation-artifacts/spec-ai-website-audit-statistics-scope.md`
-  summary: 为 AI 网站审计统计补充分组树数据范围的端到端回归测试。
-  evidence: 当前新增测试有意覆盖无分组普通操作者的自有数据范围；`GetAccessibleUserIDs` 对拥有分组的操作者还会经 `GetSubtreeIDs` 计算子树，该路径尚未通过 AI 工具入口验证。
+  summary: 分组树递归 CTE 查询发生数据库错误时，数据范围会安全降级为操作者自身，但 AI 统计不会显示范围不完整。
+  evidence: `GetSubtreeIDs` 将 CTE 错误记录后返回空切片，`GetAccessibleUserIDs` 随即回退到当前用户 ID；不会越权，但下级组数据会在该异常窗口被静默遗漏。

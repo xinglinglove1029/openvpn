@@ -519,7 +519,13 @@ func GetAccessibleUserIDs(currentUsername string) ([]uint, bool) {
 	}
 
 	currentUser := User{Username: currentUsername}.Info()
-	if currentUser.ID == 0 || currentUser.Gid == 0 {
+	// A missing user must never widen a scoped query to user_id = 0. DNS audit
+	// entries are normally created only for resolved users, but treating a
+	// deleted or failed-to-load operator as an empty scope is fail-closed.
+	if currentUser.ID == 0 {
+		return []uint{}, false
+	}
+	if currentUser.Gid == 0 {
 		return []uint{currentUser.ID}, false
 	}
 

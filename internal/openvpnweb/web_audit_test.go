@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/csv"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -243,6 +245,143 @@ func TestWebsiteAuditAIScopesRecordsToOperator(t *testing.T) {
 	}
 }
 
+func TestWebsiteAuditUnknownOperatorUsesEmptyScope(t *testing.T) {
+	originalDB, originalAdminUsername := db, adminUsername
+	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db = database
+	adminUsername = "administrator"
+	defer func() {
+		db = originalDB
+		adminUsername = originalAdminUsername
+		sqlDB, _ := database.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	if err := database.AutoMigrate(&WebsiteAccessLog{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if err := database.Create(&WebsiteAccessLog{Domain: "unowned.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	accessible, skip := GetAccessibleUserIDs("deleted-operator")
+	if skip || len(accessible) != 0 {
+		t.Fatalf("unknown operator must have an empty, non-admin scope: ids=%v skip=%v", accessible, skip)
+	}
+	summary, err := buildWebsiteAuditSummary(context.Background(), WebsiteAuditFilter{Start: now - 60, End: now + 1}, accessible, skip, 10)
+	if err != nil {
+		t.Fatalf("buildWebsiteAuditSummary returned an error: %v", err)
+	}
+	if summary.TotalQueries != 0 || summary.ActiveUsers != 0 || summary.UniqueDomains != 0 {
+		t.Fatalf("empty scope exposed an unowned DNS audit record: %#v", summary)
+	}
+}
+func TestWebsiteAuditAIUsesGroupSubtreeScope(t *testing.T) {
+	originalDB, originalAdminUsername := db, adminUsername
+	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db = database
+	adminUsername = "administrator"
+	defer func() {
+		db = originalDB
+		adminUsername = originalAdminUsername
+		sqlDB, _ := database.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	if err := database.AutoMigrate(&User{}, &Group{}, &Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &WebsiteAccessLog{}); err != nil {
+		t.Fatal(err)
+	}
+	root := Group{Name: "Default"}
+	if err := database.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	managedGroup := Group{Name: "managed-group", ParentID: &root.ID}
+	childGroup := Group{Name: "managed-child", ParentID: &managedGroup.ID}
+	unrelatedGroup := Group{Name: "unrelated-group", ParentID: &root.ID}
+	for _, group := range []*Group{&managedGroup, &childGroup, &unrelatedGroup} {
+		if err := database.Create(group).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	enabled := true
+	role := Role{Name: "Website audit viewer", Code: "website_audit_viewer", IsEnable: &enabled}
+	permission := Permission{Name: "View website audit", Code: "web-audit:view", Type: "button"}
+	if err := database.Create(&role).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&permission).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	operator := User{Username: "group-operator", Gid: managedGroup.ID}
+	member := User{Username: "group-member", Gid: childGroup.ID}
+	unrelated := User{Username: "unrelated-user", Gid: unrelatedGroup.ID}
+	for _, user := range []*User{&operator, &member, &unrelated} {
+		if err := database.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Create(&UserRole{UserID: operator.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	logs := []WebsiteAccessLog{
+		{UserID: operator.ID, Username: operator.Username, Domain: "operator-group.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - 10},
+		{UserID: member.ID, Username: member.Username, Domain: "child-group.example", QueryType: "AAAA", ResponseCode: "RCodeSuccess", QueriedAt: now - 5},
+		{UserID: unrelated.ID, Username: unrelated.Username, Domain: "unrelated-group.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - 1},
+	}
+	if err := database.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	toolCtx := &websiteAuditToolContext{Context: context.Background(), userID: operator.Username}
+	result, err := callWebsiteAuditTool(toolCtx, NewAIToolService(nil), map[string]any{"range": "24h", "limit": 20})
+	if err != nil {
+		t.Fatalf("registered get_website_access_stats tool returned an error for a grouped operator: %v", err)
+	}
+	if result.TotalQueries != 2 || result.ActiveUsers != 2 || result.UniqueDomains != 2 {
+		t.Fatalf("unexpected group-scoped statistics: %#v", result)
+	}
+	users := make(map[string]int64, len(result.TopUsers))
+	for _, item := range result.TopUsers {
+		users[item.Username] = item.Queries
+	}
+	if len(users) != 2 || users[operator.Username] != 1 || users[member.Username] != 1 || users[unrelated.Username] != 0 {
+		t.Fatalf("unexpected group-scoped top users: %#v", result.TopUsers)
+	}
+	for _, record := range result.RecentRecords {
+		if record.Username == unrelated.Username || record.Domain == "unrelated-group.example" {
+			t.Fatalf("AI result leaked a sibling group's record: %#v", record)
+		}
+	}
+
+	filtered, err := callWebsiteAuditTool(toolCtx, NewAIToolService(nil), map[string]any{
+		"range": "24h", "username": unrelated.Username, "domain": "unrelated-group.example", "limit": 20,
+	})
+	if err != nil {
+		t.Fatalf("registered get_website_access_stats tool with a sibling-group filter returned an error: %v", err)
+	}
+	if filtered.TotalQueries != 0 || filtered.ActiveUsers != 0 || filtered.UniqueDomains != 0 || len(filtered.TopUsers) != 0 || len(filtered.TopDomains) != 0 || len(filtered.RecentRecords) != 0 {
+		t.Fatalf("sibling-group filter exposed website audit data: %#v", filtered)
+	}
+}
+
 func TestWebsiteAuditAIRejectsOperatorWithoutPermission(t *testing.T) {
 	originalDB, originalAdminUsername := db, adminUsername
 	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
@@ -272,9 +411,48 @@ func TestWebsiteAuditAIRejectsOperatorWithoutPermission(t *testing.T) {
 	}
 }
 
-// websiteAuditToolContext is intentionally minimal: the denied code path must
-// stop before it needs agent state, memory, artifacts, or confirmation data.
-type websiteAuditToolContext struct{ context.Context }
+// websiteAuditToolContext is intentionally minimal: these tests only need a
+// session identity and no agent state, memory, artifacts, or confirmation data.
+type websiteAuditToolContext struct {
+	context.Context
+	userID string
+}
+
+// runnableWebsiteAuditTool exposes the execution method implemented by ADK
+// function tools without depending on its internal concrete generic type.
+type runnableWebsiteAuditTool interface {
+	Run(agent.ToolContext, any) (map[string]any, error)
+}
+
+func callWebsiteAuditTool(ctx agent.ToolContext, svc ai.ToolService, args map[string]any) (ai.WebsiteAccessStatsResult, error) {
+	tools, err := ai.BuildBusinessTools(svc)
+	if err != nil {
+		return ai.WebsiteAccessStatsResult{}, err
+	}
+	for _, candidate := range tools {
+		if candidate.Name() != "get_website_access_stats" {
+			continue
+		}
+		runnable, ok := candidate.(runnableWebsiteAuditTool)
+		if !ok {
+			return ai.WebsiteAccessStatsResult{}, fmt.Errorf("get_website_access_stats is not runnable")
+		}
+		payload, err := runnable.Run(ctx, args)
+		if err != nil {
+			return ai.WebsiteAccessStatsResult{}, err
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return ai.WebsiteAccessStatsResult{}, err
+		}
+		var result ai.WebsiteAccessStatsResult
+		if err := json.Unmarshal(encoded, &result); err != nil {
+			return ai.WebsiteAccessStatsResult{}, err
+		}
+		return result, nil
+	}
+	return ai.WebsiteAccessStatsResult{}, fmt.Errorf("get_website_access_stats was not registered")
+}
 
 func (c *websiteAuditToolContext) UserContent() *genai.Content { return nil }
 func (c *websiteAuditToolContext) FunctionCallID() string      { return "test" }
@@ -294,7 +472,7 @@ func (c *websiteAuditToolContext) InvocationID() string                         
 func (c *websiteAuditToolContext) AppName() string                                      { return "test" }
 func (c *websiteAuditToolContext) Branch() string                                       { return "test" }
 func (c *websiteAuditToolContext) SessionID() string                                    { return "test" }
-func (c *websiteAuditToolContext) UserID() string                                       { return "test" }
+func (c *websiteAuditToolContext) UserID() string                                       { return c.userID }
 
 func TestWebsiteAuditLikeEscapesWildcardsAndUnownedRowsDoNotCountAsUsers(t *testing.T) {
 	originalDB := db
