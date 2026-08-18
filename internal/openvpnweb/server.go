@@ -648,8 +648,9 @@ func syncAdminFromConfig(db *gorm.DB, admin *User) {
 }
 
 const (
-	internalFirewallHookContextKey = "internalFirewallHook"
-	internalFirewallHookAuditActor = "openvpn-hook"
+	internalFirewallHookContextKey      = "internalFirewallHook"
+	internalFirewallHookAuditActor      = "openvpn-hook"
+	internalWebAuditClientMapContextKey = "internalWebAuditClientMapHook"
 )
 
 // hasMatchingLocalServiceToken verifies the configured internal service token without
@@ -682,6 +683,13 @@ func hasInternalFirewallHookIdentity(c *gin.Context) bool {
 	return ok && internal == true
 }
 
+// isWebAuditClientMapHookRequest only permits the local OpenVPN lifecycle script
+// to update the transient VPN-IP-to-user mapping used by DNS audit attribution.
+func isWebAuditClientMapHookRequest(c *gin.Context) bool {
+	return IsLocalRequest(c) && hasMatchingLocalServiceToken(c) &&
+		c.Request.Method == http.MethodPost && c.Request.URL.Path == "/ovpn/web-audit/client-map"
+}
+
 func AuthMiddleWare() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
@@ -689,6 +697,11 @@ func AuthMiddleWare() gin.HandlerFunc {
 
 		if isOpenVPNFirewallHookRequest(c) {
 			c.Set(internalFirewallHookContextKey, true)
+			c.Next()
+			return
+		}
+		if isWebAuditClientMapHookRequest(c) {
+			c.Set(internalWebAuditClientMapContextKey, true)
 			c.Next()
 			return
 		}
@@ -791,6 +804,9 @@ func Run(info BuildInfo) {
 		if err := (ClientTrafficSample{}).Clear(); err != nil {
 			logger.Error(context.Background(), err.Error())
 		}
+		if err := (WebsiteAccessLog{}).Clear(); err != nil {
+			logger.Error(context.Background(), err.Error())
+		}
 	})
 	c.AddFunc("@daily", func() {
 		checkAndSendExpireReminders()
@@ -801,7 +817,7 @@ func Run(info BuildInfo) {
 
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
-	db.AutoMigrate(&User{}, &History{}, &ClientTrafficSample{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
+	db.AutoMigrate(&User{}, &History{}, &ClientTrafficSample{}, &WebsiteAccessLog{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
 	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &GroupRole{})
 	if err := MigrateAISettings(db); err != nil {
 		panic(fmt.Errorf("initialize AI provider settings: %w", err))
@@ -893,6 +909,10 @@ func Run(info BuildInfo) {
 	// 启动概览数据采集器：周期采集 dashboard summary / 在线客户端 / 服务状态，通过 WebSocket 推送到首页
 	// 概览页所有卡片均通过 dashboard:stats topic 实时更新，无需前端定时器或手动刷新
 	StartDashboardStatsCollector(&ov, 5*time.Second)
+
+	// DNS 审计先启动本地 UDP/TCP 转发监听，再由服务自身安全安装 tun0:53 重定向。
+	// 监听或规则安装失败只会降级审计，绝不会阻断 OpenVPN。
+	startWebAuditDNS(context.Background(), &ov)
 
 	// 初始化 AI 助手模块（可选，通过 ai.enabled 控制）
 	// 注意：chatMgr 始终初始化，确保 AI 路由可注册，即使 LLM 客户端暂未就绪
@@ -1447,6 +1467,7 @@ func Run(info BuildInfo) {
 			}
 
 			savedCount := 0 // 记录实际保存的字段数
+			webAuditConfigChanged := false
 			for k, vs := range c.Request.PostForm {
 				// 权限过滤：跳过用户无保存权限的Tab字段
 				if strings.HasPrefix(k, "system.base.") && !canSaveBase {
@@ -1464,6 +1485,9 @@ func Run(info BuildInfo) {
 				}
 
 				savedCount++
+				if k == "system.base.web_audit_enabled" {
+					webAuditConfigChanged = true
+				}
 				val := vs[0]
 
 				switch k {
@@ -1546,6 +1570,12 @@ func Run(info BuildInfo) {
 			if err := viper.WriteConfig(); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
+			}
+
+			// The audit switch is hot-reloaded after persistence succeeds. Disabling closes
+			// both listeners and removes IPv4/IPv6 rules; enabling starts listeners first.
+			if webAuditConfigChanged {
+				syncWebAuditDNS(context.Background(), &ov)
 			}
 
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
@@ -3015,6 +3045,14 @@ func Run(info BuildInfo) {
 
 			c.JSON(http.StatusOK, gin.H{"message": "删除客户端成功"})
 		})
+
+		// 网站访问 DNS 审计：仅普通 DNS 域名元数据，按数据范围授权。
+		ovpn.GET("/web-audit/status", RequirePermission("web-audit:view"), ov.websiteAuditStatus)
+		ovpn.GET("/web-audit/summary", RequirePermission("web-audit:view"), ov.websiteAuditSummary)
+		ovpn.GET("/web-audit/records", RequirePermission("web-audit:view"), ov.websiteAuditRecords)
+		ovpn.GET("/web-audit/export", RequirePermission("web-audit:view"), ov.websiteAuditExport)
+		// OpenVPN local hooks keep DNS audit attribution accurate during VPN IP reuse.
+		ovpn.POST("/web-audit/client-map", ov.websiteAuditClientMap)
 
 		// AI 助手路由（需要 ai:chat 权限）
 		// 始终注册路由，由 handler 内部判断 LLM 客户端是否就绪

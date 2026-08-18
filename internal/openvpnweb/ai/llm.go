@@ -647,16 +647,17 @@ func parseNonStreamOpenAIResponse(body io.Reader, allowTextToolFallback bool, al
 // safely recovered from a lossy textual tool-call response. Mutating tools must
 // use native tool_calls so ordinary JSON output can never cause side effects.
 var ollamaTextToolCallNames = map[string]struct{}{
-	"get_dashboard":        {},
-	"get_server_resources": {},
-	"get_system_counts":    {},
-	"list_certs":           {},
-	"list_channels":        {},
-	"list_clients":         {},
-	"list_firewall_rules":  {},
-	"list_online_clients":  {},
-	"list_users":           {},
-	"query_audit_logs":     {},
+	"get_dashboard":            {},
+	"get_server_resources":     {},
+	"get_system_counts":        {},
+	"list_certs":               {},
+	"list_channels":            {},
+	"list_clients":             {},
+	"list_firewall_rules":      {},
+	"list_online_clients":      {},
+	"list_users":               {},
+	"query_audit_logs":         {},
+	"get_website_access_stats": {},
 }
 
 func extractOllamaTextToolNames(tools []openAITool) map[string]struct{} {

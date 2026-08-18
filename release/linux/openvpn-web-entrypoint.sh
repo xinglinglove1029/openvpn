@@ -103,6 +103,12 @@ init_config() {
 	OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "true"' $SYSTEM_CONFIG)
 	OVPN_SUBNET=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' $SYSTEM_CONFIG)
 	OVPN_SUBNET6=$(jq -r '.openvpn.ovpn_subnet6 // "fdaf:f178:e916:6dd0::/64"' $SYSTEM_CONFIG)
+	OVPN_DNS1=$(jq -r '.openvpn.ovpn_push_dns1 // "8.8.8.8"' $SYSTEM_CONFIG)
+	OVPN_DNS2=$(jq -r '.openvpn.ovpn_push_dns2 // "2001:4860:4860::8888"' $SYSTEM_CONFIG)
+	# Avoid malformed settings injecting additional server.conf directives. DNS
+	# audit only supports literal IP upstreams, so retain safe defaults otherwise.
+	[[ "$OVPN_DNS1" =~ ^[0-9A-Fa-f:.]+$ ]] || OVPN_DNS1="8.8.8.8"
+	[[ "$OVPN_DNS2" =~ ^[0-9A-Fa-f:.]+$ ]] || OVPN_DNS2="2001:4860:4860::8888"
 	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' $SYSTEM_CONFIG)
 
 	cat <<EOF >$OVPN_DATA/server.conf
@@ -114,7 +120,7 @@ persist-tun
 keepalive 10 60
 topology subnet
 $([[ "$OVPN_IPV6" == "true" ]] && echo -e "server $(getsubnet $OVPN_SUBNET)\nserver-ipv6 $OVPN_SUBNET6" || echo "server $(getsubnet $OVPN_SUBNET)")
-$([[ "$OVPN_GATEWAY" == "true" ]] && echo -e 'push "dhcp-option DNS 8.8.8.8"\npush "dhcp-option DNS 2001:4860:4860::8888"\npush "redirect-gateway def1 ipv6 bypass-dhcp"' || echo -e '#push "dhcp-option DNS 8.8.8.8"\n#push "dhcp-option DNS 2001:4860:4860::8888"\n#push "redirect-gateway def1 ipv6 bypass-dhcp"')
+$([[ "$OVPN_GATEWAY" == "true" ]] && printf 'push "dhcp-option DNS %s"\npush "dhcp-option DNS %s"\npush "redirect-gateway def1 ipv6 bypass-dhcp"' "$OVPN_DNS1" "$OVPN_DNS2" || printf '#push "dhcp-option DNS %s"\n#push "dhcp-option DNS %s"\n#push "redirect-gateway def1 ipv6 bypass-dhcp"' "$OVPN_DNS1" "$OVPN_DNS2")
 dh none
 tls-groups prime256v1
 tls-crypt $EASYRSA_PKI/tc.key
@@ -145,7 +151,20 @@ setenv auth_api http://127.0.0.1:$WEB_PORT/login
 setenv ovpn_auth_api http://127.0.0.1:$WEB_PORT/ovpn/login
 setenv ovpn_history_api http://127.0.0.1:$WEB_PORT/ovpn/history
 setenv ovpn_notify_api http://127.0.0.1:$WEB_PORT/ovpn/notify
+setenv ovpn_web_audit_client_map_api http://127.0.0.1:$WEB_PORT/ovpn/web-audit/client-map
 EOF
+}
+
+
+# DNS audit REDIRECT rules are owned by the Go web process. It binds the proxy
+# before installing destination-specific rules and removes them on any listener or
+# upstream failure. Keep lifecycle hooks free of duplicate broad port-53 rules.
+cleanup_legacy_dns_audit_redirect() {
+	local ipt="$1" proto
+	for proto in udp tcp; do
+		"$ipt" -t nat -C PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 >/dev/null 2>&1 && \
+			"$ipt" -t nat -D PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 || true
+	done
 }
 
 run_server() {
@@ -172,6 +191,10 @@ run_server() {
 			${ipt/iptables/ip6tables} -t nat -A POSTROUTING -s $ovpn_subnet6 -j MASQUERADE
 		}
 	fi
+
+	# Remove broad redirect rules left by versions before the Go audit proxy owned
+	# the lifecycle. The current proxy adds only configured DNS destinations.
+	cleanup_legacy_dns_audit_redirect "$ipt"
 
 	$OPENVPN_BIN $OVPN_DATA/server.conf
 }
@@ -417,7 +440,28 @@ delete_firewall() {
 	set -e
 }
 
+sync_web_audit_client_map() {
+	# DNS ownership is updated from OpenVPN lifecycle events so a recycled VPN IP
+	# is never attributed to its former user while the management cache refreshes.
+	set +e
+	local action="$1"
+	WEB_PORT=$(jq -r '.system.base.web_port // "8888"' "$ovpn_data/config.json")
+	TOKEN=$(jq -r '.system.base.token // ""' "$ovpn_data/config.json")
+	api="${ovpn_web_audit_client_map_api:-http://127.0.0.1:$WEB_PORT/ovpn/web-audit/client-map}"
+	status=$(curl -w "%{http_code}" --connect-timeout 2 --max-time 3 -s -X POST -o /dev/null \
+		--data-urlencode "action=$action" --data-urlencode "vip=$ifconfig_pool_remote_ip" \
+		--data-urlencode "vip6=$ifconfig_pool_remote_ip6" --data-urlencode "common_name=$common_name" \
+		--data-urlencode "connection_id=$connection_id" --data-urlencode "username=$username" \
+		--data-urlencode "event_time_ns=$(date +%s%N)" \
+		"$api" -H "O-Token: $TOKEN")
+	if [[ $? -ne 0 || ( $status -ne 200 && $status -ne 204 ) ]]; then
+		echo "[DNS-AUDIT] $0:$LINENO 更新客户端 DNS 审计归属失败" >&2
+	fi
+	set -e
+}
+
 client_disconnect() {
+	sync_web_audit_client_map delete
 	delete_firewall
 	add_history
 }
@@ -425,6 +469,7 @@ client_disconnect() {
 client_connect() {
 	set_ovip "$1"
 	set_ovconfig "$1"
+	sync_web_audit_client_map upsert
 	send_notify connect
 }
 
@@ -489,7 +534,15 @@ client-disconnect)
 	exit 0
 	;;
 learn-address)
-	[ "$1" == "add" ] && set_firewall "$@"
+	case "$1" in
+	add|update)
+		set_firewall "$@"
+		sync_web_audit_client_map upsert
+		;;
+	delete)
+		sync_web_audit_client_map delete
+		;;
+	esac
 	exit 0
 	;;
 esac

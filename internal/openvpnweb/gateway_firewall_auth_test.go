@@ -88,13 +88,14 @@ func TestDockerEntrypointDefaultsMissingGatewayToEnabled(t *testing.T) {
 	if !strings.Contains(entrypoint, `OVPN_GATEWAY=$(jq -r '.openvpn.ovpn_gateway // "true"' $SYSTEM_CONFIG)`) {
 		t.Fatal("entrypoint does not default a missing ovpn_gateway field to true")
 	}
-	for _, push := range []string{
-		`push "dhcp-option DNS 8.8.8.8"`,
-		`push "dhcp-option DNS 2001:4860:4860::8888"`,
+	for _, required := range []string{
+		`OVPN_DNS1=$(jq -r '.openvpn.ovpn_push_dns1 // "8.8.8.8"' $SYSTEM_CONFIG)`,
+		`OVPN_DNS2=$(jq -r '.openvpn.ovpn_push_dns2 // "2001:4860:4860::8888"' $SYSTEM_CONFIG)`,
+		`push "dhcp-option DNS %s"`,
 		`push "redirect-gateway def1 ipv6 bypass-dhcp"`,
 	} {
-		if !strings.Contains(entrypoint, push) {
-			t.Fatalf("entrypoint is missing gateway push %q", push)
+		if !strings.Contains(entrypoint, required) {
+			t.Fatalf("entrypoint is missing configurable gateway DNS support %q", required)
 		}
 	}
 }

@@ -25,6 +25,7 @@ type SysBeseConfig struct {
 	HistoryMaxDays       int    `json:"history_max_days" mapstructure:"history_max_days"`
 	RenewDays            int    `json:"renew_days" mapstructure:"renew_days"`
 	ValidateClientConfig bool   `json:"validate_client_config" mapstructure:"validate_client_config"`
+	WebAuditEnabled      bool   `json:"web_audit_enabled" mapstructure:"web_audit_enabled"`
 }
 
 type SysLdapConfig struct {
@@ -224,6 +225,9 @@ func initConfig() {
 	viper.SetDefault("system.base.max_duplicate_login", 0)
 	viper.SetDefault("system.base.validate_client_config", false)
 	viper.SetDefault("system.base.history_max_days", 90)
+	// DNS domain auditing is privacy-sensitive. Existing and fresh deployments
+	// stay opt-in until an administrator explicitly enables it in Settings.
+	viper.SetDefault("system.base.web_audit_enabled", false)
 	viper.SetDefault("system.base.renew_days", 365)
 	viper.SetDefault("system.base.nft_table_name", "openvpn-nft")
 	viper.SetDefault("system.ldap.ldap_auth", false)
@@ -307,6 +311,9 @@ func initConfig() {
 
 		loadConfig()
 		upadteOvpnConfig()
+		// Apply external config-file edits too. The reconciler is a no-op when
+		// the DNS audit switch and upstream DNS values are unchanged.
+		reconcileWebAuditDNSConfig()
 	})
 
 	viper.WatchConfig()
@@ -321,10 +328,8 @@ func upadteOvpnConfig() {
 		}
 
 		for k, v := range viper.GetStringMap("openvpn") {
-			if k == "ovpn_push_dns1" || k == "ovpn_push_dns2" {
-				continue
-			}
-
+			// Keep OpenVPN's pushed resolver addresses and the DNS audit redirect
+			// targets in lockstep. VPNConfig.Update replaces the existing push lines.
 			cfg.Update("openvpn."+k, fmt.Sprintf("%v", v))
 		}
 

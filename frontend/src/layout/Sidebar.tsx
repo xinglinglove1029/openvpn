@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   KeyRound,
   User,
+  Globe2,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -36,6 +37,7 @@ const iconMap: Record<string, LucideIcon> = {
   ShieldCheck,
   KeyRound,
   User,
+  Globe2,
 };
 
 // settings 菜单特殊处理：需要检查至少有一个 Tab 权限

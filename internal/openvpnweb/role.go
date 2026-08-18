@@ -105,6 +105,7 @@ var menuPermissions = []permissionSeedItem{
 	{"", "menu:history", "连接历史", "menu", "/history", "History", 7},
 	{"", "menu:certs", "证书", "menu", "/certs", "FileKey", 8},
 	{"", "menu:audit", "操作审计", "menu", "/audit", "FileText", 9},
+	{"", "menu:web-audit", "网站访问审计", "menu", "/web-audit", "Globe2", 10},
 	{"", "menu:channels", "通知渠道", "menu", "/channels", "BellRing", 10},
 	{"", "menu:notifications", "站内信", "menu", "/notifications", "Bell", 11},
 	{"", "menu:settings", "系统设置", "menu", "/settings", "Settings", 12},
@@ -153,6 +154,8 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:certs", "cert:delete", "删除证书", "button", "", "", 3},
 	// 审计（1）
 	{"menu:audit", "audit:view", "查看审计", "button", "", "", 1},
+	// 网站访问 DNS 审计涉及用户隐私，不赋予普通用户默认角色。
+	{"menu:web-audit", "web-audit:view", "查看网站访问审计", "button", "", "", 1},
 	// 系统设置（7）
 	{"menu:settings", "settings:view", "查看设置", "button", "", "", 1},
 	{"menu:settings", "settings:base", "基础控制Tab", "button", "", "", 2},
@@ -338,6 +341,17 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 			for _, pid := range codeToID {
 				if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: adminRole.ID, PermissionID: pid}).Error; err != nil {
 					return err
+				}
+			}
+		}
+		// Preserve custom role choices on upgrades, while making the built-in system
+		// administrator able to access this newly introduced operational screen.
+		if adminCount > 0 {
+			for _, code := range []string{"menu:web-audit", "web-audit:view"} {
+				if pid, ok := codeToID[code]; ok {
+					if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: adminRole.ID, PermissionID: pid}).Error; err != nil {
+						return err
+					}
 				}
 			}
 		}

@@ -12,6 +12,7 @@ export interface SettingsResponse {
       history_max_days: number;
       renew_days: number;
       validate_client_config: boolean;
+      web_audit_enabled: boolean;
     };
     ldap: {
       ldap_auth: boolean;
@@ -557,4 +558,63 @@ declare global {
   interface Window {
     __OPENVPN_ADMIN__?: AdminRuntime;
   }
+}
+
+
+export interface WebsiteAuditStatus {
+  enabled: boolean;
+  listenerReady: boolean;
+  redirectInstalled: boolean;
+  ipv4ListenerReady: boolean;
+  ipv6ListenerReady: boolean;
+  ipv4RedirectInstalled: boolean;
+  ipv6RedirectInstalled: boolean;
+  listenAddress: string;
+  upstreamDns: string[];
+  droppedAuditEvents: number;
+  lastError?: string;
+  coverageNote: string;
+}
+
+export interface WebsiteAuditTopItem {
+  username?: string;
+  commonName?: string;
+  domain?: string;
+  queries: number;
+}
+
+export interface WebsiteAuditTrendItem {
+  time: number;
+  queries: number;
+}
+
+export interface WebsiteAuditSummary {
+  start: number;
+  end: number;
+  totalQueries: number;
+  activeUsers: number;
+  uniqueDomains: number;
+  topUsers: WebsiteAuditTopItem[];
+  topDomains: WebsiteAuditTopItem[];
+  trend: WebsiteAuditTrendItem[];
+}
+
+export interface WebsiteAccessRecord {
+  id: number;
+  userId: number;
+  username: string;
+  commonName: string;
+  connectionId: string;
+  vpnIp: string;
+  domain: string;
+  queryType: string;
+  responseCode: string;
+  queriedAt: number;
+}
+
+export interface WebsiteAuditRecordsResponse {
+  start: number;
+  end: number;
+  total: number;
+  data: WebsiteAccessRecord[];
 }

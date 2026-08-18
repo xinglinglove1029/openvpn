@@ -1,0 +1,357 @@
+package openvpnweb
+
+import (
+	"context"
+	"encoding/csv"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+// WebsiteAccessLog is a privacy-preserving DNS audit event. It deliberately
+// stores only a queried DNS name and metadata: never URL paths, payloads,
+// cookies, credentials, or DNS response bodies.
+type WebsiteAccessLog struct {
+	ID           uint      `gorm:"primarykey" json:"id"`
+	UserID       uint      `gorm:"index;default:0" json:"userId"`
+	Username     string    `gorm:"index" json:"username"`
+	CommonName   string    `gorm:"index" json:"commonName"`
+	ConnectionID string    `gorm:"index" json:"connectionId"`
+	VPNIP        string    `gorm:"index" json:"vpnIp"`
+	Domain       string    `gorm:"index" json:"domain"`
+	QueryType    string    `json:"queryType"`
+	ResponseCode string    `json:"responseCode"`
+	QueriedAt    int64     `gorm:"index" json:"queriedAt"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+func (WebsiteAccessLog) TableName() string { return "website_access_logs" }
+
+func (WebsiteAccessLog) Clear() error {
+	days := configHistoryMaxDays()
+	// Existing historical data defaults to 90 days. A value of 0 explicitly
+	// disables automatic cleanup rather than unexpectedly deleting all audit data.
+	if days <= 0 {
+		return nil
+	}
+	return db.Where("queried_at < ?", time.Now().AddDate(0, 0, -days).Unix()).Delete(&WebsiteAccessLog{}).Error
+}
+
+type WebsiteAuditFilter struct {
+	Start    int64
+	End      int64
+	Username string
+	Domain   string
+}
+
+type WebsiteAuditTopItem struct {
+	Username   string `json:"username,omitempty"`
+	CommonName string `json:"commonName,omitempty"`
+	Domain     string `json:"domain,omitempty"`
+	Queries    int64  `json:"queries"`
+}
+
+type WebsiteAuditTrendItem struct {
+	Time    int64 `json:"time"`
+	Queries int64 `json:"queries"`
+}
+
+type WebsiteAuditSummary struct {
+	Start         int64                   `json:"start"`
+	End           int64                   `json:"end"`
+	TotalQueries  int64                   `json:"totalQueries"`
+	ActiveUsers   int64                   `json:"activeUsers"`
+	UniqueDomains int64                   `json:"uniqueDomains"`
+	TopUsers      []WebsiteAuditTopItem   `json:"topUsers"`
+	TopDomains    []WebsiteAuditTopItem   `json:"topDomains"`
+	Trend         []WebsiteAuditTrendItem `json:"trend"`
+}
+
+type WebsiteAuditRecordsResponse struct {
+	Start int64              `json:"start"`
+	End   int64              `json:"end"`
+	Total int64              `json:"total"`
+	Data  []WebsiteAccessLog `json:"data"`
+}
+
+func normalizeWebsiteAuditRange(start, end int64) (int64, int64) {
+	now := time.Now().Unix()
+	if end <= 0 || end > now+300 {
+		end = now
+	}
+	if start <= 0 || start >= end {
+		start = end - int64((24 * time.Hour).Seconds())
+	}
+	maxStart := end - int64((90 * 24 * time.Hour).Seconds())
+	if start < maxStart {
+		start = maxStart
+	}
+	return start, end
+}
+
+func normalizeWebsiteAuditFilter(filter WebsiteAuditFilter) WebsiteAuditFilter {
+	filter.Start, filter.End = normalizeWebsiteAuditRange(filter.Start, filter.End)
+	filter.Username = strings.TrimSpace(filter.Username)
+	filter.Domain = normalizeDNSName(filter.Domain)
+	return filter
+}
+
+// escapeWebsiteAuditLike turns user input into a literal substring match. Without
+// this, a search for % or _ would unexpectedly match unrelated DNS records.
+func escapeWebsiteAuditLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
+}
+
+func websiteAuditQuery(ctx context.Context, filter WebsiteAuditFilter, accessibleUserIDs []uint, skipFilter bool) *gorm.DB {
+	filter = normalizeWebsiteAuditFilter(filter)
+	q := db.WithContext(ctx).Model(&WebsiteAccessLog{}).Where("queried_at >= ? AND queried_at <= ?", filter.Start, filter.End)
+	if !skipFilter {
+		q = q.Where("user_id IN ?", accessibleUserIDs)
+	}
+	if filter.Username != "" {
+		q = q.Where("LOWER(username) LIKE ? ESCAPE '\\'", "%"+escapeWebsiteAuditLike(strings.ToLower(filter.Username))+"%")
+	}
+	if filter.Domain != "" {
+		q = q.Where("LOWER(domain) LIKE ? ESCAPE '\\'", "%"+escapeWebsiteAuditLike(strings.ToLower(filter.Domain))+"%")
+	}
+	return q
+}
+
+func buildWebsiteAuditSummary(ctx context.Context, filter WebsiteAuditFilter, accessibleUserIDs []uint, skipFilter bool, topLimit int) (WebsiteAuditSummary, error) {
+	filter = normalizeWebsiteAuditFilter(filter)
+	if topLimit <= 0 || topLimit > 100 {
+		topLimit = 10
+	}
+	result := WebsiteAuditSummary{Start: filter.Start, End: filter.End, TopUsers: make([]WebsiteAuditTopItem, 0), TopDomains: make([]WebsiteAuditTopItem, 0), Trend: make([]WebsiteAuditTrendItem, 0)}
+	query := func() *gorm.DB { return websiteAuditQuery(ctx, filter, accessibleUserIDs, skipFilter) }
+	if err := query().Count(&result.TotalQueries).Error; err != nil {
+		return result, err
+	}
+	if err := query().Where("user_id > 0").Distinct("user_id").Count(&result.ActiveUsers).Error; err != nil {
+		return result, err
+	}
+	if err := query().Distinct("domain").Count(&result.UniqueDomains).Error; err != nil {
+		return result, err
+	}
+	// Historical unowned records are diagnostic-only and must never affect any
+	// per-user metric. New records are only written after cache ownership lookup.
+	if err := query().Where("user_id > 0").Select("username, common_name, COUNT(*) AS queries").Group("username, common_name").Order("queries DESC, username ASC").Limit(topLimit).Scan(&result.TopUsers).Error; err != nil {
+		return result, err
+	}
+	if err := query().Select("domain, COUNT(*) AS queries").Group("domain").Order("queries DESC, domain ASC").Limit(topLimit).Scan(&result.TopDomains).Error; err != nil {
+		return result, err
+	}
+
+	bucket := int64(time.Hour.Seconds())
+	if filter.End-filter.Start > int64((48 * time.Hour).Seconds()) {
+		bucket = int64((24 * time.Hour).Seconds())
+	}
+	expr := websiteAuditBucketExpression(bucket)
+	type trendRow struct {
+		Time    int64
+		Queries int64
+	}
+	var rows []trendRow
+	if err := query().Select(fmt.Sprintf("%s AS time, COUNT(*) AS queries", expr)).Group(expr).Order("time ASC").Scan(&rows).Error; err != nil {
+		return result, err
+	}
+	buckets := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		buckets[row.Time] = row.Queries
+	}
+	for t := (filter.Start / bucket) * bucket; t <= filter.End; t += bucket {
+		result.Trend = append(result.Trend, WebsiteAuditTrendItem{Time: t, Queries: buckets[t]})
+	}
+	return result, nil
+}
+
+func websiteAuditBucketExpression(bucket int64) string {
+	// bucket is internal and not user-controlled. Keep the expression portable
+	// while aggregating in SQL instead of loading every timestamp into memory.
+	switch db.Dialector.Name() {
+	case "postgres":
+		return fmt.Sprintf("(FLOOR(queried_at::numeric / %d)::bigint * %d)", bucket, bucket)
+	case "mysql":
+		return fmt.Sprintf("(FLOOR(queried_at / %d) * %d)", bucket, bucket)
+	default: // sqlite and compatible engines use integer division for integer columns.
+		return fmt.Sprintf("((queried_at / %d) * %d)", bucket, bucket)
+	}
+}
+
+func queryWebsiteAuditRecords(ctx context.Context, filter WebsiteAuditFilter, accessibleUserIDs []uint, skipFilter bool, offset, limit int) (WebsiteAuditRecordsResponse, error) {
+	filter = normalizeWebsiteAuditFilter(filter)
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	result := WebsiteAuditRecordsResponse{Start: filter.Start, End: filter.End, Data: make([]WebsiteAccessLog, 0)}
+	query := func() *gorm.DB { return websiteAuditQuery(ctx, filter, accessibleUserIDs, skipFilter) }
+	if err := query().Count(&result.Total).Error; err != nil {
+		return result, err
+	}
+	err := query().Order("queried_at DESC, id DESC").Offset(offset).Limit(limit).Find(&result.Data).Error
+	return result, err
+}
+
+func webAuditAccessScope(c *gin.Context) ([]uint, bool) {
+	isAdmin, _ := c.Get("isAdmin")
+	if isAdmin == true {
+		return nil, true
+	}
+	username, _ := c.Get("user")
+	current, _ := username.(string)
+	if current == "" {
+		return []uint{}, false
+	}
+	return GetAccessibleUserIDs(current)
+}
+
+func parseWebsiteAuditFilter(c *gin.Context) WebsiteAuditFilter {
+	start, _ := strconv.ParseInt(c.Query("start"), 10, 64)
+	end, _ := strconv.ParseInt(c.Query("end"), 10, 64)
+	return normalizeWebsiteAuditFilter(WebsiteAuditFilter{Start: start, End: end, Username: c.Query("username"), Domain: c.Query("domain")})
+}
+
+func (ov *ovpn) websiteAuditSummary(c *gin.Context) {
+	filter := parseWebsiteAuditFilter(c)
+	ids, skip := webAuditAccessScope(c)
+	result, err := buildWebsiteAuditSummary(c.Request.Context(), filter, ids, skip, 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询网站访问统计失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+func (ov *ovpn) websiteAuditRecords(c *gin.Context) {
+	filter := parseWebsiteAuditFilter(c)
+	ids, skip := webAuditAccessScope(c)
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	result, err := queryWebsiteAuditRecords(c.Request.Context(), filter, ids, skip, offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询网站访问明细失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+func csvSafeWebsiteAuditField(value string) string {
+	if value == "" {
+		return value
+	}
+	// Excel and similar spreadsheet programs evaluate formula-looking CSV fields.
+	// Prefix a literal apostrophe before writing any potentially executable cell.
+	switch value[0] {
+	case '=', '+', '-', '@':
+		return "'" + value
+	default:
+		return value
+	}
+}
+
+const websiteAuditMaxExportRows = 100000
+
+var websiteAuditExportSem = make(chan struct{}, 2)
+
+func (ov *ovpn) websiteAuditExport(c *gin.Context) {
+	// Export can run a long streaming query. Limit concurrent work and the total
+	// rows so a broad request cannot exhaust the database for VPN control paths.
+	select {
+	case websiteAuditExportSem <- struct{}{}:
+		defer func() { <-websiteAuditExportSem }()
+	default:
+		c.JSON(http.StatusTooManyRequests, gin.H{"message": "导出任务较多，请稍后重试"})
+		return
+	}
+	filter := parseWebsiteAuditFilter(c)
+	ids, skip := webAuditAccessScope(c)
+	query := websiteAuditQuery(c.Request.Context(), filter, ids, skip)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "统计导出数据失败"})
+		return
+	}
+	if total > websiteAuditMaxExportRows {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": fmt.Sprintf("导出结果超过 %d 条，请缩小时间范围或筛选条件", websiteAuditMaxExportRows)})
+		return
+	}
+	rows, err := query.Order("queried_at DESC, id DESC").Rows()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出网站访问明细失败"})
+		return
+	}
+	defer rows.Close()
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=website_access_%s.csv", time.Now().Format("20060102150405")))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	_, _ = c.Writer.Write([]byte("\xEF\xBB\xBF"))
+	writer := csv.NewWriter(c.Writer)
+	defer writer.Flush()
+	if err := writer.Write([]string{"查询时间", "用户", "证书名称", "VPN IP", "域名", "类型", "响应状态"}); err != nil {
+		return
+	}
+	for rows.Next() {
+		var record WebsiteAccessLog
+		if err := db.ScanRows(rows, &record); err != nil {
+			return
+		}
+		if err := writer.Write([]string{
+			csvSafeWebsiteAuditField(time.Unix(record.QueriedAt, 0).Format("2006-01-02 15:04:05")),
+			csvSafeWebsiteAuditField(record.Username), csvSafeWebsiteAuditField(record.CommonName), csvSafeWebsiteAuditField(record.VPNIP),
+			csvSafeWebsiteAuditField(record.Domain), csvSafeWebsiteAuditField(record.QueryType), csvSafeWebsiteAuditField(record.ResponseCode),
+		}); err != nil {
+			return
+		}
+	}
+}
+func (ov *ovpn) websiteAuditStatus(c *gin.Context) { c.JSON(http.StatusOK, getWebAuditDNSStatus()) }
+
+// websiteAuditClientMap accepts only the local, token-authenticated OpenVPN hook
+// admitted by AuthMiddleWare. It updates transient memory only; DNS audit records
+// remain append-only and are never created by this endpoint.
+func (ov *ovpn) websiteAuditClientMap(c *gin.Context) {
+	internal, _ := c.Get(internalWebAuditClientMapContextKey)
+	if internal != true || !IsLocalRequest(c) || !hasMatchingLocalServiceToken(c) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "仅允许本机 OpenVPN 生命周期钩子调用"})
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(c.PostForm("action")))
+	if action != "upsert" && action != "delete" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "action 必须为 upsert 或 delete"})
+		return
+	}
+	username := strings.TrimSpace(c.PostForm("username"))
+	identity := auditClientIdentity{Username: username, CommonName: strings.TrimSpace(c.PostForm("common_name")), ConnectionID: strings.TrimSpace(c.PostForm("connection_id"))}
+	if updatedAt, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("event_time_ns")), 10, 64); err == nil && updatedAt > 0 {
+		identity.UpdatedAt = updatedAt
+	}
+	if action == "upsert" {
+		if username == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "upsert 缺少用户名"})
+			return
+		}
+		var user User
+		if err := db.Select("id", "username").Where("username = ?", username).First(&user).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在，不更新 DNS 审计映射"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "查询 DNS 审计用户失败"})
+			return
+		}
+		identity.UserID = user.ID
+	}
+	webAuditDNS.updateClientIdentity(action, identity, c.PostForm("vip"), c.PostForm("vip6"))
+	c.Status(http.StatusNoContent)
+}

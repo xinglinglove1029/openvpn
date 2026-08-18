@@ -68,6 +68,8 @@ type ToolService interface {
 	GetDashboard(ctx agent.ToolContext, operator string) (GetDashboardResult, error)
 	// GetServerResources returns the latest CPU, memory, disk, network, and load snapshot.
 	GetServerResources(ctx agent.ToolContext, operator string) (ServerResourcesResult, error)
+	// GetWebsiteAccessStats returns privacy-preserving DNS-domain audit statistics. Requires web-audit:view.
+	GetWebsiteAccessStats(ctx agent.ToolContext, operator string, req WebsiteAccessStatsRequest) (WebsiteAccessStatsResult, error)
 }
 
 // CreateUserRequest 创建用户工具入参
@@ -432,6 +434,45 @@ type QueryAuditLogsRequest struct {
 type QueryAuditLogsResult struct {
 	Logs  []AuditLogInfo `json:"logs"`
 	Total int64          `json:"total"`
+}
+
+type WebsiteAccessStatsRequest struct {
+	Username string `json:"username,omitempty" jsonschema:"可选：按 VPN 用户名筛选"`
+	Domain   string `json:"domain,omitempty" jsonschema:"可选：按域名关键字筛选，例如 github.com"`
+	Range    string `json:"range,omitempty" jsonschema:"可选时间范围：1h、6h、24h、7d、30d；默认24h"`
+	Start    int64  `json:"start,omitempty" jsonschema:"可选开始 Unix 秒，优先于 range"`
+	End      int64  `json:"end,omitempty" jsonschema:"可选结束 Unix 秒，优先于 range"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"返回 Top 项和近期明细数量，默认20，最大100"`
+}
+
+type WebsiteAccessTopItem struct {
+	Username   string `json:"username,omitempty"`
+	CommonName string `json:"commonName,omitempty"`
+	Domain     string `json:"domain,omitempty"`
+	Queries    int64  `json:"queries"`
+}
+type WebsiteAccessRecentRecord struct {
+	QueriedAt    int64  `json:"queriedAt"`
+	Username     string `json:"username"`
+	Domain       string `json:"domain"`
+	QueryType    string `json:"queryType"`
+	ResponseCode string `json:"responseCode"`
+}
+type WebsiteAccessStatsResult struct {
+	Start         int64                       `json:"start"`
+	End           int64                       `json:"end"`
+	TotalQueries  int64                       `json:"totalQueries"`
+	ActiveUsers   int64                       `json:"activeUsers"`
+	UniqueDomains int64                       `json:"uniqueDomains"`
+	TopUsers      []WebsiteAccessTopItem      `json:"topUsers"`
+	TopDomains    []WebsiteAccessTopItem      `json:"topDomains"`
+	RecentRecords []WebsiteAccessRecentRecord `json:"recentRecords"`
+	Enabled       bool                        `json:"enabled"`
+	ListenerReady bool                        `json:"listenerReady"`
+	RedirectReady bool                        `json:"redirectReady"`
+	UpstreamDNS   []string                    `json:"upstreamDns"`
+	LastError     string                      `json:"lastError,omitempty"`
+	CoverageNote  string                      `json:"coverageNote"`
 }
 
 // DashboardRisk 仪表盘风险项
@@ -806,6 +847,19 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("创建 query_audit_logs 工具失败: %w", err)
 	}
 
+	getWebsiteAccessStatsTool, err := functiontool.New(
+		functiontool.Config{
+			Name:        "get_website_access_stats",
+			Description: "查询网站访问 DNS 域名审计统计，支持按时间、VPN 用户或域名筛选。仅返回普通 DNS 查询域名元数据，不代表用户访问了 HTTPS 完整 URL，也绝不会提供网页内容、Cookie 或加密流量内容；DoH、DoT、QUIC DNS 或绕过 VPN 的查询可能缺失。结果会发送给当前配置的模型服务，仅应授权可信管理员调用；需要 web-audit:view 权限。",
+		},
+		func(ctx agent.ToolContext, args WebsiteAccessStatsRequest) (WebsiteAccessStatsResult, error) {
+			return svc.GetWebsiteAccessStats(ctx, ctx.UserID(), args)
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 get_website_access_stats 工具失败: %w", err)
+	}
+
 	getDashboardTool, err := functiontool.New(
 		functiontool.Config{
 			Name:        "get_dashboard",
@@ -857,6 +911,7 @@ func BuildBusinessTools(svc ToolService) ([]tool.Tool, error) {
 		listChannelsTool,
 		manageChannelTool,
 		queryAuditLogsTool,
+		getWebsiteAccessStatsTool,
 		getDashboardTool,
 		getServerResourcesTool,
 	}, nil

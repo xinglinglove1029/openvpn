@@ -104,6 +104,50 @@ func (cfg *VPNConfig) SetLine(index int, content string) {
 	}
 }
 
+// SetDNSPushResolvers replaces every existing pushed DNS resolver with the
+// supplied resolver list. Keeping this operation atomic avoids stale third (or
+// older) DNS lines when settings are saved repeatedly or upgraded from older
+// server.conf layouts.
+func (cfg *VPNConfig) SetDNSPushResolvers(resolvers ...string) {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	newLines := make([]string, 0, len(cfg.Lines)+len(resolvers))
+	insertAt := -1
+	for _, line := range cfg.Lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "#") {
+			trim = strings.TrimSpace(strings.TrimPrefix(trim, "#"))
+		}
+		if strings.HasPrefix(trim, `push "dhcp-option DNS `) {
+			if insertAt < 0 {
+				insertAt = len(newLines)
+			}
+			continue
+		}
+		newLines = append(newLines, line)
+	}
+	if insertAt < 0 {
+		insertAt = len(newLines)
+	}
+
+	pushLines := make([]string, 0, len(resolvers))
+	seen := make(map[string]struct{}, len(resolvers))
+	for _, raw := range resolvers {
+		resolver := strings.TrimSpace(raw)
+		if net.ParseIP(resolver) == nil {
+			continue
+		}
+		if _, exists := seen[resolver]; exists {
+			continue
+		}
+		seen[resolver] = struct{}{}
+		pushLines = append(pushLines, fmt.Sprintf(`push "dhcp-option DNS %s"`, resolver))
+	}
+
+	cfg.Lines = append(newLines[:insertAt], append(pushLines, newLines[insertAt:]...)...)
+}
+
 func (cfg *VPNConfig) Delete(key string) {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -199,34 +243,10 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		}
 	case "openvpn.ovpn_gateway":
 		if val == "true" {
-			var dnsIndices []int
-			for i, line := range cfg.Lines {
-				if strings.Contains(line, "dhcp-option DNS") {
-					dnsIndices = append(dnsIndices, i)
-				}
-			}
-
-			if len(dnsIndices) > 0 {
-				if len(dnsIndices) == 1 {
-					cfg.SetLine(dnsIndices[0], fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns1")))
-					cfg.SetLine(len(cfg.Lines), fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
-				} else if len(dnsIndices) == 2 {
-					cfg.SetLine(dnsIndices[0], fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns1")))
-					cfg.SetLine(dnsIndices[1], fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
-				} else {
-					cfg.SetLine(dnsIndices[0], fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns1")))
-					cfg.SetLine(dnsIndices[1], fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
-					cfg.DeleteLines(dnsIndices[2:])
-				}
-			} else {
-				cfg.SetLine(len(cfg.Lines), fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns1")))
-				cfg.SetLine(len(cfg.Lines), fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
-			}
-
+			cfg.SetDNSPushResolvers(viper.GetString("openvpn.ovpn_push_dns1"), viper.GetString("openvpn.ovpn_push_dns2"))
 			cfg.Set("push", `"redirect-gateway def1 ipv6 bypass-dhcp"`)
 		} else {
-			cfg.Delete(fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns1")))
-			cfg.Delete(fmt.Sprintf(`push "dhcp-option DNS %s"`, viper.GetString("openvpn.ovpn_push_dns2")))
+			cfg.SetDNSPushResolvers()
 			cfg.Delete(`push "redirect-gateway def1 ipv6 bypass-dhcp"`)
 		}
 	case "openvpn.ovpn_management":
@@ -307,31 +327,9 @@ func (cfg *VPNConfig) Update(key string, val string) {
 				}
 			}
 		}
-	case "openvpn.ovpn_push_dns1":
-		var dnsIndices []int
-		for i, line := range cfg.Lines {
-			if strings.Contains(line, "dhcp-option DNS") {
-				dnsIndices = append(dnsIndices, i)
-			}
-		}
-
-		if len(dnsIndices) > 0 {
-			cfg.SetLine(dnsIndices[0], fmt.Sprintf(`push "dhcp-option DNS %s"`, val))
-		} else {
-			cfg.SetLine(len(cfg.Lines), fmt.Sprintf(`push "dhcp-option DNS %s"`, val))
-		}
-	case "openvpn.ovpn_push_dns2":
-		var dnsIndices []int
-		for i, line := range cfg.Lines {
-			if strings.Contains(line, "dhcp-option DNS") {
-				dnsIndices = append(dnsIndices, i)
-			}
-		}
-
-		if len(dnsIndices) > 1 {
-			cfg.SetLine(dnsIndices[1], fmt.Sprintf(`push "dhcp-option DNS %s"`, val))
-		} else {
-			cfg.SetLine(len(cfg.Lines), fmt.Sprintf(`push "dhcp-option DNS %s"`, val))
+	case "openvpn.ovpn_push_dns1", "openvpn.ovpn_push_dns2":
+		if viper.GetBool("openvpn.ovpn_gateway") {
+			cfg.SetDNSPushResolvers(viper.GetString("openvpn.ovpn_push_dns1"), viper.GetString("openvpn.ovpn_push_dns2"))
 		}
 	}
 

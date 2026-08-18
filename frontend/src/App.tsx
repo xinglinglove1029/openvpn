@@ -15,6 +15,7 @@ const FirewallPage = lazy(() => import('./pages/Firewall'));
 const HistoryPage = lazy(() => import('./pages/History'));
 const CertsPage = lazy(() => import('./pages/Certs'));
 const AuditPage = lazy(() => import('./pages/Audit'));
+const WebAuditPage = lazy(() => import('./pages/WebAudit'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const NotificationsPage = lazy(() => import('./pages/Notifications'));
 const ChannelProvidersPage = lazy(() => import('./pages/ChannelProviders'));
@@ -65,6 +66,7 @@ function App() {
                 <Route path="history" element={<SuspenseWrap><HistoryPage /></SuspenseWrap>} />
                 <Route path="certs" element={<SuspenseWrap><CertsPage /></SuspenseWrap>} />
                 <Route path="audit" element={<SuspenseWrap><AuditPage /></SuspenseWrap>} />
+                <Route path="web-audit" element={<SuspenseWrap><WebAuditPage /></SuspenseWrap>} />
                 <Route path="settings" element={<SuspenseWrap><SettingsPage /></SuspenseWrap>} />
                 <Route path="notifications" element={<SuspenseWrap><NotificationsPage /></SuspenseWrap>} />
                 <Route path="channels" element={<SuspenseWrap><ChannelProvidersPage /></SuspenseWrap>} />

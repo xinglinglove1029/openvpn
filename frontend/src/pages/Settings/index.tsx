@@ -231,6 +231,7 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.history_max_days'] = String(base.history_max_days ?? '');
   out['system.base.max_duplicate_login'] = String(base.max_duplicate_login ?? '');
   out['system.base.renew_days'] = String(base.renew_days ?? 365);
+  out['system.base.web_audit_enabled'] = String(base.web_audit_enabled ?? false);
 
   const ldap = settings?.system?.ldap ?? ({} as SettingsResponse['system']['ldap']);
   out['system.ldap.ldap_url'] = String(ldap.ldap_url ?? '');
@@ -593,6 +594,13 @@ export default function SettingsPage() {
                     description="登录时校验用户绑定的配置文件"
                     checked={base.validate_client_config}
                     settingKey="system.base.validate_client_config"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="启用网站访问 DNS 审计"
+                    description="仅记录经 VPN 隧道、下发 DNS 的域名元数据；关闭后立即撤销重定向，不影响 VPN 正常解析"
+                    checked={base.web_audit_enabled ?? false}
+                    settingKey="system.base.web_audit_enabled"
                     store={store}
                   />
                 </div>

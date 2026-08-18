@@ -33,7 +33,7 @@ func NewAIToolService(ov *ovpn) *AIToolService {
 
 // hasPermission 检查指定用户是否拥有某权限 code
 // admin 用户自动放行；其他用户通过 LoadPermissionCodes 加载权限列表匹配
-func (s *AIToolService) hasPermission(ctx agent.ToolContext, username, code string) bool {
+func (s *AIToolService) hasPermission(ctx context.Context, username, code string) bool {
 	if username == "" {
 		return false
 	}
@@ -1244,6 +1244,61 @@ func (s *AIToolService) QueryAuditLogs(ctx agent.ToolContext, operator string, r
 		})
 	}
 	return ai.QueryAuditLogsResult{Logs: infos, Total: total}, nil
+}
+
+// GetWebsiteAccessStats exposes the same scoped aggregation as the management page.
+// It is deliberately read-only and only describes ordinary DNS queries, never HTTPS URLs.
+func (s *AIToolService) GetWebsiteAccessStats(ctx agent.ToolContext, operator string, req ai.WebsiteAccessStatsRequest) (ai.WebsiteAccessStatsResult, error) {
+	if !s.hasPermission(ctx, operator, "web-audit:view") {
+		return ai.WebsiteAccessStatsResult{}, fmt.Errorf("权限不足: 需要 web-audit:view 权限")
+	}
+	end := req.End
+	start := req.Start
+	if start <= 0 && end <= 0 {
+		end = time.Now().Unix()
+		switch strings.ToLower(strings.TrimSpace(req.Range)) {
+		case "1h":
+			start = end - int64(time.Hour.Seconds())
+		case "6h":
+			start = end - int64((6 * time.Hour).Seconds())
+		case "7d":
+			start = end - int64((7 * 24 * time.Hour).Seconds())
+		case "30d":
+			start = end - int64((30 * 24 * time.Hour).Seconds())
+		default:
+			start = end - int64((24 * time.Hour).Seconds())
+		}
+	}
+	limit := req.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	filter := WebsiteAuditFilter{Start: start, End: end, Username: req.Username, Domain: req.Domain}
+	filter = normalizeWebsiteAuditFilter(filter)
+	accessible, skip := GetAccessibleUserIDs(operator)
+	if operator == adminUsername {
+		skip = true
+	}
+	summary, err := buildWebsiteAuditSummary(ctx, filter, accessible, skip, limit)
+	if err != nil {
+		return ai.WebsiteAccessStatsResult{}, fmt.Errorf("查询网站访问 DNS 审计失败: %w", err)
+	}
+	records, err := queryWebsiteAuditRecords(ctx, filter, accessible, skip, 0, limit)
+	if err != nil {
+		return ai.WebsiteAccessStatsResult{}, fmt.Errorf("查询网站访问 DNS 明细失败: %w", err)
+	}
+	status := getWebAuditDNSStatus()
+	result := ai.WebsiteAccessStatsResult{Start: summary.Start, End: summary.End, TotalQueries: summary.TotalQueries, ActiveUsers: summary.ActiveUsers, UniqueDomains: summary.UniqueDomains, TopUsers: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopUsers)), TopDomains: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopDomains)), RecentRecords: make([]ai.WebsiteAccessRecentRecord, 0, len(records.Data)), Enabled: status.Enabled, ListenerReady: status.ListenerReady, RedirectReady: status.RedirectInstalled, UpstreamDNS: status.UpstreamDNS, LastError: status.LastError, CoverageNote: status.CoverageNote}
+	for _, item := range summary.TopUsers {
+		result.TopUsers = append(result.TopUsers, ai.WebsiteAccessTopItem{Username: item.Username, CommonName: item.CommonName, Queries: item.Queries})
+	}
+	for _, item := range summary.TopDomains {
+		result.TopDomains = append(result.TopDomains, ai.WebsiteAccessTopItem{Domain: item.Domain, Queries: item.Queries})
+	}
+	for _, record := range records.Data {
+		result.RecentRecords = append(result.RecentRecords, ai.WebsiteAccessRecentRecord{QueriedAt: record.QueriedAt, Username: record.Username, Domain: record.Domain, QueryType: record.QueryType, ResponseCode: record.ResponseCode})
+	}
+	return result, nil
 }
 
 // GetServerResources returns the latest collector snapshot instead of making a second
