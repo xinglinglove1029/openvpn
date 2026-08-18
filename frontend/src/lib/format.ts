@@ -1,10 +1,47 @@
 /** 格式化工具函数 */
 import type { OnlineClient, UserRecord, GroupRecord } from '../types';
 
+const BYTE_MULTIPLIERS: Record<string, number> = {
+  B: 1,
+  BYTE: 1,
+  BYTES: 1,
+  KB: 1024,
+  KIB: 1024,
+  MB: 1024 ** 2,
+  MIB: 1024 ** 2,
+  GB: 1024 ** 3,
+  GIB: 1024 ** 3,
+  TB: 1024 ** 4,
+  TIB: 1024 ** 4,
+  PB: 1024 ** 5,
+  PIB: 1024 ** 5,
+};
+
+/**
+ * Convert raw byte counters and the legacy formatted values returned by the
+ * history API (for example, "20.97 KB") into a byte count.
+ */
+export function parseByteValue(value?: number | string | null): number {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0;
+
+  const text = String(value).trim();
+  if (!text) return 0;
+  const direct = Number(text);
+  if (Number.isFinite(direct)) return direct > 0 ? direct : 0;
+
+  const match = text.match(/^([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*([a-zA-Z]+)$/);
+  if (!match) return 0;
+
+  const amount = Number(match[1]);
+  const multiplier = BYTE_MULTIPLIERS[match[2].toUpperCase()];
+  if (!Number.isFinite(amount) || amount <= 0 || !multiplier) return 0;
+  return amount * multiplier;
+}
+
 export function formatBytes(value?: number | string | null) {
-  if (value === null || value === undefined || value === '') return '0 B';
-  const numValue = typeof value === 'number' ? value : Number(String(value).replace(/[^\d.eE+\-]/g, ''));
-  if (!Number.isFinite(numValue) || numValue <= 0) return '0 B';
+  const numValue = parseByteValue(value);
+  if (numValue <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let size = numValue;
   let unitIndex = 0;
@@ -25,9 +62,8 @@ export function getClientBytes(client: OnlineClient, direction: 'received' | 'se
     ? [client.bytesReceived, client.bytes_received, client.recvBytes]
     : [client.bytesSent, client.bytes_sent, client.sendBytes];
   for (const value of candidates) {
-    if (value == null) continue;
-    const num = Number(value);
-    if (Number.isFinite(num)) return num;
+    const bytes = parseByteValue(value);
+    if (bytes > 0) return bytes;
   }
   return 0;
 }

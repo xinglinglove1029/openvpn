@@ -132,12 +132,12 @@ export interface OnlineClient {
   rip6?: string;
   connectedSince?: string;
   connected_since?: string;
-  bytesReceived?: number;
-  bytesSent?: number;
-  bytes_received?: number;
-  bytes_sent?: number;
-  recvBytes?: number;
-  sendBytes?: number;
+  bytesReceived?: number | string;
+  bytesSent?: number | string;
+  bytes_received?: number | string;
+  bytes_sent?: number | string;
+  recvBytes?: number | string;
+  sendBytes?: number | string;
   connDate?: string;
   onlineTime?: string;
   isNftBlacklist?: boolean;
@@ -225,10 +225,10 @@ export interface HistoryRecord {
   rip6?: string;
   ripRegion?: string;
   rip6Region?: string;
-  bytes_received?: number;
-  bytes_sent?: number;
-  bytesReceived?: number;
-  bytesSent?: number;
+  bytes_received?: number | string;
+  bytes_sent?: number | string;
+  bytesReceived?: number | string;
+  bytesSent?: number | string;
   time_unix?: number;
   time_duration?: number | string;
 }

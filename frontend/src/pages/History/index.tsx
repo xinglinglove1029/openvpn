@@ -84,27 +84,15 @@ export default function HistoryPage() {
         key: 'bytes_received',
         header: '下载',
         sortable: true,
-        sortAccessor: (item) =>
-          getClientBytes(item as unknown as OnlineClient, 'received') ||
-          Number(item.bytes_received ?? item.bytesReceived ?? 0),
-        render: (item) =>
-          formatBytes(
-            getClientBytes(item as unknown as OnlineClient, 'received') ||
-              Number(item.bytes_received ?? item.bytesReceived ?? 0),
-          ),
+        sortAccessor: (item) => getClientBytes(item as unknown as OnlineClient, 'received'),
+        render: (item) => formatBytes(getClientBytes(item as unknown as OnlineClient, 'received')),
       },
       {
         key: 'bytes_sent',
         header: '上传',
         sortable: true,
-        sortAccessor: (item) =>
-          getClientBytes(item as unknown as OnlineClient, 'sent') ||
-          Number(item.bytes_sent ?? item.bytesSent ?? 0),
-        render: (item) =>
-          formatBytes(
-            getClientBytes(item as unknown as OnlineClient, 'sent') ||
-              Number(item.bytes_sent ?? item.bytesSent ?? 0),
-          ),
+        sortAccessor: (item) => getClientBytes(item as unknown as OnlineClient, 'sent'),
+        render: (item) => formatBytes(getClientBytes(item as unknown as OnlineClient, 'sent')),
       },
       {
         key: 'time_unix',
