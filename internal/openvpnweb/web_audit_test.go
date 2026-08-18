@@ -133,6 +133,116 @@ func TestDNSFailureResponseReturnsSERVFAIL(t *testing.T) {
 	}
 }
 
+func TestWebsiteAuditAIScopesRecordsToOperator(t *testing.T) {
+	originalDB, originalAdminUsername := db, adminUsername
+	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db = database
+	adminUsername = "administrator"
+	defer func() {
+		db = originalDB
+		adminUsername = originalAdminUsername
+		sqlDB, _ := database.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	if err := database.AutoMigrate(&User{}, &Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &WebsiteAccessLog{}); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	operator := User{Username: "limited-operator"}
+	otherUser := User{Username: "other-user"}
+	if err := database.Create(&operator).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&otherUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	// A zero group ID keeps this ordinary operator scoped to their own user ID.
+	if err := database.Model(&User{}).Where("id IN ?", []uint{operator.ID, otherUser.ID}).Update("gid", 0).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&Role{Name: "Website audit viewer", Code: "website_audit_viewer", IsEnable: &enabled}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var role Role
+	if err := database.Where("code = ?", "website_audit_viewer").First(&role).Error; err != nil {
+		t.Fatal(err)
+	}
+	permission := Permission{Name: "View website audit", Code: "web-audit:view", Type: "button"}
+	if err := database.Create(&permission).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&UserRole{UserID: operator.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	logs := []WebsiteAccessLog{
+		{UserID: operator.ID, Username: operator.Username, Domain: "operator.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - 10},
+		{UserID: operator.ID, Username: operator.Username, Domain: "operator.example", QueryType: "AAAA", ResponseCode: "RCodeSuccess", QueriedAt: now - 20},
+		// This operator-owned row must not be returned by the 24h range.
+		{UserID: operator.ID, Username: operator.Username, Domain: "expired-operator.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - int64((25 * time.Hour).Seconds())},
+		// These rows are newer than the permitted rows so the recent-record limit
+		// verifies that access scope is applied before ordering and pagination.
+		{UserID: otherUser.ID, Username: otherUser.Username, Domain: "other-user.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - 1},
+		// Historical data can contain a stale username; authorization must use UserID.
+		{UserID: otherUser.ID, Username: operator.Username, Domain: "stale-username.example", QueryType: "A", ResponseCode: "RCodeSuccess", QueriedAt: now - 2},
+	}
+	if err := database.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewAIToolService(nil)
+	toolCtx := &websiteAuditToolContext{Context: context.Background()}
+	result, err := svc.GetWebsiteAccessStats(toolCtx, operator.Username, ai.WebsiteAccessStatsRequest{Range: "24h", Limit: 20})
+	if err != nil {
+		t.Fatalf("GetWebsiteAccessStats returned an error for an authorized operator: %v", err)
+	}
+	if result.TotalQueries != 2 || result.ActiveUsers != 1 || result.UniqueDomains != 1 {
+		t.Fatalf("unexpected scoped statistics: %#v", result)
+	}
+	if len(result.TopUsers) != 1 || result.TopUsers[0].Username != operator.Username || result.TopUsers[0].Queries != 2 {
+		t.Fatalf("top users leaked or omitted scoped data: %#v", result.TopUsers)
+	}
+	if len(result.TopDomains) != 1 || result.TopDomains[0].Domain != "operator.example" || result.TopDomains[0].Queries != 2 {
+		t.Fatalf("top domains leaked or omitted scoped data: %#v", result.TopDomains)
+	}
+	if len(result.RecentRecords) != 2 {
+		t.Fatalf("recent records=%#v, want only the operator's two records", result.RecentRecords)
+	}
+	for _, record := range result.RecentRecords {
+		if record.Username != operator.Username || record.Domain != "operator.example" {
+			t.Fatalf("AI result leaked another user's record: %#v", record)
+		}
+	}
+
+	filtered, err := svc.GetWebsiteAccessStats(toolCtx, operator.Username, ai.WebsiteAccessStatsRequest{
+		Range: "24h", Username: otherUser.Username, Domain: "other-user.example", Limit: 20,
+	})
+	if err != nil {
+		t.Fatalf("GetWebsiteAccessStats with an out-of-scope filter returned an error: %v", err)
+	}
+	if filtered.TotalQueries != 0 || filtered.ActiveUsers != 0 || filtered.UniqueDomains != 0 || len(filtered.TopUsers) != 0 || len(filtered.TopDomains) != 0 || len(filtered.RecentRecords) != 0 {
+		t.Fatalf("out-of-scope filters exposed website audit data: %#v", filtered)
+	}
+
+	limited, err := svc.GetWebsiteAccessStats(toolCtx, operator.Username, ai.WebsiteAccessStatsRequest{Range: "24h", Limit: 1})
+	if err != nil {
+		t.Fatalf("GetWebsiteAccessStats with a limited result size returned an error: %v", err)
+	}
+	if len(limited.RecentRecords) != 1 || limited.RecentRecords[0].Username != operator.Username || limited.RecentRecords[0].Domain != "operator.example" {
+		t.Fatalf("recent-record pagination applied before access scope: %#v", limited.RecentRecords)
+	}
+}
+
 func TestWebsiteAuditAIRejectsOperatorWithoutPermission(t *testing.T) {
 	originalDB, originalAdminUsername := db, adminUsername
 	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
