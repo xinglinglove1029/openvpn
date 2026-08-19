@@ -232,6 +232,9 @@ export interface HistoryRecord {
   bytesSent?: number | string;
   time_unix?: number;
   time_duration?: number | string;
+  connection_id?: string;
+  connectionId?: string;
+  createdAt?: string;
 }
 
 export interface HistoryResponse {
@@ -617,4 +620,11 @@ export interface WebsiteAuditRecordsResponse {
   end: number;
   total: number;
   data: WebsiteAccessRecord[];
+  historyId?: number;
+  connectionId?: string;
+  matchedBy?: 'connection_id' | 'time_range' | string;
+}
+
+export interface HistoryWebsiteAuditResponse extends WebsiteAuditRecordsResponse {
+  historyId: number;
 }

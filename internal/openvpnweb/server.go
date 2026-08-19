@@ -3058,6 +3058,8 @@ func Run(info BuildInfo) {
 		// 始终注册路由，由 handler 内部判断 LLM 客户端是否就绪
 		ai.RegisterAIRoutes(ovpn.Group("/ai", RequirePermission("ai:chat")), chatMgr, aiClient, healthChecker)
 
+		ovpn.GET("/history/:id/web-audit", RequirePermission("history:view"), ov.historyWebsiteAudit)
+
 		ovpn.GET("/history", RequirePermission("history:view"), func(c *gin.Context) {
 			var h History
 			var p Params

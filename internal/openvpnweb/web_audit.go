@@ -73,10 +73,13 @@ type WebsiteAuditSummary struct {
 }
 
 type WebsiteAuditRecordsResponse struct {
-	Start int64              `json:"start"`
-	End   int64              `json:"end"`
-	Total int64              `json:"total"`
-	Data  []WebsiteAccessLog `json:"data"`
+	Start        int64              `json:"start"`
+	End          int64              `json:"end"`
+	Total        int64              `json:"total"`
+	Data         []WebsiteAccessLog `json:"data"`
+	HistoryID    uint               `json:"historyId,omitempty"`
+	ConnectionID string             `json:"connectionId,omitempty"`
+	MatchedBy    string             `json:"matchedBy,omitempty"`
 }
 
 func normalizeWebsiteAuditRange(start, end int64) (int64, int64) {
@@ -206,6 +209,70 @@ func queryWebsiteAuditRecords(ctx context.Context, filter WebsiteAuditFilter, ac
 	return result, err
 }
 
+// queryHistoryWebsiteAuditRecords associates DNS audit events with one completed
+// VPN connection. A connection ID is the primary key for the association. Older
+// history rows may not have one, so those rows fall back to the exact user and
+// the connection's start/end interval. The caller must already have verified
+// that the history row is inside the operator's data scope.
+func queryHistoryWebsiteAuditRecords(ctx context.Context, history History, accessibleUserIDs []uint, skipFilter bool, offset, limit int) (WebsiteAuditRecordsResponse, error) {
+	start := history.TimeUnix
+	end := history.TimeUnix + history.TimeDuration
+	if start <= 0 {
+		return WebsiteAuditRecordsResponse{HistoryID: history.ID, Data: make([]WebsiteAccessLog, 0)}, nil
+	}
+	// A zero duration is valid for legacy records. Keep the range narrow rather
+	// than expanding it to the default one-day website-audit range.
+	if end <= start {
+		end = start + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	filter := WebsiteAuditFilter{Start: start, End: end}
+	query := websiteAuditQuery(ctx, filter, accessibleUserIDs, skipFilter)
+	connectionID := strings.TrimSpace(history.ConnectionID)
+	matchedBy := "time_range"
+	if connectionID != "" {
+		query = query.Where("connection_id = ?", connectionID)
+		// Connection IDs should be unique, but keep the user identity as a
+		// second boundary so a stale/reused ID can never cross users.
+		if history.UserID > 0 {
+			query = query.Where("user_id = ?", history.UserID)
+		} else if strings.TrimSpace(history.Username) != "" {
+			query = query.Where("username = ?", strings.TrimSpace(history.Username))
+		}
+		matchedBy = "connection_id"
+	} else if history.UserID > 0 {
+		query = query.Where("user_id = ?", history.UserID)
+	} else if strings.TrimSpace(history.Username) != "" {
+		query = query.Where("username = ?", strings.TrimSpace(history.Username))
+	} else {
+		// Never return all audit rows for a legacy record without an identity.
+		query = query.Where("1 = 0")
+	}
+
+	result := WebsiteAuditRecordsResponse{
+		Start:        start,
+		End:          end,
+		HistoryID:    history.ID,
+		ConnectionID: connectionID,
+		MatchedBy:    matchedBy,
+		Data:         make([]WebsiteAccessLog, 0),
+	}
+	if err := query.Count(&result.Total).Error; err != nil {
+		return result, err
+	}
+	err := query.Order("queried_at DESC, id DESC").Offset(offset).Limit(limit).Find(&result.Data).Error
+	return result, err
+}
+
 func webAuditAccessScope(c *gin.Context) ([]uint, bool) {
 	isAdmin, _ := c.Get("isAdmin")
 	if isAdmin == true {
@@ -243,6 +310,56 @@ func (ov *ovpn) websiteAuditRecords(c *gin.Context) {
 	result, err := queryWebsiteAuditRecords(c.Request.Context(), filter, ids, skip, offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询网站访问明细失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// historyWebsiteAudit returns DNS names observed while the selected VPN
+// connection was active. The route carries history:view at the router level;
+// web-audit:view is checked here so users with connection-history permission
+// alone do not gain access to browsing metadata.
+func (ov *ovpn) historyWebsiteAudit(c *gin.Context) {
+	if !requirePermissionCode(c, "web-audit:view") {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无效的连接历史 ID"})
+		return
+	}
+
+	var history History
+	if err := db.WithContext(c.Request.Context()).First(&history, uint(id)).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"message": "连接历史不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询连接历史失败"})
+		return
+	}
+
+	accessibleUserIDs, skipFilter := webAuditAccessScope(c)
+	if !skipFilter {
+		visible := false
+		for _, userID := range accessibleUserIDs {
+			if userID != 0 && userID == history.UserID {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			// Do not reveal whether another user's history ID exists.
+			c.JSON(http.StatusNotFound, gin.H{"message": "连接历史不存在"})
+			return
+		}
+	}
+
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	result, err := queryHistoryWebsiteAuditRecords(c.Request.Context(), history, accessibleUserIDs, skipFilter, offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询连接期间的网站访问记录失败"})
 		return
 	}
 	c.JSON(http.StatusOK, result)

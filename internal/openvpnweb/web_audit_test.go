@@ -101,6 +101,68 @@ func TestWebsiteAuditSummaryRespectsScopeAndFilters(t *testing.T) {
 	}
 }
 
+func TestQueryHistoryWebsiteAuditRecordsUsesConnectionAndTimeRange(t *testing.T) {
+	originalDB := db
+	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db = database
+	defer func() {
+		db = originalDB
+		sqlDB, _ := database.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	if err := database.AutoMigrate(&History{}, &WebsiteAccessLog{}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	history := History{ID: 10, UserID: 1, Username: "alice", ConnectionID: "conn-a", TimeUnix: now - 100, TimeDuration: 50}
+	if err := database.Create(&history).Error; err != nil {
+		t.Fatal(err)
+	}
+	logs := []WebsiteAccessLog{
+		{UserID: 1, Username: "alice", ConnectionID: "conn-a", Domain: "inside.example", QueriedAt: now - 90},
+		{UserID: 1, Username: "alice", ConnectionID: "conn-b", Domain: "other-connection.example", QueriedAt: now - 90},
+		{UserID: 1, Username: "alice", ConnectionID: "conn-a", Domain: "after.example", QueriedAt: now - 20},
+		{UserID: 2, Username: "bob", ConnectionID: "conn-a", Domain: "other-user.example", QueriedAt: now - 90},
+	}
+	if err := database.Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := queryHistoryWebsiteAuditRecords(context.Background(), history, []uint{1}, false, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.MatchedBy != "connection_id" || len(result.Data) != 1 || result.Data[0].Domain != "inside.example" {
+		t.Fatalf("connection-scoped result = %#v", result)
+	}
+	// The same connection ID from another user must stay excluded even for an
+	// administrator's unscoped query.
+	result, err = queryHistoryWebsiteAuditRecords(context.Background(), history, nil, true, 0, 50)
+	if err != nil || result.Total != 1 || result.Data[0].Domain != "inside.example" {
+		t.Fatalf("connection user-boundary result = %#v err=%v", result, err)
+	}
+
+	legacy := history
+	legacy.ID = 11
+	legacy.ConnectionID = ""
+	if err := database.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err = queryHistoryWebsiteAuditRecords(context.Background(), legacy, []uint{1}, false, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || result.MatchedBy != "time_range" {
+		t.Fatalf("legacy time-range result = %#v", result)
+	}
+}
+
 func TestDNSFailureResponseReturnsSERVFAIL(t *testing.T) {
 	name, err := dnsmessage.NewName("resolver-failure.example.")
 	if err != nil {
