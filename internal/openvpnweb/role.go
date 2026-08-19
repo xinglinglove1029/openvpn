@@ -64,6 +64,14 @@ type RolePermission struct {
 	PermissionID uint `gorm:"column:permission_id;primaryKey" json:"permissionId"`
 }
 
+// RolePermissionSeedState records one-off, versioned default-permission backfills for built-in roles.
+// It prevents a later administrator revocation from being overwritten on every service restart.
+type RolePermissionSeedState struct {
+	RoleID    uint      `gorm:"column:role_id;primaryKey"`
+	SeedCode  string    `gorm:"column:seed_code;size:64;primaryKey"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+}
+
 func (Role) TableName() string {
 	return "role"
 }
@@ -76,10 +84,16 @@ func (RolePermission) TableName() string {
 	return "role_permission"
 }
 
+func (RolePermissionSeedState) TableName() string {
+	return "role_permission_seed_state"
+}
+
 // 内置角色 code 常量
 const (
 	BuiltinRoleAdministrator = "administrator"
 	BuiltinRoleUser          = "user"
+
+	userWebAuditPermissionSeedCode = "user-web-audit-v1"
 )
 
 // permissionSeed 权限清单（菜单 12 项 + 按钮约 40 项）
@@ -154,7 +168,7 @@ var buttonPermissions = []permissionSeedItem{
 	{"menu:certs", "cert:delete", "删除证书", "button", "", "", 3},
 	// 审计（1）
 	{"menu:audit", "audit:view", "查看审计", "button", "", "", 1},
-	// 网站访问 DNS 审计涉及用户隐私，不赋予普通用户默认角色。
+	// 网站访问审计默认授予内置普通用户；查询结果仍按用户和分组数据范围限制。
 	{"menu:web-audit", "web-audit:view", "查看网站访问审计", "button", "", "", 1},
 	// 系统设置（7）
 	{"menu:settings", "settings:view", "查看设置", "button", "", "", 1},
@@ -208,6 +222,7 @@ var defaultUserRoleCodes = []string{
 	"menu:overview",
 	"menu:clients",
 	"menu:history",
+	"menu:web-audit",
 	"menu:notifications",
 	"menu:profile",
 	"client:view",
@@ -215,14 +230,21 @@ var defaultUserRoleCodes = []string{
 	"client:regenerate",
 	"client:view_online",
 	"history:view",
+	"web-audit:view",
 }
 
 // SeedPermissionsAndRoles 初始化权限与内置角色
 // - 写入全量权限（菜单 + 按钮）
 // - 创建内置 administrator（全权限）与 user（普通用户权限）角色
-// - 仅首次初始化：若内置角色已存在 role_permission 记录，则跳过权限写入，保留管理员运行期修改
+// - 默认权限仅首次初始化时写入；版本新增的内置功能可做定向、幂等回填
 // - 整个写入操作包在事务中
 func SeedPermissionsAndRoles(db *gorm.DB) error {
+	// Persist versioned backfill state separately from role_permission so explicit
+	// administrator revocations remain authoritative after the initial upgrade.
+	if err := db.AutoMigrate(&RolePermissionSeedState{}); err != nil {
+		return fmt.Errorf("migrate role permission seed state: %w", err)
+	}
+
 	// 1. 写入权限定义
 	codeToID := make(map[string]uint, 0)
 	allPerms := append([]permissionSeedItem{}, menuPermissions...)
@@ -315,7 +337,7 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 			return err
 		}
 		userRole = Role{
-			Name: "普通用户", Code: BuiltinRoleUser, Description: "仅可访问概览/客户端/历史/站内信/个人中心",
+			Name: "普通用户", Code: BuiltinRoleUser, Description: "仅可访问概览/客户端/历史/网站访问审计/站内信/个人中心",
 			IsBuiltin: true, IsEnable: &userEnable, Sort: 1,
 		}
 		if err := db.WithContext(context.Background()).Create(&userRole).Error; err != nil {
@@ -323,14 +345,13 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 		}
 	}
 	db.Model(&userRole).Where("id = ?", userRole.ID).Updates(map[string]interface{}{
-		"name": "普通用户", "description": "仅可访问概览/客户端/历史/站内信/个人中心", "is_builtin": true, "is_enable": true, "sort": 1,
+		"name": "普通用户", "description": "仅可访问概览/客户端/历史/网站访问审计/站内信/个人中心", "is_builtin": true, "is_enable": true, "sort": 1,
 	})
 
 	// 4. 内置角色权限同步策略：
-	//    administrator 与 user 均采用"首次初始化"策略：
-	//    - 仅当角色尚未有任何 role_permission 记录时才写入默认权限
-	//    - 之后保留管理员运行期修改，不再自动同步，避免管理员移除的权限被回填
-	//    - 新增的权限项需管理员在"角色管理"页面手动分配
+	//    - 默认权限仅在角色尚无 role_permission 时写入，保留管理员运行期修改
+	//    - 版本新增且需要内置角色默认可用的权限，显式定向、幂等回填
+	//    - 自定义角色始终由管理员在"角色管理"页面手动分配权限
 	return db.Transaction(func(tx *gorm.DB) error {
 		// administrator 角色：仅首次初始化时写入全权限
 		var adminCount int64
@@ -373,6 +394,28 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 				if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: userRole.ID, PermissionID: pid}).Error; err != nil {
 					return err
 				}
+			}
+		}
+
+		// 网站访问审计是新增的内置普通用户功能。旧部署只回填一次；
+		// 之后管理员在角色管理中撤销的权限会被保留，不会因重启再次写回。
+		seedState := RolePermissionSeedState{RoleID: userRole.ID, SeedCode: userWebAuditPermissionSeedCode}
+		var seedCount int64
+		if err := tx.Model(&RolePermissionSeedState{}).Where("role_id = ? AND seed_code = ?", seedState.RoleID, seedState.SeedCode).Count(&seedCount).Error; err != nil {
+			return err
+		}
+		if seedCount == 0 {
+			for _, code := range []string{"menu:web-audit", "web-audit:view"} {
+				pid, ok := codeToID[code]
+				if !ok {
+					return fmt.Errorf("web audit backfill references undefined permission code: %s", code)
+				}
+				if err := tx.FirstOrCreate(&RolePermission{}, RolePermission{RoleID: userRole.ID, PermissionID: pid}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Create(&seedState).Error; err != nil {
+				return err
 			}
 		}
 
