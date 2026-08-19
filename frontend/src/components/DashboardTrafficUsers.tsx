@@ -11,7 +11,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Button } from '@/ui/button';
-import { Input } from '@/ui/input';
+import { DateTimePicker } from '@/components/DateTimePicker';
 import { Badge } from '@/ui/badge';
 import { api } from '@/api';
 import { formatBytes } from '@/lib/format';
@@ -186,11 +186,11 @@ export function DashboardTrafficUsers() {
         <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-border/50 bg-background/35 p-2.5 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <label className="space-y-1">
             <span className="text-[11px] text-muted-foreground">开始时间</span>
-            <Input type="datetime-local" value={customStart} onChange={(event) => setCustomStart(event.target.value)} className="h-8 text-xs" />
+            <DateTimePicker value={customStart} onChange={setCustomStart} placeholder="选择开始时间" className="h-8 text-xs" />
           </label>
           <label className="space-y-1">
             <span className="text-[11px] text-muted-foreground">结束时间</span>
-            <Input type="datetime-local" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} className="h-8 text-xs" />
+            <DateTimePicker value={customEnd} onChange={setCustomEnd} placeholder="选择结束时间" className="h-8 text-xs" />
           </label>
           <Button type="button" size="sm" className="h-8" onClick={applyCustomRange}>应用</Button>
         </div>

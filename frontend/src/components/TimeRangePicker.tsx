@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { Calendar } from '@/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface TimeRange {
   from: string;
@@ -25,65 +26,63 @@ function toDateInputValue(date: Date) {
 }
 
 function parseDateInputValue(value?: string) {
-  if (!value) return undefined;
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
   const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return undefined;
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   const date = new Date(year, month - 1, day);
-  return Number.isNaN(date.getTime()) ? undefined : date;
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : undefined;
 }
 
 export function TimeRangePicker({ value, onChange, placeholder = '选择时间范围' }: TimeRangePickerProps) {
   const [open, setOpen] = useState(false);
   const [selectingStart, setSelectingStart] = useState(true);
   const [currentFrom, setCurrentFrom] = useState<Date | undefined>();
-  const [currentTo, setCurrentTo] = useState<Date | undefined>();
+  const isCompact = useIsMobile();
 
   const fromDate = parseDateInputValue(value.from);
   const toDate = parseDateInputValue(value.to);
 
-  const selected = { from: currentFrom || fromDate, to: currentTo || toDate };
+  const selected = currentFrom
+    ? { from: currentFrom, to: undefined }
+    : (fromDate ? { from: fromDate, to: toDate } : undefined);
+  const hasInvalidValue = Boolean((value.from && !fromDate) || (value.to && !toDate));
 
-  const displayText = value.from && value.to
-    ? `${format(fromDate || new Date(), 'yyyy/MM/dd')} - ${format(toDate || new Date(), 'yyyy/MM/dd')}`
-    : placeholder;
+  const displayText = hasInvalidValue
+    ? '日期范围无效'
+    : (value.from && value.to && fromDate && toDate
+      ? `${format(fromDate, 'yyyy/MM/dd')} - ${format(toDate, 'yyyy/MM/dd')}`
+      : placeholder);
+  const ariaLabel = value.from && value.to && !hasInvalidValue
+    ? `${placeholder}：${displayText}`
+    : (hasInvalidValue ? `${placeholder}：当前值无效，请重新选择` : placeholder);
 
   const handleOpenChange = (isOpen: boolean) => {
     if (isOpen) {
       setSelectingStart(true);
       setCurrentFrom(undefined);
-      setCurrentTo(undefined);
     }
     setOpen(isOpen);
   };
 
-  const handleSelect = (dates: unknown) => {
-    const dateRange = dates as { from?: Date; to?: Date };
-    
-    if (!dateRange.from) return;
-
+  // DayPicker's range `onSelect` is based on the currently controlled range.
+  // For a replacement range it can therefore keep the old start date. Use the
+  // clicked day directly so the two-step picker always starts a fresh range.
+  const handleDayClick = (day: Date) => {
     if (selectingStart) {
-      setCurrentFrom(dateRange.from);
+      setCurrentFrom(day);
       setSelectingStart(false);
-    } else {
-      const from = currentFrom || dateRange.from;
-      const to = dateRange.to || dateRange.from;
-      
-      if (from > to) {
-        onChange({
-          from: toDateInputValue(to),
-          to: toDateInputValue(from),
-        });
-      } else {
-        onChange({
-          from: toDateInputValue(from),
-          to: toDateInputValue(to),
-        });
-      }
-      setSelectingStart(true);
-      setCurrentFrom(undefined);
-      setCurrentTo(undefined);
-      setOpen(false);
+      return;
     }
+
+    const from = currentFrom || day;
+    const [start, end] = from > day ? [day, from] : [from, day];
+    onChange({
+      from: toDateInputValue(start),
+      to: toDateInputValue(end),
+    });
+    setSelectingStart(true);
+    setCurrentFrom(undefined);
+    setOpen(false);
   };
 
   return (
@@ -91,8 +90,9 @@ export function TimeRangePicker({ value, onChange, placeholder = '选择时间�
       <PopoverTrigger asChild>
         <Button
           variant="outline"
+          aria-label={ariaLabel}
           className={cn(
-            'h-9 justify-start text-left font-normal min-w-[220px]',
+            'h-9 w-full min-w-0 justify-start text-left font-normal sm:w-auto sm:min-w-[220px]',
             !value.from && !value.to && 'text-muted-foreground'
           )}
         >
@@ -100,14 +100,21 @@ export function TimeRangePicker({ value, onChange, placeholder = '选择时间�
           {displayText}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
+      <PopoverContent
+        className="w-auto max-h-[calc(100vh-1.5rem)] max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto border-[var(--panel-border)] bg-[var(--dropdown-bg)] p-0 text-[var(--text)] shadow-[var(--panel-shadow)]"
+        align="start"
+      >
         <Calendar
           mode="range"
-          numberOfMonths={2}
+          numberOfMonths={isCompact ? 1 : 2}
+          style={isCompact ? ({ '--cell-size': 'min(2.25rem, calc((100vw - 3rem) / 7))' } as CSSProperties) : undefined}
           selected={selected}
-          onSelect={handleSelect}
+          onDayClick={handleDayClick}
         />
-        <div className="flex items-center justify-between p-3 border-t">
+        <div className="border-t border-border/70 px-3 py-2 text-xs text-muted-foreground">
+          {selectingStart ? '请选择开始日期' : '请选择结束日期'}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 p-3">
           <Button
             variant="ghost"
             size="sm"
@@ -115,13 +122,12 @@ export function TimeRangePicker({ value, onChange, placeholder = '选择时间�
               onChange({ from: '', to: '' });
               setSelectingStart(true);
               setCurrentFrom(undefined);
-              setCurrentTo(undefined);
               setOpen(false);
             }}
           >
             清空
           </Button>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -135,7 +141,6 @@ export function TimeRangePicker({ value, onChange, placeholder = '选择时间�
                 });
                 setSelectingStart(true);
                 setCurrentFrom(undefined);
-                setCurrentTo(undefined);
                 setOpen(false);
               }}
             >
@@ -154,7 +159,6 @@ export function TimeRangePicker({ value, onChange, placeholder = '选择时间�
                 });
                 setSelectingStart(true);
                 setCurrentFrom(undefined);
-                setCurrentTo(undefined);
                 setOpen(false);
               }}
             >

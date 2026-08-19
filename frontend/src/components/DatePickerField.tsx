@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -22,16 +22,18 @@ function toDateInputValue(date: Date) {
 }
 
 function parseDateInputValue(value?: string) {
-  if (!value) return undefined;
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
   const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return undefined;
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   const date = new Date(year, month - 1, day);
-  return Number.isNaN(date.getTime()) ? undefined : date;
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : undefined;
 }
 
 export function DatePickerField({ value, onChange, placeholder = '选择日期', allowClear = true }: DatePickerFieldProps) {
   const [open, setOpen] = useState(false);
   const selected = parseDateInputValue(value);
+  const hasInvalidValue = Boolean(value && !selected);
+  const displayText = selected ? format(selected, 'yyyy/MM/dd') : (hasInvalidValue ? '日期无效' : placeholder);
   const isMobile = useIsMobile();
 
   return (
@@ -39,6 +41,7 @@ export function DatePickerField({ value, onChange, placeholder = '选择日期',
       <PopoverTrigger asChild>
         <Button
           variant="outline"
+          aria-label={selected ? `${placeholder}：${displayText}` : (hasInvalidValue ? `${placeholder}：当前值无效，请重新选择` : placeholder)}
           className={cn(
             'justify-start text-left font-normal',
             isMobile ? 'h-11 min-h-[44px]' : 'h-9',
@@ -46,12 +49,12 @@ export function DatePickerField({ value, onChange, placeholder = '选择日期',
           )}
         >
           <CalendarIcon className={cn('mr-2', isMobile ? 'h-5 w-5' : 'h-4 w-4')} />
-          {value ? format(selected || new Date(), 'yyyy/MM/dd') : placeholder}
+          {displayText}
         </Button>
       </PopoverTrigger>
       <PopoverContent
         className={cn(
-          'p-0',
+          'max-h-[calc(100vh-1.5rem)] max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto border-[var(--panel-border)] bg-[var(--dropdown-bg)] p-0 text-[var(--text)] shadow-[var(--panel-shadow)]',
           isMobile ? 'w-[95vw]' : 'w-auto',
         )}
         align="start"
@@ -65,7 +68,7 @@ export function DatePickerField({ value, onChange, placeholder = '选择日期',
               setOpen(false);
             }
           }}
-          className={cn(isMobile && '[--cell-size:2.75rem]')}
+          style={isMobile ? ({ '--cell-size': 'min(2.25rem, calc((100vw - 3rem) / 7))' } as CSSProperties) : undefined}
         />
         <div className="flex items-center justify-between p-3 border-t">
           {allowClear && (

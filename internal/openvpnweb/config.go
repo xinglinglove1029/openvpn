@@ -3,6 +3,7 @@ package openvpnweb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -284,16 +285,30 @@ func initConfig() {
 	viper.SetDefault("database.max_idle_conns", 0)
 	viper.SetDefault("database.conn_max_lifetime_seconds", 0)
 
+	// A clean source checkout (including GitHub Actions) does not include the
+	// runtime data directory because it contains credentials and PKI material.
+	// Create it before asking Viper to write the first config file; otherwise
+	// SafeWriteConfig fails silently and ReadInConfig panics with "Config File
+	// config Not Found" during package initialization.
+	if err := os.MkdirAll(ovData, 0750); err != nil {
+		panic(fmt.Sprintf("create data directory %s: %v", ovData, err))
+	}
+
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
 	viper.SetConfigPermissions(0600)
 	viper.AddConfigPath(ovData)
 
-	viper.SafeWriteConfig()
+	if err := viper.SafeWriteConfig(); err != nil {
+		var alreadyExists viper.ConfigFileAlreadyExistsError
+		if !errors.As(err, &alreadyExists) {
+			panic(fmt.Sprintf("write initial config in %s: %v", ovData, err))
+		}
+	}
 
 	err = viper.ReadInConfig()
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("read config from %s: %v", ovData, err))
 	}
 
 	if !viper.IsSet("system.base.token") {
