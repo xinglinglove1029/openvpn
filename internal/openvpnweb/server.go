@@ -1485,7 +1485,9 @@ func Run(info BuildInfo) {
 				}
 
 				savedCount++
-				if k == "system.base.web_audit_enabled" {
+				if strings.HasPrefix(k, "system.base.web_audit_") {
+					// All domain-audit policies share one lifecycle so a live change
+					// always converges rules and never leaves a stale strict/block rule.
 					webAuditConfigChanged = true
 				}
 				val := vs[0]
@@ -1572,8 +1574,9 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			// The audit switch is hot-reloaded after persistence succeeds. Disabling closes
-			// both listeners and removes IPv4/IPv6 rules; enabling starts listeners first.
+			// Domain-audit settings are hot-reloaded after persistence succeeds. Disabling
+			// removes every feature-owned DNS/DoT/QUIC rule before returning; enabling
+			// binds DNS listeners to tun0 before any DNS redirect is installed.
 			if webAuditConfigChanged {
 				syncWebAuditDNS(context.Background(), &ov)
 			}

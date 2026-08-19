@@ -459,20 +459,26 @@ type WebsiteAccessRecentRecord struct {
 	ResponseCode string `json:"responseCode"`
 }
 type WebsiteAccessStatsResult struct {
-	Start         int64                       `json:"start"`
-	End           int64                       `json:"end"`
-	TotalQueries  int64                       `json:"totalQueries"`
-	ActiveUsers   int64                       `json:"activeUsers"`
-	UniqueDomains int64                       `json:"uniqueDomains"`
-	TopUsers      []WebsiteAccessTopItem      `json:"topUsers"`
-	TopDomains    []WebsiteAccessTopItem      `json:"topDomains"`
-	RecentRecords []WebsiteAccessRecentRecord `json:"recentRecords"`
-	Enabled       bool                        `json:"enabled"`
-	ListenerReady bool                        `json:"listenerReady"`
-	RedirectReady bool                        `json:"redirectReady"`
-	UpstreamDNS   []string                    `json:"upstreamDns"`
-	LastError     string                      `json:"lastError,omitempty"`
-	CoverageNote  string                      `json:"coverageNote"`
+	Start                   int64                       `json:"start"`
+	End                     int64                       `json:"end"`
+	TotalQueries            int64                       `json:"totalQueries"`
+	ActiveUsers             int64                       `json:"activeUsers"`
+	UniqueDomains           int64                       `json:"uniqueDomains"`
+	TopUsers                []WebsiteAccessTopItem      `json:"topUsers"`
+	TopDomains              []WebsiteAccessTopItem      `json:"topDomains"`
+	RecentRecords           []WebsiteAccessRecentRecord `json:"recentRecords"`
+	Enabled                 bool                        `json:"enabled"`
+	ListenerReady           bool                        `json:"listenerReady"`
+	RedirectReady           bool                        `json:"redirectReady"`
+	StrictDNSCaptureEnabled bool                        `json:"strictDnsCaptureEnabled"`
+	DoTBlockEnabled         bool                        `json:"dotBlockEnabled"`
+	UDP443BlockEnabled      bool                        `json:"udp443BlockEnabled"`
+	EventSource             string                      `json:"eventSource"`
+	UpstreamDNS             []string                    `json:"upstreamDns"`
+	LastError               string                      `json:"lastError,omitempty"`
+	CoverageNote            string                      `json:"coverageNote"`
+	DetectedGaps            []string                    `json:"detectedGaps"`
+	RecommendedActions      []string                    `json:"recommendedActions"`
 }
 
 // DashboardRisk 仪表盘风险项

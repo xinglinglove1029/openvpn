@@ -13,6 +13,9 @@ export interface SettingsResponse {
       renew_days: number;
       validate_client_config: boolean;
       web_audit_enabled: boolean;
+      web_audit_strict_dns: boolean;
+      web_audit_block_dot: boolean;
+      web_audit_block_udp_443: boolean;
     };
     ldap: {
       ldap_auth: boolean;
@@ -572,11 +575,25 @@ export interface WebsiteAuditStatus {
   ipv6ListenerReady: boolean;
   ipv4RedirectInstalled: boolean;
   ipv6RedirectInstalled: boolean;
+  strictDnsCaptureEnabled: boolean;
+  ipv4StrictDnsInstalled: boolean;
+  ipv6StrictDnsInstalled: boolean;
+  dotBlockEnabled: boolean;
+  ipv4DotBlockInstalled: boolean;
+  ipv6DotBlockInstalled: boolean;
+  udp443BlockEnabled: boolean;
+  ipv4Udp443BlockInstalled: boolean;
+  ipv6Udp443BlockInstalled: boolean;
   listenAddress: string;
   upstreamDns: string[];
   droppedAuditEvents: number;
+  droppedDnsRequests: number;
+  storageLimitReached: boolean;
+  ingressRestricted: boolean;
   lastError?: string;
   coverageNote: string;
+  detectedGaps: string[];
+  recommendedActions: string[];
 }
 
 export interface WebsiteAuditTopItem {

@@ -18,7 +18,6 @@ import (
 const (
 	webAuditDNSListenAddress4 = "0.0.0.0:5353"
 	webAuditDNSListenAddress6 = "[::]:5353"
-	webAuditDNSPort           = 5353
 	webAuditRequestQueueSize  = 256
 	webAuditAuditQueueSize    = 4096
 	webAuditRequestWorkers    = 24
@@ -40,21 +39,34 @@ const (
 )
 
 type WebAuditDNSStatus struct {
-	Enabled               bool     `json:"enabled"`
-	ListenerReady         bool     `json:"listenerReady"`     // IPv4 compatibility field.
-	RedirectInstalled     bool     `json:"redirectInstalled"` // IPv4 compatibility field.
-	IPv4ListenerReady     bool     `json:"ipv4ListenerReady"`
-	IPv6ListenerReady     bool     `json:"ipv6ListenerReady"`
-	IPv4RedirectInstalled bool     `json:"ipv4RedirectInstalled"`
-	IPv6RedirectInstalled bool     `json:"ipv6RedirectInstalled"`
-	ListenAddress         string   `json:"listenAddress"`
-	UpstreamDNS           []string `json:"upstreamDns"`
-	DroppedAuditEvents    uint64   `json:"droppedAuditEvents"`
-	DroppedDNSRequests    uint64   `json:"droppedDnsRequests"`
-	StorageLimitReached   bool     `json:"storageLimitReached"`
-	IngressRestricted     bool     `json:"ingressRestricted"`
-	LastError             string   `json:"lastError,omitempty"`
-	CoverageNote          string   `json:"coverageNote"`
+	Enabled               bool `json:"enabled"`
+	ListenerReady         bool `json:"listenerReady"`     // IPv4 compatibility field.
+	RedirectInstalled     bool `json:"redirectInstalled"` // IPv4 compatibility field.
+	IPv4ListenerReady     bool `json:"ipv4ListenerReady"`
+	IPv6ListenerReady     bool `json:"ipv6ListenerReady"`
+	IPv4RedirectInstalled bool `json:"ipv4RedirectInstalled"`
+	IPv6RedirectInstalled bool `json:"ipv6RedirectInstalled"`
+	// Strict DNS captures every ordinary UDP/TCP 53 request arriving on tun0.
+	StrictDNSCaptureEnabled bool `json:"strictDnsCaptureEnabled"`
+	IPv4StrictDNSInstalled  bool `json:"ipv4StrictDnsInstalled"`
+	IPv6StrictDNSInstalled  bool `json:"ipv6StrictDnsInstalled"`
+	// Optional egress blocks are only active while the audit service is active.
+	DoTBlockEnabled          bool     `json:"dotBlockEnabled"`
+	IPv4DoTBlockInstalled    bool     `json:"ipv4DotBlockInstalled"`
+	IPv6DoTBlockInstalled    bool     `json:"ipv6DotBlockInstalled"`
+	UDP443BlockEnabled       bool     `json:"udp443BlockEnabled"`
+	IPv4UDP443BlockInstalled bool     `json:"ipv4Udp443BlockInstalled"`
+	IPv6UDP443BlockInstalled bool     `json:"ipv6Udp443BlockInstalled"`
+	ListenAddress            string   `json:"listenAddress"`
+	UpstreamDNS              []string `json:"upstreamDns"`
+	DroppedAuditEvents       uint64   `json:"droppedAuditEvents"`
+	DroppedDNSRequests       uint64   `json:"droppedDnsRequests"`
+	StorageLimitReached      bool     `json:"storageLimitReached"`
+	IngressRestricted        bool     `json:"ingressRestricted"`
+	LastError                string   `json:"lastError,omitempty"`
+	CoverageNote             string   `json:"coverageNote"`
+	DetectedGaps             []string `json:"detectedGaps"`
+	RecommendedActions       []string `json:"recommendedActions"`
 }
 
 type auditClientIdentity struct {
@@ -111,20 +123,22 @@ type webAuditDNSService struct {
 	ov *ovpn
 	mu sync.RWMutex
 
-	run                  *webAuditDNSRun
-	clients              map[string]auditClientIdentity
-	status               WebAuditDNSStatus
-	rate                 map[string]auditRateBucket
-	forwardRate          map[string]forwardRateBucket
-	forwardGlobal        forwardRateBucket
-	auditMinute          int64
-	auditCount           int
-	storedAuditRows      int64
-	storageCheckedMinute int64
-	storageInitialized   bool
-	forwardFailureStreak int
-	lastErrorIsForward   bool
-	recoveryScheduled    bool
+	run                    *webAuditDNSRun
+	clients                map[string]auditClientIdentity
+	status                 WebAuditDNSStatus
+	rate                   map[string]auditRateBucket
+	forwardRate            map[string]forwardRateBucket
+	forwardGlobal          forwardRateBucket
+	auditMinute            int64
+	auditCount             int
+	storedAuditRows        int64
+	storageCheckedMinute   int64
+	storageInitialized     bool
+	storageMu              sync.Mutex
+	startRecoveryScheduled bool
+	forwardFailureStreak   int
+	lastErrorIsForward     bool
+	recoveryScheduled      bool
 }
 
 var webAuditDNSLifecycleMu sync.Mutex
@@ -169,6 +183,8 @@ func getWebAuditDNSStatus() WebAuditDNSStatus {
 	defer webAuditDNS.mu.RUnlock()
 	s := webAuditDNS.status
 	s.UpstreamDNS = append([]string(nil), s.UpstreamDNS...)
+	s.DetectedGaps = append([]string(nil), s.DetectedGaps...)
+	s.RecommendedActions = append([]string(nil), s.RecommendedActions...)
 	return s
 }
 
@@ -183,23 +199,67 @@ func (s *webAuditDNSService) setError(err error) {
 }
 
 func (s *webAuditDNSService) updateCoverageLocked() {
-	base := "仅记录经 VPN 隧道的普通 DNS 查询；不会解密 HTTPS 或记录 URL、网页内容、Cookie、凭据或 DNS 响应内容。DoH、DoT、QUIC DNS、应用内解析及绕过 VPN 的请求不会被记录。"
-	if !s.status.IngressRestricted {
-		s.status.CoverageNote = base + " DNS 监听入口防护未就绪，因此不会截获任何 DNS 流量。"
-		return
+	const privacyBoundary = "仅记录经 VPN 隧道的访问域名元数据；不会解密 HTTPS，也不会记录 URL 路径、网页内容、Cookie、凭据或 DNS 响应内容。"
+	gaps := make([]string, 0, 8)
+	actions := make([]string, 0, 5)
+
+	if !s.status.Enabled {
+		gaps = append(gaps, "网站域名审计未启用，因此不会记录任何访问域名。")
+		actions = append(actions, "在系统设置中启用网站访问域名审计后，服务会先将监听套接字绑定到 tun0，再安装 DNS 重定向。")
 	}
-	if s.status.IPv6ListenerReady && s.status.IPv6RedirectInstalled {
-		s.status.CoverageNote = base + " IPv4 与 IPv6 的普通 UDP/TCP DNS 重定向均已就绪；5353 端口仅允许 tun0 入站。"
-		return
+	if s.status.Enabled && !s.status.IngressRestricted {
+		gaps = append(gaps, "DNS 监听未能绑定到 tun0，服务已故障开放，不会截获 DNS 流量。")
+		actions = append(actions, "检查 tun0 是否存在、容器是否具备绑定接口的权限以及 5353 端口占用；修复后重新保存审计设置。")
 	}
-	if s.status.IPv6ListenerReady {
-		s.status.CoverageNote = base + " IPv6 本地监听已就绪，但 ip6tables REDIRECT 未就绪；IPv6 普通 DNS 当前不审计。5353 端口仅允许 tun0 入站。"
-		return
+	if s.status.Enabled && !s.status.IPv4RedirectInstalled {
+		gaps = append(gaps, "IPv4 普通 DNS 重定向未就绪，IPv4 DNS 当前不审计。")
 	}
-	s.status.CoverageNote = base + " IPv6 UDP/TCP DNS 截获未启用或不可用；IPv6 普通 DNS 当前不审计。5353 端口仅允许 tun0 入站。"
+	if s.status.Enabled && !s.status.IPv6RedirectInstalled {
+		gaps = append(gaps, "IPv6 DNS 截获未就绪或未启用，IPv6 普通 DNS 当前不审计。")
+	}
+	if s.status.Enabled && !s.status.StrictDNSCaptureEnabled {
+		gaps = append(gaps, "当前仅截获下发 DNS 服务器的普通 DNS 请求；客户端硬编码其他 DNS 地址可绕过。")
+		actions = append(actions, "如需提高普通 DNS 覆盖率，可启用“严格普通 DNS 捕获”；该策略仅影响 tun0 的 TCP/UDP 53。")
+	}
+	if s.status.Enabled && !s.status.DoTBlockEnabled {
+		gaps = append(gaps, "TCP/853 的加密 DNS（DoT）未阻断，客户端可通过 DoT 绕过普通 DNS 审计。")
+		actions = append(actions, "如需减少 DoT 绕过，可启用“阻断 DoT (TCP/853)”；规则只作用于 tun0。")
+	}
+	if s.status.Enabled && !s.status.UDP443BlockEnabled {
+		gaps = append(gaps, "HTTP/3/QUIC（UDP/443）可能绕过域名审计。")
+		actions = append(actions, "可选启用“阻断 UDP/443 以回退 TCP/TLS”，但会影响 HTTP/3 性能。")
+	}
+	if s.status.Enabled {
+		gaps = append(gaps, "DoH（TCP/443）、浏览器 DNS 缓存和应用内解析仍可能导致域名漏记；DoH 不能按 TCP/443 一律阻断。")
+	}
+	if s.status.Enabled && s.status.DoTBlockEnabled && !s.status.IPv4DoTBlockInstalled {
+		gaps = append(gaps, "已请求阻断 DoT，但 IPv4 阻断规则未就绪；服务不会为审计阻断 VPN 基本流量。")
+	}
+	if s.status.Enabled && s.status.UDP443BlockEnabled && !s.status.IPv4UDP443BlockInstalled {
+		gaps = append(gaps, "已请求 UDP/443 回退，但 IPv4 阻断规则未就绪；服务已保持故障开放。")
+	}
+	if s.status.DroppedAuditEvents > 0 || s.status.DroppedDNSRequests > 0 {
+		gaps = append(gaps, "审计队列或存储限流曾发生丢弃，DNS 转发不会因此被阻塞，但部分域名事件可能缺失。")
+		actions = append(actions, "检查数据库性能、审计容量和客户端请求量。")
+	}
+	if s.status.LastError != "" {
+		actions = append(actions, "查看“最后错误”并修复环境后保存设置或重启服务协调规则。")
+	}
+	if len(gaps) == 0 {
+		gaps = append(gaps, "普通 DNS 截获已就绪；仍无法获取 HTTPS URL、页面内容或使用 DoH/缓存/应用内解析时的全部域名。")
+	}
+	if len(actions) == 0 {
+		actions = append(actions, "审计结果是访问域名元数据，不是完整网页浏览记录。")
+	}
+	s.status.DetectedGaps = gaps
+	s.status.RecommendedActions = actions
+	s.status.CoverageNote = privacyBoundary + " " + strings.Join(gaps, " ")
 }
 
-func webAuditEnabled() bool { return viper.GetBool("system.base.web_audit_enabled") }
+func webAuditEnabled() bool     { return viper.GetBool("system.base.web_audit_enabled") }
+func webAuditStrictDNS() bool   { return viper.GetBool("system.base.web_audit_strict_dns") }
+func webAuditBlockDoT() bool    { return viper.GetBool("system.base.web_audit_block_dot") }
+func webAuditBlockUDP443() bool { return viper.GetBool("system.base.web_audit_block_udp_443") }
 
 func configuredDNSUpstreams() []string {
 	values := []string{strings.TrimSpace(viper.GetString("openvpn.ovpn_push_dns1")), strings.TrimSpace(viper.GetString("openvpn.ovpn_push_dns2"))}
@@ -248,7 +308,14 @@ func reconcileWebAuditDNSConfig() {
 	}
 	wantedEnabled := webAuditEnabled()
 	wantedUpstreams := configuredDNSUpstreams()
-	if wantedEnabled && run != nil && status.Enabled && status.RedirectInstalled && equalStringSlices(status.UpstreamDNS, wantedUpstreams) {
+	wantedStrictDNS := webAuditStrictDNS()
+	wantedDoTBlock := webAuditBlockDoT()
+	wantedUDP443Block := webAuditBlockUDP443()
+	if wantedEnabled && run != nil && status.Enabled && status.RedirectInstalled &&
+		equalStringSlices(status.UpstreamDNS, wantedUpstreams) &&
+		status.StrictDNSCaptureEnabled == wantedStrictDNS &&
+		status.DoTBlockEnabled == wantedDoTBlock &&
+		status.UDP443BlockEnabled == wantedUDP443Block {
 		return
 	}
 	if !wantedEnabled && run == nil && !status.Enabled {
@@ -270,6 +337,13 @@ func equalStringSlices(left, right []string) bool {
 }
 
 func startWebAuditDNS(ctx context.Context, ov *ovpn) {
+	// Remember the OpenVPN runtime before binding sockets. A service that starts
+	// before tun0 exists can then retry safely once the interface is ready.
+	if ov != nil {
+		webAuditDNS.mu.Lock()
+		webAuditDNS.ov = ov
+		webAuditDNS.mu.Unlock()
+	}
 	if !webAuditEnabled() {
 		stopWebAuditDNS()
 		return
@@ -280,11 +354,20 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		webAuditDNS.mu.Lock()
 		webAuditDNS.status.Enabled = true
 		webAuditDNS.status.UpstreamDNS = nil
+		webAuditDNS.status.StrictDNSCaptureEnabled = webAuditStrictDNS()
+		webAuditDNS.status.IPv4StrictDNSInstalled = false
+		webAuditDNS.status.IPv6StrictDNSInstalled = false
+		webAuditDNS.status.DoTBlockEnabled = webAuditBlockDoT()
+		webAuditDNS.status.IPv4DoTBlockInstalled = false
+		webAuditDNS.status.IPv6DoTBlockInstalled = false
+		webAuditDNS.status.UDP443BlockEnabled = webAuditBlockUDP443()
+		webAuditDNS.status.IPv4UDP443BlockInstalled = false
+		webAuditDNS.status.IPv6UDP443BlockInstalled = false
 		webAuditDNS.status.LastError = "未配置有效上游 DNS，DNS 审计不会截获流量"
 		webAuditDNS.updateCoverageLocked()
 		webAuditDNS.mu.Unlock()
 		_ = webAuditDNS.ensureRedirect(false)
-		_ = webAuditDNS.ensureIngressGuard(false)
+		_ = webAuditDNS.ensureEgressBlocks(false)
 		return
 	}
 
@@ -296,21 +379,19 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		tcpSem:   make(chan struct{}, webAuditTCPMaxConnections),
 	}
 
-	udp4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: webAuditDNSPort})
+	udp4, err := listenWebAuditUDP(ctx, "udp4", webAuditDNSListenAddress4)
 	if err != nil {
 		cancel()
 		webAuditDNS.setStartFailure(fmt.Errorf("DNS IPv4 UDP 监听失败: %w", err), upstreams)
 		_ = webAuditDNS.ensureRedirect(false)
-		_ = webAuditDNS.ensureIngressGuard(false)
 		return
 	}
-	tcp4, err := net.Listen("tcp4", webAuditDNSListenAddress4)
+	tcp4, err := listenWebAuditTCP(ctx, "tcp4", webAuditDNSListenAddress4)
 	if err != nil {
 		_ = udp4.Close()
 		cancel()
 		webAuditDNS.setStartFailure(fmt.Errorf("DNS IPv4 TCP 监听失败: %w", err), upstreams)
 		_ = webAuditDNS.ensureRedirect(false)
-		_ = webAuditDNS.ensureIngressGuard(false)
 		return
 	}
 	run.udp4, run.tcp4 = udp4, tcp4
@@ -318,9 +399,9 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	// IPv6 is optional and independently fail-open. A host without IPv6 or
 	// ip6tables still receives working IPv4 DNS and explicitly reports the gap.
 	var ipv6Err error
-	if udp6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: webAuditDNSPort}); err == nil {
+	if udp6, err := listenWebAuditUDP(ctx, "udp6", webAuditDNSListenAddress6); err == nil {
 		run.udp6 = udp6
-		if tcp6, err := net.Listen("tcp6", webAuditDNSListenAddress6); err == nil {
+		if tcp6, err := listenWebAuditTCP(ctx, "tcp6", webAuditDNSListenAddress6); err == nil {
 			run.tcp6 = tcp6
 		} else {
 			ipv6Err = fmt.Errorf("DNS IPv6 TCP 监听失败: %w", err)
@@ -357,6 +438,15 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	webAuditDNS.status.IPv4RedirectInstalled = false
 	webAuditDNS.status.RedirectInstalled = false
 	webAuditDNS.status.IPv6RedirectInstalled = false
+	webAuditDNS.status.StrictDNSCaptureEnabled = webAuditStrictDNS()
+	webAuditDNS.status.IPv4StrictDNSInstalled = false
+	webAuditDNS.status.IPv6StrictDNSInstalled = false
+	webAuditDNS.status.DoTBlockEnabled = webAuditBlockDoT()
+	webAuditDNS.status.IPv4DoTBlockInstalled = false
+	webAuditDNS.status.IPv6DoTBlockInstalled = false
+	webAuditDNS.status.UDP443BlockEnabled = webAuditBlockUDP443()
+	webAuditDNS.status.IPv4UDP443BlockInstalled = false
+	webAuditDNS.status.IPv6UDP443BlockInstalled = false
 	webAuditDNS.status.DroppedAuditEvents = 0
 	webAuditDNS.status.DroppedDNSRequests = 0
 	webAuditDNS.status.StorageLimitReached = false
@@ -369,13 +459,16 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	webAuditDNS.updateCoverageLocked()
 	webAuditDNS.mu.Unlock()
 
-	// Linux REDIRECT retains the local tunnel destination, so the proxy must
-	// bind all local addresses instead of loopback. Install INPUT protection
-	// before serving or redirecting so port 5353 never becomes an open relay.
-	if err := webAuditDNS.ensureIngressGuard(true); err != nil {
-		webAuditDNS.listenerUnavailable(run, false, fmt.Errorf("DNS 监听入口防护安装失败: %w", err))
-		return
+	// Linux REDIRECT retains the local tunnel destination, so the proxy binds
+	// its UDP/TCP sockets to tun0 before any redirect is installed. That keeps
+	// 5353 unavailable on host and Docker bridge interfaces without broad
+	// non-tun0 firewall rules.
+	webAuditDNS.mu.Lock()
+	if webAuditDNS.run == run {
+		webAuditDNS.status.IngressRestricted = true
+		webAuditDNS.updateCoverageLocked()
 	}
+	webAuditDNS.mu.Unlock()
 	for i := 0; i < webAuditRequestWorkers; i++ {
 		go webAuditDNS.udpWorker(run)
 	}
@@ -392,6 +485,14 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	if err := webAuditDNS.ensureRedirect(true); err != nil {
 		webAuditDNS.setError(err)
 		webAuditDNS.scheduleRedirectRecovery(run)
+		return
+	}
+	// Optional DoT/QUIC policies are installed only after the DNS listener and
+	// ingress guard are ready. A failure rolls back that policy and keeps VPN
+	// traffic fail-open; it never blocks the OpenVPN service itself.
+	if err := webAuditDNS.ensureEgressBlocks(true); err != nil {
+		webAuditDNS.setError(err)
+		webAuditDNS.scheduleRedirectRecovery(run)
 	}
 }
 
@@ -404,10 +505,46 @@ func (s *webAuditDNSService) setStartFailure(err error, upstreams []string) {
 	s.status.IPv4RedirectInstalled = false
 	s.status.IPv6ListenerReady = false
 	s.status.IPv6RedirectInstalled = false
+	s.status.StrictDNSCaptureEnabled = webAuditStrictDNS()
+	s.status.IPv4StrictDNSInstalled = false
+	s.status.IPv6StrictDNSInstalled = false
+	s.status.DoTBlockEnabled = webAuditBlockDoT()
+	s.status.IPv4DoTBlockInstalled = false
+	s.status.IPv6DoTBlockInstalled = false
+	s.status.UDP443BlockEnabled = webAuditBlockUDP443()
+	s.status.IPv4UDP443BlockInstalled = false
+	s.status.IPv6UDP443BlockInstalled = false
 	s.status.UpstreamDNS = append([]string(nil), upstreams...)
 	s.status.LastError = err.Error()
 	s.updateCoverageLocked()
 	s.mu.Unlock()
+	s.scheduleStartRecovery()
+}
+
+// scheduleStartRecovery retries a startup that raced tun0 creation or a
+// transient port conflict. It is deliberately serialized and bounded to one
+// pending retry; any repeated failure schedules the next attempt after it runs.
+func (s *webAuditDNSService) scheduleStartRecovery() {
+	s.mu.Lock()
+	if s.startRecoveryScheduled || s.run != nil || s.ov == nil || !webAuditEnabled() {
+		s.mu.Unlock()
+		return
+	}
+	s.startRecoveryScheduled = true
+	s.mu.Unlock()
+	go func() {
+		time.Sleep(5 * time.Second)
+		webAuditDNSLifecycleMu.Lock()
+		defer webAuditDNSLifecycleMu.Unlock()
+		s.mu.Lock()
+		s.startRecoveryScheduled = false
+		ov := s.ov
+		shouldRetry := webAuditEnabled() && s.run == nil && ov != nil
+		s.mu.Unlock()
+		if shouldRetry {
+			startWebAuditDNS(context.Background(), ov)
+		}
+	}()
 }
 
 func closeWebAuditDNSRun(run *webAuditDNSRun) {
@@ -445,6 +582,7 @@ func stopWebAuditDNS() {
 	webAuditDNS.forwardFailureStreak = 0
 	webAuditDNS.lastErrorIsForward = false
 	webAuditDNS.recoveryScheduled = false
+	webAuditDNS.startRecoveryScheduled = false
 	upstreams := append([]string(nil), webAuditDNS.status.UpstreamDNS...)
 	webAuditDNS.status.Enabled = false
 	webAuditDNS.status.ListenerReady = false
@@ -453,6 +591,15 @@ func stopWebAuditDNS() {
 	webAuditDNS.status.IPv4RedirectInstalled = false
 	webAuditDNS.status.IPv6ListenerReady = false
 	webAuditDNS.status.IPv6RedirectInstalled = false
+	webAuditDNS.status.StrictDNSCaptureEnabled = false
+	webAuditDNS.status.IPv4StrictDNSInstalled = false
+	webAuditDNS.status.IPv6StrictDNSInstalled = false
+	webAuditDNS.status.DoTBlockEnabled = false
+	webAuditDNS.status.IPv4DoTBlockInstalled = false
+	webAuditDNS.status.IPv6DoTBlockInstalled = false
+	webAuditDNS.status.UDP443BlockEnabled = false
+	webAuditDNS.status.IPv4UDP443BlockInstalled = false
+	webAuditDNS.status.IPv6UDP443BlockInstalled = false
 	webAuditDNS.status.DroppedAuditEvents = 0
 	webAuditDNS.status.DroppedDNSRequests = 0
 	webAuditDNS.status.StorageLimitReached = false
@@ -465,7 +612,7 @@ func stopWebAuditDNS() {
 	// Always remove rules, including rules for the previous DNS servers. Snapshot
 	// them before clearing status so a config change cannot leave old interception.
 	_ = webAuditDNS.ensureRedirectWithUpstreams(false, upstreams)
-	_ = webAuditDNS.ensureIngressGuard(false)
+	_ = webAuditDNS.ensureEgressBlocks(false)
 }
 
 func (s *webAuditDNSService) isCurrentRun(run *webAuditDNSRun) bool {
@@ -475,6 +622,10 @@ func (s *webAuditDNSService) isCurrentRun(run *webAuditDNSRun) bool {
 }
 
 func (s *webAuditDNSService) listenerUnavailable(run *webAuditDNSRun, ipv6 bool, err error) {
+	if ipv6 {
+		s.listenerIPv6Unavailable(run, err)
+		return
+	}
 	run.failureOnce.Do(func() {
 		s.mu.Lock()
 		if s.run != run {
@@ -494,6 +645,12 @@ func (s *webAuditDNSService) listenerUnavailable(run *webAuditDNSRun, ipv6 bool,
 		s.status.RedirectInstalled = false
 		s.status.IPv6ListenerReady = false
 		s.status.IPv6RedirectInstalled = false
+		s.status.IPv4StrictDNSInstalled = false
+		s.status.IPv6StrictDNSInstalled = false
+		s.status.IPv4DoTBlockInstalled = false
+		s.status.IPv6DoTBlockInstalled = false
+		s.status.IPv4UDP443BlockInstalled = false
+		s.status.IPv6UDP443BlockInstalled = false
 		s.status.IngressRestricted = false
 		s.status.LastError = err.Error()
 		s.updateCoverageLocked()
@@ -501,7 +658,7 @@ func (s *webAuditDNSService) listenerUnavailable(run *webAuditDNSRun, ipv6 bool,
 
 		closeWebAuditDNSRun(run)
 		_ = s.ensureRedirectWithUpstreams(false, upstreams)
-		_ = s.ensureIngressGuard(false)
+		_ = s.ensureEgressBlocks(false)
 		// Never retain a broken interception path. Retry asynchronously so a transient
 		// listener failure can self-heal without blocking OpenVPN or DNS clients.
 		go func() {
@@ -516,6 +673,38 @@ func (s *webAuditDNSService) listenerUnavailable(run *webAuditDNSRun, ipv6 bool,
 			}
 		}()
 	})
+}
+
+// listenerIPv6Unavailable keeps the independently healthy IPv4 path alive.
+// IPv6 is optional, so only its feature-owned redirect and optional blocks are
+// removed when its listening sockets fail.
+func (s *webAuditDNSService) listenerIPv6Unavailable(run *webAuditDNSRun, err error) {
+	s.mu.Lock()
+	if s.run != run || (run.udp6 == nil && run.tcp6 == nil) {
+		s.mu.Unlock()
+		return
+	}
+	udp6, tcp6 := run.udp6, run.tcp6
+	run.udp6, run.tcp6 = nil, nil
+	upstreams := append([]string(nil), s.status.UpstreamDNS...)
+	strict := s.status.StrictDNSCaptureEnabled
+	s.status.IPv6ListenerReady = false
+	s.status.IPv6RedirectInstalled = false
+	s.status.IPv6StrictDNSInstalled = false
+	s.status.IPv6DoTBlockInstalled = false
+	s.status.IPv6UDP443BlockInstalled = false
+	s.status.LastError = err.Error()
+	s.updateCoverageLocked()
+	s.mu.Unlock()
+	if udp6 != nil {
+		_ = udp6.Close()
+	}
+	if tcp6 != nil {
+		_ = tcp6.Close()
+	}
+	_ = s.ensureRedirectFamily(false, true, upstreams, strict)
+	_ = s.ensureEgressBlockFamily(false, true, webAuditDoTBlockComment)
+	_ = s.ensureEgressBlockFamily(false, true, webAuditQUICBlockComment)
 }
 
 func (s *webAuditDNSService) serveUDP(run *webAuditDNSRun, conn *net.UDPConn, ipv6 bool) {
@@ -730,6 +919,11 @@ func (s *webAuditDNSService) noteDroppedDNSRequest(run *webAuditDNSRun) {
 // reserveAuditStorage periodically refreshes an exact row count and reserves one
 // slot before insert. Reaching the quota drops only audit metadata, never DNS.
 func (s *webAuditDNSService) reserveAuditStorage(run *webAuditDNSRun) bool {
+	// Count refresh and slot reservation must be one critical section. Two
+	// audit workers otherwise can overwrite a newer reservation with a stale DB
+	// count and exceed the advertised cap.
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
 	minute := time.Now().Unix() / 60
 	s.mu.Lock()
 	if s.run != run {
@@ -796,6 +990,10 @@ func (s *webAuditDNSService) scheduleRedirectRecovery(run *webAuditDNSRun) {
 			}
 			if err := s.ensureRedirectWithUpstreams(true, upstreams); err != nil {
 				s.setError(fmt.Errorf("恢复 DNS 审计重定向失败: %w", err))
+				continue
+			}
+			if err := s.ensureEgressBlocks(true); err != nil {
+				s.setError(fmt.Errorf("恢复域名审计策略失败: %w", err))
 				continue
 			}
 			s.noteForwardSuccess()
@@ -872,6 +1070,7 @@ func (s *webAuditDNSService) noteForwardFailure(run *webAuditDNSRun, err error) 
 	s.mu.Unlock()
 	if remove {
 		_ = s.ensureRedirectWithUpstreams(false, upstreams)
+		_ = s.ensureEgressBlocks(false)
 		s.scheduleRedirectRecovery(run)
 	}
 }
@@ -931,7 +1130,9 @@ func (s *webAuditDNSService) auditWorker(run *webAuditDNSRun) {
 			}
 			entry := WebsiteAccessLog{UserID: event.Identity.UserID, Username: event.Identity.Username, CommonName: event.Identity.CommonName, ConnectionID: event.Identity.ConnectionID, VPNIP: event.VPNIP, Domain: event.Domain, QueryType: event.QueryType, ResponseCode: event.ResponseCode, QueriedAt: event.QueriedAt}
 			if err := db.Create(&entry).Error; err != nil {
-				s.setError(fmt.Errorf("保存 DNS 审计失败: %w", err))
+				// Storage is part of the audit path. Do not continue optional
+				// blocking policies while events cannot be persisted.
+				s.listenerUnavailable(run, false, fmt.Errorf("保存 DNS 审计失败: %w", err))
 			}
 		}
 	}
@@ -1200,14 +1401,154 @@ func preferredAuditIPTables(ipv6 bool) (string, error) {
 	return "", fmt.Errorf("未找到可用的 %s，DNS 审计不会截获该协议族流量", base)
 }
 
-func auditIngressGuardRules() [][]string {
-	return [][]string{
-		{"INPUT", "!", "-i", "tun0", "-p", "udp", "--dport", "5353", "-j", "DROP"},
-		{"INPUT", "!", "-i", "tun0", "-p", "tcp", "--dport", "5353", "-j", "DROP"},
+const (
+	webAuditRuleCommentPrefix = "openvpn-web:web-audit:"
+	webAuditRedirectComment   = webAuditRuleCommentPrefix + "dns-redirect"
+	webAuditDoTBlockComment   = webAuditRuleCommentPrefix + "dot-block"
+	webAuditQUICBlockComment  = webAuditRuleCommentPrefix + "quic-block"
+)
+
+func auditRedirectRules(ipv6 bool, upstreams []string, strict ...bool) [][]string {
+	strictCapture := len(strict) > 0 && strict[0]
+	protos := []string{"udp", "tcp"}
+	if strictCapture {
+		rules := make([][]string, 0, len(protos))
+		for _, proto := range protos {
+			rules = append(rules, []string{"PREROUTING", "-i", "tun0", "-p", proto, "-m", "comment", "--comment", webAuditRedirectComment, "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"})
+		}
+		return rules
+	}
+	rules := make([][]string, 0, len(upstreams)*len(protos))
+	for _, upstream := range upstreams {
+		ip := net.ParseIP(upstream)
+		if ip == nil || (ip.To4() == nil) == !ipv6 {
+			continue
+		}
+		for _, proto := range protos {
+			rules = append(rules, []string{"PREROUTING", "-i", "tun0", "-p", proto, "-m", "comment", "--comment", webAuditRedirectComment, "-d", upstream, "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"})
+		}
+	}
+	return rules
+}
+
+func auditEgressBlockRules(kind string) [][]string {
+	switch kind {
+	case webAuditDoTBlockComment:
+		return [][]string{{"FORWARD", "-i", "tun0", "-p", "tcp", "-m", "comment", "--comment", webAuditDoTBlockComment, "--dport", "853", "-j", "REJECT", "--reject-with", "tcp-reset"}}
+	case webAuditQUICBlockComment:
+		// REJECT is intentional: browsers can immediately fall back to TCP/TLS.
+		// The rule remains tun0-only and is never enabled by default.
+		return [][]string{{"FORWARD", "-i", "tun0", "-p", "udp", "-m", "comment", "--comment", webAuditQUICBlockComment, "--dport", "443", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"}}
+	default:
+		return nil
 	}
 }
 
-func (s *webAuditDNSService) ensureIngressGuardFamily(enable, ipv6 bool) error {
+func auditRuleValue(fields []string, option string) string {
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == option {
+			return strings.Trim(fields[i+1], "\\\"")
+		}
+	}
+	return ""
+}
+
+func auditRuleHas(fields []string, value string) bool {
+	for _, field := range fields {
+		if strings.Trim(field, "\\\"") == value {
+			return true
+		}
+	}
+	return false
+}
+
+func auditRuleArgs(line, chain, comment string) ([]string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != "-A" || fields[1] != chain || !auditRuleHas(fields, comment) {
+		return nil, false
+	}
+	return append([]string{chain}, fields[2:]...), true
+}
+
+// auditRedirectRuleArgs recognizes only comment-owned redirects. The legacy
+// signature is handled separately during controlled upgrade cleanup so an
+// unrelated future tun0 DNS redirect is not accidentally removed.
+func auditRedirectRuleArgs(line string) ([]string, bool) {
+	rule, ok := auditRuleArgs(line, "PREROUTING", webAuditRedirectComment)
+	if !ok || auditRuleValue(rule, "-i") != "tun0" || (auditRuleValue(rule, "-p") != "udp" && auditRuleValue(rule, "-p") != "tcp") || auditRuleValue(rule, "--dport") != "53" || auditRuleValue(rule, "-j") != "REDIRECT" || auditRuleValue(rule, "--to-ports") != "5353" {
+		return nil, false
+	}
+	return rule, true
+}
+
+func auditEgressBlockRuleArgs(line, comment, proto, port string) ([]string, bool) {
+	rule, ok := auditRuleArgs(line, "FORWARD", comment)
+	if !ok || auditRuleValue(rule, "-i") != "tun0" || auditRuleValue(rule, "-p") != proto || auditRuleValue(rule, "--dport") != port || auditRuleValue(rule, "-j") != "REJECT" {
+		return nil, false
+	}
+	return rule, true
+}
+
+type auditRuleParser func(string) ([]string, bool)
+
+func discoverAuditRules(ipt, table, chain string, parse auditRuleParser) [][]string {
+	out, err := exec.Command(ipt, "-t", table, "-S", chain).Output()
+	if err != nil {
+		return nil
+	}
+	rules := make([][]string, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		if rule, ok := parse(line); ok {
+			rules = append(rules, rule)
+		}
+	}
+	return rules
+}
+
+func discoverAuditRedirectRules(ipt string) [][]string {
+	return discoverAuditRules(ipt, "nat", "PREROUTING", auditRedirectRuleArgs)
+}
+
+func ruleKey(rule []string) string { return strings.Join(rule, "\x00") }
+
+// reconcileAuditRules calculates convergence before commands are executed. It
+// is kept pure so unit tests can prove strict->normal->disabled transitions do
+// not retain a broader tun0 rule.
+func reconcileAuditRules(current, desired [][]string) (remove, add [][]string) {
+	desiredByKey := make(map[string][]string, len(desired))
+	for _, rule := range desired {
+		desiredByKey[ruleKey(rule)] = rule
+	}
+	currentByKey := make(map[string]struct{}, len(current))
+	for _, rule := range current {
+		key := ruleKey(rule)
+		currentByKey[key] = struct{}{}
+		if _, ok := desiredByKey[key]; !ok {
+			remove = append(remove, rule)
+		}
+	}
+	for key, rule := range desiredByKey {
+		if _, ok := currentByKey[key]; !ok {
+			add = append(add, rule)
+		}
+	}
+	return remove, add
+}
+
+func runAuditRuleCommand(ipt, table, operation string, rule []string) error {
+	args := append([]string{"-t", table, operation}, rule...)
+	out, err := exec.Command(ipt, args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(string(out))
+	if message == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, message)
+}
+
+func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
 	ipt, err := preferredAuditIPTables(ipv6)
 	if err != nil {
 		if !enable {
@@ -1215,31 +1556,65 @@ func (s *webAuditDNSService) ensureIngressGuardFamily(enable, ipv6 bool) error {
 		}
 		return err
 	}
-	for _, rule := range auditIngressGuardRules() {
-		check := append([]string{"-t", "filter", "-C"}, rule...)
-		exists := exec.Command(ipt, check...).Run() == nil
-		if enable && !exists {
-			add := append([]string{"-t", "filter", "-I"}, rule...)
-			if out, err := exec.Command(ipt, add...).CombinedOutput(); err != nil {
-				return fmt.Errorf("安装 DNS %s 入口防护失败: %s", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], strings.TrimSpace(string(out)))
+	current := discoverAuditRules(ipt, table, desiredChain(desired), parse)
+	if !enable {
+		desired = nil
+	}
+	remove, add := reconcileAuditRules(current, desired)
+	seen := make(map[string]struct{}, len(remove)+len(add))
+	for _, rule := range remove {
+		key := ruleKey(rule)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		_ = runAuditRuleCommand(ipt, table, "-D", rule)
+	}
+	added := make([][]string, 0, len(add))
+	for _, rule := range add {
+		if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
+			continue
+		}
+		if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
+			for _, installed := range added {
+				_ = runAuditRuleCommand(ipt, table, "-D", installed)
 			}
+			return fmt.Errorf("安装 %s 网站审计规则失败: %w", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], err)
 		}
-		if !enable && exists {
-			del := append([]string{"-t", "filter", "-D"}, rule...)
-			_ = exec.Command(ipt, del...).Run()
-		}
+		added = append(added, rule)
 	}
 	return nil
 }
 
-func (s *webAuditDNSService) ensureIngressGuard(enable bool) error {
+func desiredChain(desired [][]string) string {
+	if len(desired) > 0 && len(desired[0]) > 0 {
+		return desired[0][0]
+	}
+	// Every caller supplies a stable rule template, including during cleanup.
+	// This fallback is only defensive and keeps discovery fail-closed.
+	return "PREROUTING"
+}
+
+func (s *webAuditDNSService) ensureRedirectFamily(enable, ipv6 bool, upstreams []string, strict bool) error {
+	desired := auditRedirectRules(ipv6, upstreams, strict)
+	return s.ensureAuditRuleFamily(enable, ipv6, "nat", desired, auditRedirectRuleArgs)
+}
+
+func (s *webAuditDNSService) ensureRedirectWithConfig(enable bool, upstreams []string, strict bool) error {
 	s.mu.RLock()
 	v6Ready := s.status.IPv6ListenerReady
 	s.mu.RUnlock()
-	v4Err := s.ensureIngressGuardFamily(enable, false)
-	v6Err := s.ensureIngressGuardFamily(enable && v6Ready, true)
+	v4Err := s.ensureRedirectFamily(enable, false, upstreams, strict)
+	v6Err := s.ensureRedirectFamily(enable && v6Ready, true, upstreams, strict)
 	s.mu.Lock()
-	s.status.IngressRestricted = enable && v4Err == nil && (!v6Ready || v6Err == nil)
+	v4Ready := enable && v4Err == nil && len(auditRedirectRules(false, upstreams, strict)) > 0
+	v6ReadyInstalled := enable && v6Ready && v6Err == nil && len(auditRedirectRules(true, upstreams, strict)) > 0
+	s.status.IPv4RedirectInstalled = v4Ready
+	s.status.RedirectInstalled = v4Ready
+	s.status.IPv6RedirectInstalled = v6ReadyInstalled
+	s.status.StrictDNSCaptureEnabled = enable && strict
+	s.status.IPv4StrictDNSInstalled = v4Ready && strict
+	s.status.IPv6StrictDNSInstalled = v6ReadyInstalled && strict
 	s.updateCoverageLocked()
 	s.mu.Unlock()
 	if v4Err != nil {
@@ -1248,125 +1623,8 @@ func (s *webAuditDNSService) ensureIngressGuard(enable bool) error {
 	return v6Err
 }
 
-func auditRedirectRules(ipv6 bool, upstreams []string) [][]string {
-	rules := make([][]string, 0, len(upstreams)*2)
-	for _, upstream := range upstreams {
-		ip := net.ParseIP(upstream)
-		if ip == nil || (ip.To4() == nil) == !ipv6 {
-			continue
-		}
-		for _, proto := range []string{"udp", "tcp"} {
-			rules = append(rules, []string{"-t", "nat", "PREROUTING", "-i", "tun0", "-p", proto, "-d", upstream, "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"})
-		}
-	}
-	return rules
-}
-
-func legacyAuditRedirectRules() [][]string {
-	return [][]string{{"-t", "nat", "PREROUTING", "-i", "tun0", "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"}, {"-t", "nat", "PREROUTING", "-i", "tun0", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", "5353"}}
-}
-
-// auditRedirectRuleArgs returns a removable PREROUTING rule only when it has
-// the exact ownership signature used by this feature. It intentionally accepts
-// any destination address so a process restart can remove an orphaned redirect
-// after the configured upstream DNS servers have changed or the audit switch
-// was turned off while the web process was unavailable.
-func auditRedirectRuleArgs(line string) ([]string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 3 || fields[0] != "-A" || fields[1] != "PREROUTING" {
-		return nil, false
-	}
-	values := make(map[string]string, 5)
-	for i := 2; i+1 < len(fields); i++ {
-		switch fields[i] {
-		case "-i", "-p", "--dport", "-j", "--to-ports":
-			values[fields[i]] = fields[i+1]
-			i++
-		}
-	}
-	if values["-i"] != "tun0" || (values["-p"] != "udp" && values["-p"] != "tcp") || values["--dport"] != "53" || values["-j"] != "REDIRECT" || values["--to-ports"] != "5353" {
-		return nil, false
-	}
-	return append([]string{"-t", "nat"}, fields[1:]...), true
-}
-
-// discoverAuditRedirectRules finds stale audit redirect rules without relying
-// on the current config. This is necessary because NAT state survives a web
-// process restart, while in-memory status does not.
-func discoverAuditRedirectRules(ipt string) [][]string {
-	out, err := exec.Command(ipt, "-t", "nat", "-S", "PREROUTING").Output()
-	if err != nil {
-		return nil
-	}
-	rules := make([][]string, 0)
-	for _, line := range strings.Split(string(out), "\n") {
-		if rule, ok := auditRedirectRuleArgs(line); ok {
-			rules = append(rules, rule)
-		}
-	}
-	return rules
-}
-
-func (s *webAuditDNSService) ensureRedirectFamily(enable, ipv6 bool, upstreams []string) error {
-	ipt, err := preferredAuditIPTables(ipv6)
-	if err != nil {
-		if !enable {
-			return nil
-		}
-		return err
-	}
-	rules := auditRedirectRules(ipv6, upstreams)
-	if !enable {
-		// Remove both the rules we can derive from the old status snapshot and
-		// any matching orphan that survived a previous web process restart.
-		// The latter covers disabling the feature through a direct config-file
-		// edit before a restart, when status has no old upstream list yet.
-		rules = append(rules, legacyAuditRedirectRules()...)
-		rules = append(rules, discoverAuditRedirectRules(ipt)...)
-	}
-	seen := make(map[string]struct{}, len(rules))
-	for _, rule := range rules {
-		key := strings.Join(rule, "\x00")
-		if _, duplicate := seen[key]; duplicate {
-			continue
-		}
-		seen[key] = struct{}{}
-		check := append([]string{"-t", "nat", "-C"}, rule[2:]...)
-		exists := exec.Command(ipt, check...).Run() == nil
-		if enable && !exists {
-			add := append([]string{"-t", "nat", "-A"}, rule[2:]...)
-			if out, err := exec.Command(ipt, add...).CombinedOutput(); err != nil {
-				_ = s.ensureRedirectFamily(false, ipv6, upstreams)
-				return fmt.Errorf("安装 %s DNS 重定向失败: %s", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], strings.TrimSpace(string(out)))
-			}
-		}
-		if !enable && exists {
-			del := append([]string{"-t", "nat", "-D"}, rule[2:]...)
-			_ = exec.Command(ipt, del...).Run()
-		}
-	}
-	return nil
-}
-
 func (s *webAuditDNSService) ensureRedirectWithUpstreams(enable bool, upstreams []string) error {
-	s.mu.RLock()
-	v6Ready := s.status.IPv6ListenerReady
-	s.mu.RUnlock()
-	v4Err := s.ensureRedirectFamily(enable, false, upstreams)
-	v6Err := s.ensureRedirectFamily(enable && v6Ready, true, upstreams)
-	s.mu.Lock()
-	s.status.IPv4RedirectInstalled = enable && v4Err == nil && len(auditRedirectRules(false, upstreams)) > 0
-	s.status.RedirectInstalled = s.status.IPv4RedirectInstalled
-	s.status.IPv6RedirectInstalled = enable && v6Ready && v6Err == nil && len(auditRedirectRules(true, upstreams)) > 0
-	s.updateCoverageLocked()
-	s.mu.Unlock()
-	if v4Err != nil {
-		return v4Err
-	}
-	if v6Err != nil {
-		return v6Err
-	}
-	return nil
+	return s.ensureRedirectWithConfig(enable, upstreams, webAuditStrictDNS())
 }
 
 func (s *webAuditDNSService) ensureRedirect(enable bool) error {
@@ -1374,4 +1632,59 @@ func (s *webAuditDNSService) ensureRedirect(enable bool) error {
 	upstreams := append([]string(nil), s.status.UpstreamDNS...)
 	s.mu.RUnlock()
 	return s.ensureRedirectWithUpstreams(enable, upstreams)
+}
+
+func (s *webAuditDNSService) ensureEgressBlockFamily(enable, ipv6 bool, comment string) error {
+	desired := auditEgressBlockRules(comment)
+	if ipv6 && comment == webAuditQUICBlockComment {
+		// ip6tables uses a distinct ICMP reject name.
+		desired = [][]string{{"FORWARD", "-i", "tun0", "-p", "udp", "-m", "comment", "--comment", webAuditQUICBlockComment, "--dport", "443", "-j", "REJECT", "--reject-with", "icmp6-port-unreachable"}}
+	}
+	parser := func(line string) ([]string, bool) {
+		if comment == webAuditDoTBlockComment {
+			return auditEgressBlockRuleArgs(line, comment, "tcp", "853")
+		}
+		return auditEgressBlockRuleArgs(line, comment, "udp", "443")
+	}
+	return s.ensureAuditRuleFamily(enable, ipv6, "filter", desired, parser)
+}
+
+func (s *webAuditDNSService) ensureEgressBlocks(enable bool) error {
+	s.mu.RLock()
+	v6Ready := s.status.IPv6ListenerReady
+	s.mu.RUnlock()
+	dotEnabled := enable && webAuditEnabled() && webAuditBlockDoT()
+	quicEnabled := enable && webAuditEnabled() && webAuditBlockUDP443()
+	v4DoTErr := s.ensureEgressBlockFamily(dotEnabled, false, webAuditDoTBlockComment)
+	v6DoTErr := s.ensureEgressBlockFamily(dotEnabled && v6Ready, true, webAuditDoTBlockComment)
+	v4QUICErr := s.ensureEgressBlockFamily(quicEnabled, false, webAuditQUICBlockComment)
+	v6QUICErr := s.ensureEgressBlockFamily(quicEnabled && v6Ready, true, webAuditQUICBlockComment)
+	firstErr := firstAuditRuleError(v4DoTErr, v6DoTErr, v4QUICErr, v6QUICErr)
+	if firstErr != nil && enable {
+		// A partial policy is harder to explain and could unexpectedly block a
+		// client. Roll back every optional block and keep the VPN fail-open.
+		_ = s.ensureEgressBlockFamily(false, false, webAuditDoTBlockComment)
+		_ = s.ensureEgressBlockFamily(false, v6Ready, webAuditDoTBlockComment)
+		_ = s.ensureEgressBlockFamily(false, false, webAuditQUICBlockComment)
+		_ = s.ensureEgressBlockFamily(false, v6Ready, webAuditQUICBlockComment)
+	}
+	s.mu.Lock()
+	s.status.DoTBlockEnabled = dotEnabled
+	s.status.IPv4DoTBlockInstalled = dotEnabled && firstErr == nil && v4DoTErr == nil
+	s.status.IPv6DoTBlockInstalled = dotEnabled && firstErr == nil && v6Ready && v6DoTErr == nil
+	s.status.UDP443BlockEnabled = quicEnabled
+	s.status.IPv4UDP443BlockInstalled = quicEnabled && firstErr == nil && v4QUICErr == nil
+	s.status.IPv6UDP443BlockInstalled = quicEnabled && firstErr == nil && v6Ready && v6QUICErr == nil
+	s.updateCoverageLocked()
+	s.mu.Unlock()
+	return firstErr
+}
+
+func firstAuditRuleError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

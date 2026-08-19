@@ -107,10 +107,17 @@ func TestQueryHistoryWebsiteAuditRecordsUsesConnectionAndTimeRange(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SQLite :memory: creates one database per physical connection. The worker
+	// writes concurrently, so keep this regression fixture on its migrated
+	// connection rather than intermittently observing an empty database.
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	db = database
 	defer func() {
 		db = originalDB
-		sqlDB, _ := database.DB()
 		if sqlDB != nil {
 			_ = sqlDB.Close()
 		}
@@ -821,59 +828,122 @@ func TestReserveAuditStorageDropsOnlyAuditEventsAtCapacity(t *testing.T) {
 	}
 }
 
-func TestAuditRedirectRuleArgsRecognizesOnlyOwnedRules(t *testing.T) {
-	for _, line := range []string{
-		"-A PREROUTING -d 8.8.8.8/32 -i tun0 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5353",
-		"-A PREROUTING -d 2001:4860:4860::8888/128 -i tun0 -p tcp -m tcp --dport 53 -j REDIRECT --to-ports 5353",
-	} {
-		rule, ok := auditRedirectRuleArgs(line)
-		if !ok {
-			t.Fatalf("expected owned audit redirect rule for %q", line)
-		}
-		joined := strings.Join(rule, " ")
-		if !strings.HasPrefix(joined, "-t nat PREROUTING ") || !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "--to-ports 5353") {
-			t.Fatalf("unexpected removable rule args: %q", joined)
-		}
+func TestAuditRedirectRuleArgsRecognizesOnlyCommentOwnedRules(t *testing.T) {
+	owned := "-A PREROUTING -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect -d 8.8.8.8 --dport 53 -j REDIRECT --to-ports 5353"
+	rule, ok := auditRedirectRuleArgs(owned)
+	if !ok {
+		t.Fatalf("expected comment-owned audit redirect rule for %q", owned)
+	}
+	joined := strings.Join(rule, " ")
+	if !strings.HasPrefix(joined, "PREROUTING ") || !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, webAuditRedirectComment) || !strings.Contains(joined, "--to-ports 5353") {
+		t.Fatalf("unexpected removable rule args: %q", joined)
 	}
 
 	for _, line := range []string{
-		"-A PREROUTING -i eth0 -p udp --dport 53 -j REDIRECT --to-ports 5353",
-		"-A PREROUTING -i tun0 -p udp --dport 54 -j REDIRECT --to-ports 5353",
-		"-A PREROUTING -i tun0 -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:5353",
-		"-A OUTPUT -i tun0 -p udp --dport 53 -j REDIRECT --to-ports 5353",
+		// Previous releases and external components can have a matching shape.
+		// Without our explicit owner comment they must not be discovered as ours.
+		"-A PREROUTING -d 8.8.8.8/32 -i tun0 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -i eth0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 53 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -i tun0 -p udp -m comment --comment other-component --dport 53 -j REDIRECT --to-ports 5353",
+		"-A PREROUTING -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 54 -j REDIRECT --to-ports 5353",
+		"-A OUTPUT -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 53 -j REDIRECT --to-ports 5353",
 	} {
 		if rule, ok := auditRedirectRuleArgs(line); ok {
-			t.Fatalf("unexpectedly accepted non-audit rule %q as %v", line, rule)
+			t.Fatalf("unexpectedly accepted non-owned rule %q as %v", line, rule)
 		}
 	}
 }
-func TestWebAuditFirewallRulesAreRestrictedToVPNDNS(t *testing.T) {
-	guardRules := auditIngressGuardRules()
-	if len(guardRules) != 2 {
-		t.Fatalf("ingress guard rules=%v", guardRules)
+
+func TestHighCoverageAuditFirewallRulesStayOnTun0(t *testing.T) {
+	// The DNS listener is bound to tun0 at the socket layer. Firewall rules are
+	// therefore exclusively tunnel-matching and never use a broad "! -i tun0"
+	// guard that could touch host or Docker bridge traffic.
+
+	normalV4 := auditRedirectRules(false, []string{"8.8.8.8", "2001:4860:4860::8888", "not-an-ip"}, false)
+	normalV6 := auditRedirectRules(true, []string{"8.8.8.8", "2001:4860:4860::8888", "not-an-ip"}, false)
+	strictV4 := auditRedirectRules(false, nil, true)
+	strictV6 := auditRedirectRules(true, nil, true)
+	if len(normalV4) != 2 || len(normalV6) != 2 || len(strictV4) != 2 || len(strictV6) != 2 {
+		t.Fatalf("unexpected DNS rule counts: normalV4=%v normalV6=%v strictV4=%v strictV6=%v", normalV4, normalV6, strictV4, strictV6)
 	}
-	for _, rule := range guardRules {
+	for _, rule := range append(append([][]string{}, strictV4...), strictV6...) {
 		joined := strings.Join(rule, " ")
-		if !strings.Contains(joined, "INPUT ! -i tun0") || !strings.Contains(joined, "--dport 5353") || !strings.HasSuffix(joined, "-j DROP") {
-			t.Fatalf("ingress rule does not protect non-tun0 DNS listener access: %q", joined)
+		if !strings.Contains(joined, "-i tun0") || strings.Contains(joined, " -d ") || !strings.Contains(joined, webAuditRedirectComment) || !strings.Contains(joined, "--dport 53") {
+			t.Fatalf("strict DNS rule is not a tun0-only all-resolver rule: %q", joined)
+		}
+	}
+	for _, rule := range normalV4 {
+		joined := strings.Join(rule, " ")
+		if !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "-d 8.8.8.8") || strings.Contains(joined, "2001:4860") || !strings.Contains(joined, webAuditRedirectComment) {
+			t.Fatalf("unexpected IPv4 resolver-scoped rule: %q", joined)
+		}
+	}
+	for _, rule := range normalV6 {
+		joined := strings.Join(rule, " ")
+		if !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "-d 2001:4860:4860::8888") || strings.Contains(joined, "8.8.8.8") || !strings.Contains(joined, webAuditRedirectComment) {
+			t.Fatalf("unexpected IPv6 resolver-scoped rule: %q", joined)
 		}
 	}
 
-	ipv4Rules := auditRedirectRules(false, []string{"8.8.8.8", "2001:4860:4860::8888", "not-an-ip"})
-	ipv6Rules := auditRedirectRules(true, []string{"8.8.8.8", "2001:4860:4860::8888", "not-an-ip"})
-	if len(ipv4Rules) != 2 || len(ipv6Rules) != 2 {
-		t.Fatalf("redirect rule count: IPv4=%v IPv6=%v", ipv4Rules, ipv6Rules)
-	}
-	for _, rule := range ipv4Rules {
-		joined := strings.Join(rule, " ")
-		if !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "-d 8.8.8.8") || strings.Contains(joined, "2001:4860") {
-			t.Fatalf("unexpected IPv4 redirect rule: %q", joined)
+	for _, want := range []struct{ kind, proto, port string }{{webAuditDoTBlockComment, "tcp", "853"}, {webAuditQUICBlockComment, "udp", "443"}} {
+		rules := auditEgressBlockRules(want.kind)
+		if len(rules) != 1 {
+			t.Fatalf("%s rules=%v", want.kind, rules)
+		}
+		joined := strings.Join(rules[0], " ")
+		if !strings.Contains(joined, "FORWARD -i tun0") || !strings.Contains(joined, "-p "+want.proto) || !strings.Contains(joined, "--dport "+want.port) || !strings.Contains(joined, want.kind) || !strings.Contains(joined, "-j REJECT") {
+			t.Fatalf("egress block escaped its strict tun0 boundary: %q", joined)
 		}
 	}
-	for _, rule := range ipv6Rules {
-		joined := strings.Join(rule, " ")
-		if !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, "-d 2001:4860:4860::8888") || strings.Contains(joined, "8.8.8.8") {
-			t.Fatalf("unexpected IPv6 redirect rule: %q", joined)
+}
+
+func TestAuditRuleConvergenceRemovesStrictAndDisabledRules(t *testing.T) {
+	strict := auditRedirectRules(false, nil, true)
+	normal := auditRedirectRules(false, []string{"1.1.1.1"}, false)
+	remove, add := reconcileAuditRules(strict, normal)
+	if len(remove) != len(strict) || len(add) != len(normal) {
+		t.Fatalf("strict->normal must remove all broad rules and add all resolver rules: remove=%v add=%v", remove, add)
+	}
+	for _, rule := range remove {
+		if strings.Contains(strings.Join(rule, " "), " -d ") {
+			t.Fatalf("strict cleanup unexpectedly selected a resolver-scoped rule: %v", rule)
 		}
+	}
+	current := append(append([][]string{}, normal...), auditEgressBlockRules(webAuditDoTBlockComment)...)
+	remove, add = reconcileAuditRules(current, nil)
+	if len(remove) != len(current) || len(add) != 0 {
+		t.Fatalf("disable must remove every feature-owned desired rule: remove=%v add=%v", remove, add)
+	}
+}
+
+func TestWebAuditCoverageDiagnosticsExplainEncryptedDNSGaps(t *testing.T) {
+	service := &webAuditDNSService{status: WebAuditDNSStatus{
+		Enabled: true, IngressRestricted: true, IPv4ListenerReady: true, IPv4RedirectInstalled: true,
+		StrictDNSCaptureEnabled: false, DoTBlockEnabled: false, UDP443BlockEnabled: false,
+	}}
+	service.updateCoverageLocked()
+	joined := strings.Join(service.status.DetectedGaps, "\n")
+	actions := strings.Join(service.status.RecommendedActions, "\n")
+	for _, want := range []string{"硬编码其他 DNS", "DoT", "HTTP/3/QUIC"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostics missing %q: %s", want, joined)
+		}
+	}
+	for _, want := range []string{"严格普通 DNS", "TCP/853", "UDP/443"} {
+		if !strings.Contains(actions, want) {
+			t.Fatalf("recommended actions missing %q: %s", want, actions)
+		}
+	}
+	if !strings.Contains(service.status.CoverageNote, "不会解密 HTTPS") || strings.Contains(service.status.CoverageNote, "完整网页记录") {
+		t.Fatalf("coverage note overpromises privacy/coverage: %q", service.status.CoverageNote)
+	}
+
+	// Blocking QUIC only affects UDP/443. DoH still runs over TCP/443 and must
+	// remain an explicit coverage limitation rather than disappearing from AI/UI.
+	service.status.UDP443BlockEnabled = true
+	service.updateCoverageLocked()
+	joined = strings.Join(service.status.DetectedGaps, "\n")
+	if !strings.Contains(joined, "DoH（TCP/443）") || strings.Contains(joined, "完整网页") {
+		t.Fatalf("QUIC fallback diagnostics must retain DoH boundary: %s", joined)
 	}
 }

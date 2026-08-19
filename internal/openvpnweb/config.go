@@ -27,6 +27,15 @@ type SysBeseConfig struct {
 	RenewDays            int    `json:"renew_days" mapstructure:"renew_days"`
 	ValidateClientConfig bool   `json:"validate_client_config" mapstructure:"validate_client_config"`
 	WebAuditEnabled      bool   `json:"web_audit_enabled" mapstructure:"web_audit_enabled"`
+	// WebAuditStrictDNS captures all ordinary DNS requests from tun0 rather than
+	// only the configured upstream resolvers. It remains opt-in because it can
+	// override a client's hard-coded DNS configuration.
+	WebAuditStrictDNS bool `json:"web_audit_strict_dns" mapstructure:"web_audit_strict_dns"`
+	// WebAuditBlockDoT blocks only tun0 TCP/853 while domain auditing is enabled.
+	WebAuditBlockDoT bool `json:"web_audit_block_dot" mapstructure:"web_audit_block_dot"`
+	// WebAuditBlockUDP443 asks clients to fall back from QUIC/HTTP3 to TCP/TLS.
+	// It is deliberately off by default because it can reduce web performance.
+	WebAuditBlockUDP443 bool `json:"web_audit_block_udp_443" mapstructure:"web_audit_block_udp_443"`
 }
 
 type SysLdapConfig struct {
@@ -229,6 +238,11 @@ func initConfig() {
 	// DNS domain auditing is privacy-sensitive. Existing and fresh deployments
 	// stay opt-in until an administrator explicitly enables it in Settings.
 	viper.SetDefault("system.base.web_audit_enabled", false)
+	// High-coverage domain-audit policies are explicit opt-ins. Upgrades retain
+	// the legacy, resolver-scoped DNS audit behavior until an administrator opts in.
+	viper.SetDefault("system.base.web_audit_strict_dns", false)
+	viper.SetDefault("system.base.web_audit_block_dot", false)
+	viper.SetDefault("system.base.web_audit_block_udp_443", false)
 	viper.SetDefault("system.base.renew_days", 365)
 	viper.SetDefault("system.base.nft_table_name", "openvpn-nft")
 	viper.SetDefault("system.ldap.ldap_auth", false)

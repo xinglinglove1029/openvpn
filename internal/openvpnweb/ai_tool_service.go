@@ -1288,7 +1288,14 @@ func (s *AIToolService) GetWebsiteAccessStats(ctx agent.ToolContext, operator st
 		return ai.WebsiteAccessStatsResult{}, fmt.Errorf("查询网站访问 DNS 明细失败: %w", err)
 	}
 	status := getWebAuditDNSStatus()
-	result := ai.WebsiteAccessStatsResult{Start: summary.Start, End: summary.End, TotalQueries: summary.TotalQueries, ActiveUsers: summary.ActiveUsers, UniqueDomains: summary.UniqueDomains, TopUsers: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopUsers)), TopDomains: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopDomains)), RecentRecords: make([]ai.WebsiteAccessRecentRecord, 0, len(records.Data)), Enabled: status.Enabled, ListenerReady: status.ListenerReady, RedirectReady: status.RedirectInstalled, UpstreamDNS: status.UpstreamDNS, LastError: status.LastError, CoverageNote: status.CoverageNote}
+	result := ai.WebsiteAccessStatsResult{
+		Start: summary.Start, End: summary.End, TotalQueries: summary.TotalQueries, ActiveUsers: summary.ActiveUsers, UniqueDomains: summary.UniqueDomains,
+		TopUsers: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopUsers)), TopDomains: make([]ai.WebsiteAccessTopItem, 0, len(summary.TopDomains)), RecentRecords: make([]ai.WebsiteAccessRecentRecord, 0, len(records.Data)),
+		Enabled: status.Enabled, ListenerReady: status.ListenerReady, RedirectReady: status.RedirectInstalled,
+		StrictDNSCaptureEnabled: status.StrictDNSCaptureEnabled, DoTBlockEnabled: status.DoTBlockEnabled, UDP443BlockEnabled: status.UDP443BlockEnabled,
+		EventSource: "dns", UpstreamDNS: status.UpstreamDNS, LastError: status.LastError, CoverageNote: status.CoverageNote,
+		DetectedGaps: append([]string(nil), status.DetectedGaps...), RecommendedActions: append([]string(nil), status.RecommendedActions...),
+	}
 	for _, item := range summary.TopUsers {
 		result.TopUsers = append(result.TopUsers, ai.WebsiteAccessTopItem{Username: item.Username, CommonName: item.CommonName, Queries: item.Queries})
 	}

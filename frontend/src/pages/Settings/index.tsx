@@ -232,6 +232,9 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.max_duplicate_login'] = String(base.max_duplicate_login ?? '');
   out['system.base.renew_days'] = String(base.renew_days ?? 365);
   out['system.base.web_audit_enabled'] = String(base.web_audit_enabled ?? false);
+  out['system.base.web_audit_strict_dns'] = String(base.web_audit_strict_dns ?? false);
+  out['system.base.web_audit_block_dot'] = String(base.web_audit_block_dot ?? false);
+  out['system.base.web_audit_block_udp_443'] = String(base.web_audit_block_udp_443 ?? false);
 
   const ldap = settings?.system?.ldap ?? ({} as SettingsResponse['system']['ldap']);
   out['system.ldap.ldap_url'] = String(ldap.ldap_url ?? '');
@@ -597,10 +600,31 @@ export default function SettingsPage() {
                     store={store}
                   />
                   <SettingSwitch
-                    label="启用网站访问 DNS 审计"
-                    description="仅记录经 VPN 隧道、下发 DNS 的域名元数据；关闭后立即撤销重定向，不影响 VPN 正常解析"
+                    label="启用网站访问域名审计"
+                    description="只记录经 VPN 隧道的域名元数据，不解密 HTTPS，也不记录 URL、网页内容、Cookie 或凭据；关闭后会撤销所有本功能规则。"
                     checked={base.web_audit_enabled ?? false}
                     settingKey="system.base.web_audit_enabled"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="严格普通 DNS 捕获"
+                    description="仅捕获 tun0 上全部 UDP/TCP 53（包括客户端硬编码 DNS），提高域名覆盖率；默认关闭，启用后不影响宿主机或 Docker bridge。"
+                    checked={base.web_audit_strict_dns ?? false}
+                    settingKey="system.base.web_audit_strict_dns"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="阻断 DoT（TCP/853）"
+                    description="仅阻断 tun0 的加密 DNS 端口 853，减少 DoT 绕过；DNS 审计关闭或规则异常时自动撤销，保持 VPN 基本联通。"
+                    checked={base.web_audit_block_dot ?? false}
+                    settingKey="system.base.web_audit_block_dot"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="阻断 UDP/443 以回退 TCP/TLS"
+                    description="可减少 HTTP/3/QUIC 导致的域名漏记，但会降低部分网站性能或兼容性；默认关闭，仅作用于 tun0，不能用于拦截 DoH。"
+                    checked={base.web_audit_block_udp_443 ?? false}
+                    settingKey="system.base.web_audit_block_udp_443"
                     store={store}
                   />
                 </div>
