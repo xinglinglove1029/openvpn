@@ -26,7 +26,7 @@ import type {
   OnlineClient,
 } from '../../types';
 
-const auditPageSize = 50;
+const auditPageSize = 20;
 
 function historyStartSeconds(record: HistoryRecord): number {
   if (typeof record.time_unix === 'number') return record.time_unix;
@@ -303,7 +303,7 @@ export default function HistoryPage() {
       </Card>
 
       <Dialog open={Boolean(selectedHistory)} onOpenChange={(open) => !open && closeWebsiteAudit()}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[min(96vw,1280px)] sm:w-[min(96vw,1280px)] sm:max-w-[min(96vw,1280px)]">
           <DialogHeader>
             <DialogTitle>连接期间的网站访问记录</DialogTitle>
             <DialogDescription>
@@ -313,7 +313,7 @@ export default function HistoryPage() {
 
           {selectedHistory && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2 xl:grid-cols-4">
                 <div>
                   <p className="text-xs text-muted-foreground">用户</p>
                   <p className="mt-1 font-medium">{selectedHistory.username || selectedHistory.common_name || '-'}</p>
@@ -356,7 +356,7 @@ export default function HistoryPage() {
               {!auditState.loading && !auditState.error && auditData && auditData.data.length > 0 && (
                 <>
                   <div className="overflow-x-auto rounded-lg border">
-                    <table className="w-full min-w-[720px] text-sm">
+                    <table className="w-full min-w-[880px] text-sm">
                       <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
                         <tr>
                           <th className="px-4 py-3 font-medium">查询时间</th>
@@ -383,7 +383,7 @@ export default function HistoryPage() {
                   </div>
                   <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                     <span>
-                      共 {auditData.total} 条记录{auditData.total > auditPageSize ? `，第 ${auditPage + 1}/${auditTotalPages} 页` : ''}
+                      共 {auditData.total} 条记录，每页 {auditPageSize} 条{auditData.total > auditPageSize ? `，第 ${auditPage + 1}/${auditTotalPages} 页` : ''}
                     </span>
                     {auditTotalPages > 1 && (
                       <div className="flex items-center gap-2">
