@@ -1,38 +1,45 @@
 package openvpnweb
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// 注意：本包测试与存量测试一致，需要 OVPN_DATA 指向含 config.json 的目录（如仓库根 data/）。
-// 运行方式：OVPN_DATA=<仓库>/data go test ./internal/openvpnweb/
+// 数据库 DSN 用例必须使用当前操作系统的路径语义，避免 Windows 路径字面量在 Linux CI 中被识别为相对路径。
+
+func testDataDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "data")
+}
 
 func TestDialectAndDSNDefaultSQLite(t *testing.T) {
-	dialect, dsn, err := dialectAndDSN(DatabaseConfig{}, "F:\\data")
+	dataDir := testDataDir(t)
+	dialect, dsn, err := dialectAndDSN(DatabaseConfig{}, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dialect != "sqlite" {
 		t.Fatalf("dialect = %q, want sqlite", dialect)
 	}
-	want := "F:\\data\\ovpn.db?_pragma=foreign_keys(1)"
+	want := filepath.Join(dataDir, "ovpn.db") + "?_pragma=foreign_keys(1)"
 	if dsn != want {
 		t.Fatalf("dsn = %q, want %q", dsn, want)
 	}
 }
 
 func TestDialectAndDSNSQLiteAbsolutePath(t *testing.T) {
-	dialect, dsn, err := dialectAndDSN(DatabaseConfig{Type: "sqlite", Path: "C:\\tmp\\my.db"}, "F:\\data")
+	absolutePath := filepath.Join(t.TempDir(), "my.db")
+	dialect, dsn, err := dialectAndDSN(DatabaseConfig{Type: "sqlite", Path: absolutePath}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dialect != "sqlite" {
 		t.Fatalf("dialect = %q, want sqlite", dialect)
 	}
-	if !strings.HasPrefix(dsn, "C:\\tmp\\my.db") {
+	if !strings.HasPrefix(dsn, absolutePath) {
 		t.Fatalf("absolute path not preserved: %q", dsn)
 	}
 }
@@ -44,7 +51,7 @@ func TestDialectAndDSNMySQL(t *testing.T) {
 		User:     "admin",
 		Password: "p@ss",
 		Name:     "openvpn",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +74,7 @@ func TestDialectAndDSNMySQL(t *testing.T) {
 func TestDialectAndDSNMySQLCustomPort(t *testing.T) {
 	_, dsn, err := dialectAndDSN(DatabaseConfig{
 		Type: "mysql", Host: "127.0.0.1", Port: 3307, User: "u", Password: "p", Name: "n",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +92,7 @@ func TestDialectAndDSNPostgres(t *testing.T) {
 		Password: "p@ss",
 		Name:     "openvpn",
 		SSLMode:  "require",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,13 +109,13 @@ func TestDialectAndDSNPostgres(t *testing.T) {
 }
 
 func TestDialectAndDSNUnknown(t *testing.T) {
-	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "oracle"}, "F:\\data"); err == nil {
+	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "oracle"}, testDataDir(t)); err == nil {
 		t.Fatal("expected error for unsupported dialect")
 	}
 }
 
 func TestDialectAndDSNTypeTrimmed(t *testing.T) {
-	dialect, _, err := dialectAndDSN(DatabaseConfig{Type: " mysql "}, "F:\\data")
+	dialect, _, err := dialectAndDSN(DatabaseConfig{Type: " mysql "}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +125,7 @@ func TestDialectAndDSNTypeTrimmed(t *testing.T) {
 }
 
 func TestDialectAndDSNNegativePort(t *testing.T) {
-	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "mysql", Port: -1}, "F:\\data"); err == nil {
+	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "mysql", Port: -1}, testDataDir(t)); err == nil {
 		t.Fatal("expected error for negative port")
 	}
 }
@@ -126,7 +133,7 @@ func TestDialectAndDSNNegativePort(t *testing.T) {
 func TestDialectAndDSNMySQLIPv6(t *testing.T) {
 	_, dsn, err := dialectAndDSN(DatabaseConfig{
 		Type: "mysql", Host: "::1", User: "u", Password: "p", Name: "n",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +145,7 @@ func TestDialectAndDSNMySQLIPv6(t *testing.T) {
 func TestDialectAndDSNPostgresIPv6(t *testing.T) {
 	_, dsn, err := dialectAndDSN(DatabaseConfig{
 		Type: "postgres", Host: "::1", User: "u", Password: "p", Name: "n",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +157,7 @@ func TestDialectAndDSNPostgresIPv6(t *testing.T) {
 func TestDialectAndDSNPostgresSpecialCharsInName(t *testing.T) {
 	_, dsn, err := dialectAndDSN(DatabaseConfig{
 		Type: "postgres", Host: "127.0.0.1", User: "u", Password: "p", Name: "my db/1",
-	}, "F:\\data")
+	}, testDataDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +168,7 @@ func TestDialectAndDSNPostgresSpecialCharsInName(t *testing.T) {
 }
 
 func TestDialectAndDSNSQLitePathWithQuestionMark(t *testing.T) {
-	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "sqlite", Path: "C:\\tmp\\my?db.db"}, "F:\\data"); err == nil {
+	if _, _, err := dialectAndDSN(DatabaseConfig{Type: "sqlite", Path: filepath.Join(t.TempDir(), "my?db.db")}, testDataDir(t)); err == nil {
 		t.Fatal("expected error for sqlite path containing '?'")
 	}
 }
