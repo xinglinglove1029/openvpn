@@ -39,8 +39,9 @@ func TestDialectAndDSNSQLiteAbsolutePath(t *testing.T) {
 	if dialect != "sqlite" {
 		t.Fatalf("dialect = %q, want sqlite", dialect)
 	}
-	if !strings.HasPrefix(dsn, absolutePath) {
-		t.Fatalf("absolute path not preserved: %q", dsn)
+	want := absolutePath + "?_pragma=foreign_keys(1)"
+	if dsn != want {
+		t.Fatalf("dsn = %q, want %q", dsn, want)
 	}
 }
 
