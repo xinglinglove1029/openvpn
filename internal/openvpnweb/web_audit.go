@@ -32,6 +32,162 @@ type WebsiteAccessLog struct {
 
 func (WebsiteAccessLog) TableName() string { return "website_access_logs" }
 
+// SuricataNetworkEvent is a privacy-preserving EVE event. It deliberately has
+// no raw JSON, HTTP body, response body, cookie, authorization, or payload field.
+type SuricataNetworkEvent struct {
+	ID              uint      `gorm:"primarykey" json:"id"`
+	UserID          uint      `gorm:"index;default:0" json:"userId"`
+	Username        string    `gorm:"index" json:"username"`
+	CommonName      string    `gorm:"index" json:"commonName"`
+	ConnectionID    string    `gorm:"index" json:"connectionId"`
+	VPNIP           string    `gorm:"index" json:"vpnIp"`
+	EventType       string    `gorm:"index" json:"eventType"`
+	DestinationIP   string    `gorm:"index" json:"destinationIp"`
+	Protocol        string    `json:"protocol"`
+	AppProtocol     string    `json:"appProtocol"`
+	SourcePort      uint16    `json:"sourcePort"`
+	DestinationPort uint16    `json:"destinationPort"`
+	BytesToServer   uint64    `json:"bytesToServer"`
+	BytesToClient   uint64    `json:"bytesToClient"`
+	PacketsToServer uint64    `json:"packetsToServer"`
+	PacketsToClient uint64    `json:"packetsToClient"`
+	DNSName         string    `gorm:"index" json:"dnsName,omitempty"`
+	DNSRecordType   string    `json:"dnsRecordType,omitempty"`
+	TLSSNI          string    `gorm:"index" json:"tlsSni,omitempty"`
+	TLSVersion      string    `json:"tlsVersion,omitempty"`
+	HTTPHostname    string    `gorm:"index" json:"httpHostname,omitempty"`
+	HTTPURL         string    `json:"httpUrl,omitempty"`
+	HTTPMethod      string    `json:"httpMethod,omitempty"`
+	AlertSignature  string    `json:"alertSignature,omitempty"`
+	AlertCategory   string    `json:"alertCategory,omitempty"`
+	AlertSeverity   int       `json:"alertSeverity,omitempty"`
+	ObservedAt      int64     `gorm:"index" json:"observedAt"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+func (SuricataNetworkEvent) TableName() string { return "suricata_network_events" }
+
+func (SuricataNetworkEvent) Clear() error {
+	days := suricataEVEMaxDays()
+	if days <= 0 {
+		return nil
+	}
+	return db.Where("observed_at < ?", time.Now().AddDate(0, 0, -days).Unix()).Delete(&SuricataNetworkEvent{}).Error
+}
+
+type SuricataNetworkAuditFilter struct {
+	Start     int64
+	End       int64
+	Username  string
+	EventType string
+}
+
+type SuricataNetworkAuditRecordsResponse struct {
+	Start int64                  `json:"start"`
+	End   int64                  `json:"end"`
+	Total int64                  `json:"total"`
+	Data  []SuricataNetworkEvent `json:"data"`
+}
+
+func normalizeSuricataNetworkAuditFilter(filter SuricataNetworkAuditFilter) SuricataNetworkAuditFilter {
+	filter.Start, filter.End = normalizeWebsiteAuditRange(filter.Start, filter.End)
+	filter.Username = strings.TrimSpace(filter.Username)
+	filter.EventType = strings.ToLower(strings.TrimSpace(filter.EventType))
+	return filter
+}
+
+func suricataNetworkAuditQuery(ctx context.Context, filter SuricataNetworkAuditFilter, accessibleUserIDs []uint, skipFilter bool) *gorm.DB {
+	filter = normalizeSuricataNetworkAuditFilter(filter)
+	q := db.WithContext(ctx).Model(&SuricataNetworkEvent{}).Where("observed_at >= ? AND observed_at <= ?", filter.Start, filter.End)
+	if !skipFilter {
+		q = q.Where("user_id IN ?", accessibleUserIDs)
+	}
+	if filter.Username != "" {
+		q = q.Where("LOWER(username) LIKE ? ESCAPE '\\\\'", "%"+escapeWebsiteAuditLike(strings.ToLower(filter.Username))+"%")
+	}
+	if filter.EventType != "" {
+		q = q.Where("event_type = ?", filter.EventType)
+	}
+	return q
+}
+
+func querySuricataNetworkAuditRecords(ctx context.Context, filter SuricataNetworkAuditFilter, accessibleUserIDs []uint, skipFilter bool, offset, limit int) (SuricataNetworkAuditRecordsResponse, error) {
+	filter = normalizeSuricataNetworkAuditFilter(filter)
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	result := SuricataNetworkAuditRecordsResponse{Start: filter.Start, End: filter.End, Data: make([]SuricataNetworkEvent, 0)}
+	q := func() *gorm.DB { return suricataNetworkAuditQuery(ctx, filter, accessibleUserIDs, skipFilter) }
+	if err := q().Count(&result.Total).Error; err != nil {
+		return result, err
+	}
+	err := q().Order("observed_at DESC, id DESC").Offset(offset).Limit(limit).Find(&result.Data).Error
+	return result, err
+}
+
+func parseSuricataNetworkAuditFilter(c *gin.Context) SuricataNetworkAuditFilter {
+	start, _ := strconv.ParseInt(c.Query("start"), 10, 64)
+	end, _ := strconv.ParseInt(c.Query("end"), 10, 64)
+	return normalizeSuricataNetworkAuditFilter(SuricataNetworkAuditFilter{Start: start, End: end, Username: c.Query("username"), EventType: c.Query("eventType")})
+}
+
+func (ov *ovpn) suricataNetworkAuditRecords(c *gin.Context) {
+	ids, skip := webAuditAccessScope(c)
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	result, err := querySuricataNetworkAuditRecords(c.Request.Context(), parseSuricataNetworkAuditFilter(c), ids, skip, offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询网络审计明细失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (ov *ovpn) suricataNetworkAuditExport(c *gin.Context) {
+	ids, skip := webAuditAccessScope(c)
+	q := suricataNetworkAuditQuery(c.Request.Context(), parseSuricataNetworkAuditFilter(c), ids, skip)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "统计网络审计数据失败"})
+		return
+	}
+	if total > websiteAuditMaxExportRows {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": fmt.Sprintf("导出结果超过 %d 条，请缩小时间范围或筛选条件", websiteAuditMaxExportRows)})
+		return
+	}
+	rows, err := q.Order("observed_at DESC, id DESC").Rows()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出网络审计明细失败"})
+		return
+	}
+	defer rows.Close()
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=suricata_network_%s.csv", time.Now().Format("20060102150405")))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	_, _ = c.Writer.Write([]byte("\xEF\xBB\xBF"))
+	writer := csv.NewWriter(c.Writer)
+	defer writer.Flush()
+	if err := writer.Write([]string{"时间", "用户", "VPN IP", "事件", "目的地址", "协议", "目的端口", "DNS", "TLS SNI", "HTTP 主机", "HTTP URL", "方法", "告警签名", "告警类别", "严重度"}); err != nil {
+		return
+	}
+	for rows.Next() {
+		var entry SuricataNetworkEvent
+		if err := db.ScanRows(rows, &entry); err != nil {
+			return
+		}
+		if err := writer.Write([]string{time.Unix(entry.ObservedAt, 0).Format("2006-01-02 15:04:05"), csvSafeWebsiteAuditField(entry.Username), csvSafeWebsiteAuditField(entry.VPNIP), csvSafeWebsiteAuditField(entry.EventType), csvSafeWebsiteAuditField(entry.DestinationIP), csvSafeWebsiteAuditField(entry.Protocol), strconv.Itoa(int(entry.DestinationPort)), csvSafeWebsiteAuditField(entry.DNSName), csvSafeWebsiteAuditField(entry.TLSSNI), csvSafeWebsiteAuditField(entry.HTTPHostname), csvSafeWebsiteAuditField(entry.HTTPURL), csvSafeWebsiteAuditField(entry.HTTPMethod), csvSafeWebsiteAuditField(entry.AlertSignature), csvSafeWebsiteAuditField(entry.AlertCategory), strconv.Itoa(entry.AlertSeverity)}); err != nil {
+			return
+		}
+	}
+}
+
+func (ov *ovpn) suricataEVEStatus(c *gin.Context) { c.JSON(http.StatusOK, getSuricataEVEStatus()) }
+
 func (WebsiteAccessLog) Clear() error {
 	days := configHistoryMaxDays()
 	// Existing historical data defaults to 90 days. A value of 0 explicitly

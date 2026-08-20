@@ -36,6 +36,14 @@
 
 ---
 
+## Suricata EVE 网络审计（可选）
+
+网络审计默认关闭。部署方可自行在 NAT 前的 `tun0` 旁路运行 Suricata，并将其 EVE JSONL 文件以**只读卷**挂载给应用；本项目不会安装、启动或配置 Suricata，也不要求额外网络权限。启用 `system.base.suricata_eve_enabled` 时，`suricata_eve_path` 必须为容器/主机内的绝对路径；可用 `suricata_eve_poll_seconds` 调整轮询，`suricata_eve_max_days` 控制留存（未设置时回退 `history_max_days`）。
+
+导入器只保存已关联 VPN 用户的 `flow`、`dns`、`tls`、`http`、`alert` 事件中的网络元数据，例如五元组、流量计数、DNS 名称、TLS SNI/版本、HTTP 主机/URL/方法及告警信息。它不会保存完整 EVE JSON、HTTP 请求或响应正文、Cookie、Authorization 或任何 payload；HTTPS 仍仅提供可见的 TLS 元数据。查询、导出和状态接口复用 `web-audit:view` 权限及既有用户/分组数据范围。
+
+---
+
 ## 功能矩阵
 
 | 模块 | 能力 | 截图 |

@@ -807,6 +807,9 @@ func Run(info BuildInfo) {
 		if err := (WebsiteAccessLog{}).Clear(); err != nil {
 			logger.Error(context.Background(), err.Error())
 		}
+		if err := (SuricataNetworkEvent{}).Clear(); err != nil {
+			logger.Error(context.Background(), err.Error())
+		}
 	})
 	c.AddFunc("@daily", func() {
 		checkAndSendExpireReminders()
@@ -817,7 +820,7 @@ func Run(info BuildInfo) {
 
 	db.AutoMigrate(&Group{})
 	db.FirstOrCreate(&Group{Name: "Default", ParentID: nil})
-	db.AutoMigrate(&User{}, &History{}, &ClientTrafficSample{}, &WebsiteAccessLog{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
+	db.AutoMigrate(&User{}, &History{}, &ClientTrafficSample{}, &WebsiteAccessLog{}, &SuricataNetworkEvent{}, &SuricataEVEOffset{}, &Firewall{}, &NotifyLog{}, &AuditLog{}, &NotificationChannel{}, &UserNotifyRead{}, &ClientPackage{})
 	db.AutoMigrate(&Role{}, &Permission{}, &RolePermission{}, &UserRole{}, &GroupRole{})
 	if err := MigrateAISettings(db); err != nil {
 		panic(fmt.Errorf("initialize AI provider settings: %w", err))
@@ -913,6 +916,9 @@ func Run(info BuildInfo) {
 	// DNS 审计先启动本地 UDP/TCP 转发监听，再由服务自身安全安装 tun0:53 重定向。
 	// 监听或规则安装失败只会降级审计，绝不会阻断 OpenVPN。
 	startWebAuditDNS(context.Background(), &ov)
+	// The EVE tailer is optional and failure-open; it only reads a deployment
+	// supplied file and never changes VPN or packet-capture configuration.
+	suricataEVE.reconcile()
 
 	// 初始化 AI 助手模块（可选，通过 ai.enabled 控制）
 	// 注意：chatMgr 始终初始化，确保 AI 路由可注册，即使 LLM 客户端暂未就绪
@@ -1468,6 +1474,17 @@ func Run(info BuildInfo) {
 
 			savedCount := 0 // 记录实际保存的字段数
 			webAuditConfigChanged := false
+			suricataEVEConfigChanged := false
+			if c.PostForm("system.base.suricata_eve_enabled") == "true" {
+				path := c.PostForm("system.base.suricata_eve_path")
+				if path == "" {
+					path = viper.GetString("system.base.suricata_eve_path")
+				}
+				if _, err := validateSuricataEVEPath(path); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+					return
+				}
+			}
 			for k, vs := range c.Request.PostForm {
 				// 权限过滤：跳过用户无保存权限的Tab字段
 				if strings.HasPrefix(k, "system.base.") && !canSaveBase {
@@ -1489,6 +1506,9 @@ func Run(info BuildInfo) {
 					// All domain-audit policies share one lifecycle so a live change
 					// always converges rules and never leaves a stale strict/block rule.
 					webAuditConfigChanged = true
+				}
+				if strings.HasPrefix(k, "system.base.suricata_eve_") {
+					suricataEVEConfigChanged = true
 				}
 				val := vs[0]
 
@@ -1533,11 +1553,24 @@ func Run(info BuildInfo) {
 						c.JSON(http.StatusBadRequest, gin.H{"message": "续签天数必须是大于 0 的整数"})
 						return
 					}
-				case "system.base.history_max_days":
+				case "system.base.history_max_days", "system.base.suricata_eve_max_days":
 					n, err := strconv.Atoi(val)
 					if err != nil || n < 0 {
 						c.JSON(http.StatusBadRequest, gin.H{"message": "历史保留天数必须是非负整数"})
 						return
+					}
+				case "system.base.suricata_eve_poll_seconds":
+					n, err := strconv.Atoi(val)
+					if err != nil || n < 1 || n > suricataEVEMaxPollSecs {
+						c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Suricata EVE 轮询秒数必须在 1 到 %d 之间", suricataEVEMaxPollSecs)})
+						return
+					}
+				case "system.base.suricata_eve_path":
+					if strings.TrimSpace(val) != "" {
+						if _, err := validateSuricataEVEPath(val); err != nil {
+							c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+							return
+						}
 					}
 				case "openvpn.ovpn_subnet", "openvpn.ovpn_subnet6":
 					_, _, err := net.ParseCIDR(val)
@@ -1579,6 +1612,9 @@ func Run(info BuildInfo) {
 			// binds DNS listeners to tun0 before any DNS redirect is installed.
 			if webAuditConfigChanged {
 				syncWebAuditDNS(context.Background(), &ov)
+			}
+			if suricataEVEConfigChanged {
+				suricataEVE.reconcile()
 			}
 
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})
@@ -3051,6 +3087,9 @@ func Run(info BuildInfo) {
 
 		// 网站访问 DNS 审计：仅普通 DNS 域名元数据，按数据范围授权。
 		ovpn.GET("/web-audit/status", RequirePermission("web-audit:view"), ov.websiteAuditStatus)
+		ovpn.GET("/web-audit/suricata/status", RequirePermission("web-audit:view"), ov.suricataEVEStatus)
+		ovpn.GET("/web-audit/suricata/records", RequirePermission("web-audit:view"), ov.suricataNetworkAuditRecords)
+		ovpn.GET("/web-audit/suricata/export", RequirePermission("web-audit:view"), ov.suricataNetworkAuditExport)
 		ovpn.GET("/web-audit/summary", RequirePermission("web-audit:view"), ov.websiteAuditSummary)
 		ovpn.GET("/web-audit/records", RequirePermission("web-audit:view"), ov.websiteAuditRecords)
 		ovpn.GET("/web-audit/export", RequirePermission("web-audit:view"), ov.websiteAuditExport)
