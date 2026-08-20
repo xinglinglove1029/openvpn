@@ -1,12 +1,17 @@
 package openvpnweb
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	gormlogger "gorm.io/gorm/logger"
 )
 
@@ -142,7 +147,114 @@ func TestValidateSuricataEVEPath(t *testing.T) {
 	if _, err := validateSuricataEVEPath(""); err == nil {
 		t.Fatal("empty path accepted")
 	}
-	if got, err := validateSuricataEVEPath(filepath.Join(t.TempDir(), "eve.json")); err != nil || !filepath.IsAbs(got) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "eve.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := validateSuricataEVEPath(path); err != nil || !filepath.IsAbs(got) {
 		t.Fatalf("valid path=%q err=%v", got, err)
+	}
+	if _, err := validateSuricataEVEPath(dir); err == nil {
+		t.Fatal("directory accepted")
+	}
+}
+
+func TestSuricataHTTPPathDropsQueryFragmentAndExportDoesNotLeak(t *testing.T) {
+	cleanup := setupSuricataEVETestDB(t)
+	defer cleanup()
+	line := []byte(`{"event_type":"http","src_ip":"10.8.0.2","dest_ip":"198.51.100.10","http":{"url":"/x?token=secret#frag"}}`)
+	event, ok, err := parseSuricataEVELine(line)
+	if err != nil || !ok || event.HTTPURL != "/x" {
+		t.Fatalf("event=%#v ok=%v err=%v", event, ok, err)
+	}
+	event.UserID, event.Username, event.ObservedAt = 1, "alice", time.Now().Unix()
+	if err := db.Create(&event).Error; err != nil {
+		t.Fatal(err)
+	}
+	var stored SuricataNetworkEvent
+	if err := db.First(&stored).Error; err != nil || strings.Contains(stored.HTTPURL, "secret") {
+		t.Fatalf("stored=%#v err=%v", stored, err)
+	}
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/ovpn/web-audit/suricata/export", nil)
+	ctx.Set("isAdmin", true)
+	(&ovpn{}).suricataNetworkAuditExport(ctx)
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "secret") || !strings.Contains(recorder.Body.String(), "/x") {
+		t.Fatalf("export status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSuricataEVEOverlongLineCheckpointsAndContinues(t *testing.T) {
+	cleanup := setupSuricataEVETestDB(t)
+	defer cleanup()
+	path := filepath.Join(t.TempDir(), "eve.json")
+	oldClients := webAuditDNS.clients
+	webAuditDNS.clients = map[string]auditClientIdentity{"10.8.0.2": {UserID: 1, Username: "alice"}}
+	defer func() { webAuditDNS.clients = oldClients }()
+	bad := bytes.Repeat([]byte("x"), suricataEVEMaxLineBytes+1)
+	good := []byte("\n{\"event_type\":\"flow\",\"src_ip\":\"10.8.0.2\",\"dest_ip\":\"198.51.100.1\"}\n")
+	if err := os.WriteFile(path, append(bad, good...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, imported, _, malformed, err := importSuricataEVEFile(path); err != nil || imported != 1 || malformed != 1 {
+		t.Fatalf("imported=%d malformed=%d err=%v", imported, malformed, err)
+	}
+	if _, imported, _, malformed, err := importSuricataEVEFile(path); err != nil || imported != 0 || malformed != 0 {
+		t.Fatalf("repeat imported=%d malformed=%d err=%v", imported, malformed, err)
+	}
+	var count int64
+	if err := db.Model(&SuricataNetworkEvent{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+}
+
+func TestSuricataNetworkAuditUsernameLiteralLikeFilter(t *testing.T) {
+	cleanup := setupSuricataEVETestDB(t)
+	defer cleanup()
+	now := time.Now().Unix()
+	if err := db.Create(&[]SuricataNetworkEvent{{UserID: 1, Username: "a%b", EventType: "flow", ObservedAt: now}, {UserID: 1, Username: "axb", EventType: "flow", ObservedAt: now}, {UserID: 1, Username: "a_b", EventType: "alert", ObservedAt: now}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := querySuricataNetworkAuditRecords(context.Background(), SuricataNetworkAuditFilter{Start: now - 1, End: now + 1, Username: "a%b"}, []uint{1}, false, 0, 20)
+	if err != nil || result.Total != 1 || result.Data[0].Username != "a%b" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	result, err = querySuricataNetworkAuditRecords(context.Background(), SuricataNetworkAuditFilter{Start: now - 1, End: now + 1, Username: "a_b"}, []uint{1}, false, 0, 20)
+	if err != nil || result.Total != 1 || result.Data[0].Username != "a_b" {
+		t.Fatalf("underscore result=%#v err=%v", result, err)
+	}
+}
+
+func TestCSVSafeWebsiteAuditFieldHandlesLeadingControls(t *testing.T) {
+	for _, value := range []string{" =1+1", "\t+1", "\r\n@cmd"} {
+		if got := csvSafeWebsiteAuditField(value); got != "'"+value {
+			t.Fatalf("csv safe %q = %q", value, got)
+		}
+	}
+	if got := csvSafeWebsiteAuditField(" ordinary"); got != " ordinary" {
+		t.Fatalf("ordinary field changed: %q", got)
+	}
+}
+
+func TestSuricataCSVFormulaFieldsAreEscaped(t *testing.T) {
+	cleanup := setupSuricataEVETestDB(t)
+	defer cleanup()
+	entry := SuricataNetworkEvent{UserID: 1, Username: " =alice", VPNIP: "\t+vpn", EventType: "flow", DNSName: "\n=domain", HTTPURL: "/safe", AlertSignature: "\r@alert", ObservedAt: time.Now().Unix()}
+	if err := db.Create(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/ovpn/web-audit/suricata/export", nil)
+	ctx.Set("isAdmin", true)
+	(&ovpn{}).suricataNetworkAuditExport(ctx)
+	for _, value := range []string{"' =alice", "'\t+vpn", "'\n=domain", "'\r@alert"} {
+		if !strings.Contains(recorder.Body.String(), value) {
+			t.Fatalf("CSV missing escaped %q: %q", value, recorder.Body.String())
+		}
 	}
 }

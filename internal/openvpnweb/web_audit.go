@@ -103,7 +103,7 @@ func suricataNetworkAuditQuery(ctx context.Context, filter SuricataNetworkAuditF
 		q = q.Where("user_id IN ?", accessibleUserIDs)
 	}
 	if filter.Username != "" {
-		q = q.Where("LOWER(username) LIKE ? ESCAPE '\\\\'", "%"+escapeWebsiteAuditLike(strings.ToLower(filter.Username))+"%")
+		q = q.Where("LOWER(username) LIKE ? ESCAPE '\\'", "%"+escapeWebsiteAuditLike(strings.ToLower(filter.Username))+"%")
 	}
 	if filter.EventType != "" {
 		q = q.Where("event_type = ?", filter.EventType)
@@ -521,17 +521,20 @@ func (ov *ovpn) historyWebsiteAudit(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 func csvSafeWebsiteAuditField(value string) string {
-	if value == "" {
-		return value
+	// Excel and similar spreadsheet programs ignore leading whitespace/control
+	// characters before evaluating formulas. Preserve the display text but prefix
+	// it when the first meaningful character is a formula operator.
+	for _, r := range value {
+		switch r {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '=', '+', '-', '@':
+			return "'" + value
+		default:
+			return value
+		}
 	}
-	// Excel and similar spreadsheet programs evaluate formula-looking CSV fields.
-	// Prefix a literal apostrophe before writing any potentially executable cell.
-	switch value[0] {
-	case '=', '+', '-', '@':
-		return "'" + value
-	default:
-		return value
-	}
+	return value
 }
 
 const websiteAuditMaxExportRows = 100000

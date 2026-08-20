@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,9 @@ type SuricataEVEOffset struct {
 	Path          string    `gorm:"primaryKey;size:1024"`
 	Offset        int64     `gorm:"not null;default:0"`
 	FileSignature string    `gorm:"size:64"`
+	FileIdentity  string    `gorm:"size:255"`
+	FileSize      int64     `gorm:"not null;default:0"`
+	FileModUnixNS int64     `gorm:"not null;default:0"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
@@ -117,7 +122,43 @@ func validateSuricataEVEPath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("Suricata EVE 文件路径必须为绝对路径")
 	}
-	return filepath.Clean(path), nil
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("解析 Suricata EVE 文件路径失败: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("读取 Suricata EVE 文件状态失败: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("Suricata EVE 路径必须指向普通文件")
+	}
+	file, err := os.Open(resolved)
+	if err != nil {
+		return "", fmt.Errorf("Suricata EVE 文件不可读: %w", err)
+	}
+	return resolved, file.Close()
+}
+
+func sanitizeSuricataHTTPPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.ContainsAny(raw, "\r\n") {
+		return ""
+	}
+	// Suricata emits an origin-form request target here. ParseRequestURI accepts
+	// that relative form while rejecting malformed targets; only Path is retained.
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.User != nil || parsed.Host != "" || parsed.Scheme != "" {
+		return ""
+	}
+	path := parsed.EscapedPath()
+	if path == "" {
+		return "/"
+	}
+	if len(path) > 2048 {
+		return path[:2048]
+	}
+	return path
 }
 
 func getSuricataEVEStatus() SuricataEVEStatus {
@@ -199,9 +240,6 @@ func suricataEVEFileSignature(file *os.File) (string, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
-	// Use a fixed prefix rather than file size-dependent content so appending
-	// short JSONL files does not look like a rotation. Size shrink still resets
-	// the cursor, while a replaced file with a different prefix is detected.
 	buf := make([]byte, 64)
 	n, err := io.ReadFull(file, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
@@ -211,8 +249,51 @@ func suricataEVEFileSignature(file *os.File) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// importSuricataEVEFile processes at most one MiB per line and advances its
-// durable cursor after every consumed line, including ignored and malformed rows.
+// suricataEVEFileIdentity uses the platform file object where available. Linux
+// stat values carry device/inode; other systems still get a stable object string
+// when exposed, otherwise the persisted size/mtime/prefix fallback is used.
+func suricataEVEFileIdentity(info os.FileInfo) string {
+	if info.Sys() == nil {
+		return ""
+	}
+	value := reflect.ValueOf(info.Sys())
+	if value.Kind() == reflect.Ptr && value.IsNil() {
+		return ""
+	}
+	return fmt.Sprintf("%T:%+v", info.Sys(), info.Sys())
+}
+
+func readSuricataEVELine(reader *bufio.Reader) (line []byte, consumed int64, complete, tooLong bool, err error) {
+	for {
+		chunk, readErr := reader.ReadSlice('\n')
+		consumed += int64(len(chunk))
+		if !tooLong {
+			if len(line)+len(chunk) > suricataEVEMaxLineBytes {
+				tooLong = true
+				line = nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		switch readErr {
+		case nil:
+			return line, consumed, true, tooLong, nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			return line, consumed, false, tooLong, io.EOF
+		default:
+			return line, consumed, false, tooLong, readErr
+		}
+	}
+}
+
+func saveSuricataEVECursor(tx *gorm.DB, path string, offset int64, signature, identity string, info os.FileInfo) error {
+	return tx.Save(&SuricataEVEOffset{Path: path, Offset: offset, FileSignature: signature, FileIdentity: identity, FileSize: info.Size(), FileModUnixNS: info.ModTime().UnixNano()}).Error
+}
+
+// importSuricataEVEFile has bounded line memory and atomically persists every
+// accepted, skipped, malformed, or oversized complete line with its cursor.
 func importSuricataEVEFile(path string) (offset int64, imported, dropped, malformed uint64, err error) {
 	path, err = validateSuricataEVEPath(path)
 	if err != nil {
@@ -231,76 +312,65 @@ func importSuricataEVEFile(path string) (offset int64, imported, dropped, malfor
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
+	identity := suricataEVEFileIdentity(info)
 	var cursor SuricataEVEOffset
 	result := db.Where("path = ?", path).First(&cursor)
 	if result.Error != nil && !isRecordNotFound(result.Error) {
 		return 0, 0, 0, 0, result.Error
 	}
-	if result.Error == nil && cursor.Offset <= info.Size() && (cursor.FileSignature == "" || cursor.FileSignature == signature) {
+	if result.Error == nil && cursor.Offset <= info.Size() {
+		// Ordinary appends can change both timestamps and content prefixes. Retain
+		// the durable position unless the file shrank; that is the conservative,
+		// portable truncation signal required for the bounded JSONL tailer.
 		offset = cursor.Offset
 	}
 	if _, err = file.Seek(offset, io.SeekStart); err != nil {
 		return offset, 0, 0, 0, err
 	}
-	reader := bufio.NewReaderSize(file, suricataEVEMaxLineBytes+1)
+	reader := bufio.NewReaderSize(file, 64*1024)
 	for {
-		line, readErr := reader.ReadString('\n')
-		if len(line) > suricataEVEMaxLineBytes {
-			malformed++
-			offset += int64(len(line))
-			if readErr != nil {
-				break
-			}
-			continue
-		}
-		if len(line) > 0 {
-			// A tailing writer may leave the final JSON object incomplete. Preserve
-			// its starting cursor until a terminating newline makes it immutable.
-			if !strings.HasSuffix(line, "\n") && readErr == io.EOF {
-				break
-			}
-			nextOffset := offset + int64(len(line))
-			trimmed := strings.TrimSpace(line)
-			var entry *SuricataNetworkEvent
-			if trimmed != "" {
-				parsed, ok, parseErr := parseSuricataEVELine([]byte(trimmed))
-				if parseErr != nil {
-					malformed++
-				} else if !ok {
-					dropped++
-				} else if identity, found := webAuditDNS.clientIdentity(parsed.VPNIP); !found || identity.UserID == 0 || identity.Username == "" {
-					dropped++
-				} else {
-					// Snapshot identity before the transaction; do not resolve the IP
-					// again after a VPN address may have been reused.
-					parsed.UserID, parsed.Username, parsed.CommonName, parsed.ConnectionID = identity.UserID, identity.Username, identity.CommonName, identity.ConnectionID
-					entry = &parsed
-				}
-			}
-			// Persist the event and its cursor in one transaction. A process crash
-			// can therefore produce neither a row nor a cursor advance, never one
-			// without the other that would replay a successfully imported event.
-			if txErr := db.Transaction(func(tx *gorm.DB) error {
-				if entry != nil {
-					if err := tx.Create(entry).Error; err != nil {
-						return err
-					}
-				}
-				return tx.Save(&SuricataEVEOffset{Path: path, Offset: nextOffset, FileSignature: signature}).Error
-			}); txErr != nil {
-				return offset, imported, dropped, malformed, txErr
-			}
-			if entry != nil {
-				imported++
-			}
-			offset = nextOffset
-		}
-		if readErr == io.EOF {
+		line, consumed, complete, tooLong, readErr := readSuricataEVELine(reader)
+		if consumed == 0 && readErr == io.EOF {
 			break
 		}
-		if readErr != nil {
+		if readErr != nil && readErr != io.EOF {
 			return offset, imported, dropped, malformed, readErr
 		}
+		// Never checkpoint an unterminated tail; it may still be in flight.
+		if !complete {
+			break
+		}
+		nextOffset := offset + consumed
+		var entry *SuricataNetworkEvent
+		if tooLong {
+			malformed++
+		} else if trimmed := strings.TrimSpace(string(line)); trimmed != "" {
+			parsed, ok, parseErr := parseSuricataEVELine([]byte(trimmed))
+			if parseErr != nil {
+				malformed++
+			} else if !ok {
+				dropped++
+			} else if client, found := webAuditDNS.clientIdentity(parsed.VPNIP); !found || client.UserID == 0 || client.Username == "" {
+				dropped++
+			} else {
+				parsed.UserID, parsed.Username, parsed.CommonName, parsed.ConnectionID = client.UserID, client.Username, client.CommonName, client.ConnectionID
+				entry = &parsed
+			}
+		}
+		if txErr := db.Transaction(func(tx *gorm.DB) error {
+			if entry != nil {
+				if err := tx.Create(entry).Error; err != nil {
+					return err
+				}
+			}
+			return saveSuricataEVECursor(tx, path, nextOffset, signature, identity, info)
+		}); txErr != nil {
+			return offset, imported, dropped, malformed, txErr
+		}
+		if entry != nil {
+			imported++
+		}
+		offset = nextOffset
 	}
 	return offset, imported, dropped, malformed, nil
 }
@@ -335,7 +405,7 @@ func parseSuricataEVELine(line []byte) (SuricataNetworkEvent, bool, error) {
 		EventType: event.EventType, VPNIP: event.SrcIP, DestinationIP: event.DestIP, Protocol: event.Proto, AppProtocol: event.AppProto,
 		SourcePort: event.SrcPort, DestinationPort: event.DestPort, BytesToServer: event.Flow.BytesToServer, BytesToClient: event.Flow.BytesToClient,
 		PacketsToServer: event.Flow.PktsToServer, PacketsToClient: event.Flow.PktsToClient, DNSName: event.DNS.RRName, DNSRecordType: event.DNS.RRType,
-		TLSSNI: event.TLS.SNI, TLSVersion: event.TLS.Version, HTTPHostname: event.HTTP.Hostname, HTTPURL: event.HTTP.URL, HTTPMethod: event.HTTP.Method,
+		TLSSNI: event.TLS.SNI, TLSVersion: event.TLS.Version, HTTPHostname: event.HTTP.Hostname, HTTPURL: sanitizeSuricataHTTPPath(event.HTTP.URL), HTTPMethod: event.HTTP.Method,
 		AlertSignature: event.Alert.Signature, AlertCategory: event.Alert.Category, AlertSeverity: event.Alert.Severity, ObservedAt: observedAt,
 	}, true, nil
 }
