@@ -16,6 +16,10 @@ export interface SettingsResponse {
       web_audit_strict_dns: boolean;
       web_audit_block_dot: boolean;
       web_audit_block_udp_443: boolean;
+      suricata_eve_enabled: boolean;
+      suricata_eve_path: string;
+      suricata_eve_poll_seconds: number;
+      suricata_eve_max_days: number;
     };
     ldap: {
       ldap_auth: boolean;

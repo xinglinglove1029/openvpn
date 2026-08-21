@@ -52,6 +52,13 @@ function validateSetting(key: string, value: unknown): string | undefined {
   if (key === 'system.base.admin_username' && !isValidAccount(text)) return '管理员账号不能为空，长度需在 2-64 个字符内';
   if (key === 'system.base.admin_password' && text && !isStrongPassword(text)) return '管理员新密码需至少 12 位，包含大小写字母、数字和特殊字符';
   if (key === 'system.base.history_max_days' && !isNonNegativeInteger(text)) return '历史保留天数必须是非负整数';
+  if (key === 'system.base.suricata_eve_max_days' && text && !isNonNegativeInteger(text)) return 'EVE 历史保留天数必须是非负整数';
+  if (key === 'system.base.suricata_eve_poll_seconds') {
+    if (!isPositiveInteger(text) || Number(text) > 300) return 'Suricata EVE 轮询秒数必须在 1 到 300 之间';
+  }
+  if (key === 'system.base.suricata_eve_path' && text !== '/data/suricata/eve.json') {
+    return '容器内 Suricata EVE 路径必须为 /data/suricata/eve.json';
+  }
   if (key === 'system.base.renew_days' && !isPositiveInteger(text)) return '续签天数必须是大于 0 的整数';
   if (key === 'system.base.max_duplicate_login' && !isNonNegativeInteger(text)) return '重复登录数必须是非负整数';
   if (key === 'system.ldap.ldap_url' && text && !isValidUrl(text, ['ldap:', 'ldaps:'])) return 'LDAP URL 请输入 ldap:// 或 ldaps:// 地址';
@@ -235,6 +242,10 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.web_audit_strict_dns'] = String(base.web_audit_strict_dns ?? false);
   out['system.base.web_audit_block_dot'] = String(base.web_audit_block_dot ?? false);
   out['system.base.web_audit_block_udp_443'] = String(base.web_audit_block_udp_443 ?? false);
+  out['system.base.suricata_eve_enabled'] = String(base.suricata_eve_enabled ?? false);
+  out['system.base.suricata_eve_path'] = String(base.suricata_eve_path ?? '/data/suricata/eve.json');
+  out['system.base.suricata_eve_poll_seconds'] = String(base.suricata_eve_poll_seconds ?? 5);
+  out['system.base.suricata_eve_max_days'] = String(base.suricata_eve_max_days ?? '');
 
   const ldap = settings?.system?.ldap ?? ({} as SettingsResponse['system']['ldap']);
   out['system.ldap.ldap_url'] = String(ldap.ldap_url ?? '');
@@ -627,6 +638,43 @@ export default function SettingsPage() {
                     settingKey="system.base.web_audit_block_udp_443"
                     store={store}
                   />
+                </div>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <SettingSwitch
+                    label="启用 Suricata EVE 网络审计"
+                    description="在容器内的 tun0 解密流量上记录 flow、DNS、TLS、HTTP 和告警元数据。默认关闭；不记录 payload、Cookie、Authorization、请求/响应正文或 HTTPS 明文。"
+                    checked={base.suricata_eve_enabled ?? false}
+                    settingKey="system.base.suricata_eve_enabled"
+                    store={store}
+                  />
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    <SettingField
+                      label="EVE 文件路径"
+                      description="容器内固定持久化路径，不要改为宿主机路径。"
+                      value={base.suricata_eve_path ?? '/data/suricata/eve.json'}
+                      settingKey="system.base.suricata_eve_path"
+                      store={store}
+                    />
+                    <SettingField
+                      label="EVE 导入轮询（秒）"
+                      description="应用读取 EVE JSONL 的间隔，范围 1-300 秒。"
+                      value={base.suricata_eve_poll_seconds ?? 5}
+                      settingKey="system.base.suricata_eve_poll_seconds"
+                      type="number"
+                      store={store}
+                    />
+                    <SettingField
+                      label="EVE 历史保留天数"
+                      description="填 0 或留空时沿用全局历史保留天数。"
+                      value={base.suricata_eve_max_days ?? ''}
+                      settingKey="system.base.suricata_eve_max_days"
+                      type="number"
+                      store={store}
+                    />
+                  </div>
                 </div>
               </CardContent>
             </Card>

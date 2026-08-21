@@ -11,9 +11,9 @@ services:
       - "1194:1194/udp"
       - "8888:8888"
     environment:
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin
-      - OVPN_GATEWAY=false
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin
+      OVPN_GATEWAY: "true"
     volumes:
       - ./data:/data
       - /etc/localtime:/etc/localtime:ro
