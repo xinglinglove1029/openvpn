@@ -36,8 +36,8 @@ type SysBeseConfig struct {
 	// WebAuditBlockUDP443 asks clients to fall back from QUIC/HTTP3 to TCP/TLS.
 	// It is deliberately off by default because it can reduce web performance.
 	WebAuditBlockUDP443 bool `json:"web_audit_block_udp_443" mapstructure:"web_audit_block_udp_443"`
-	// Suricata EVE import is intentionally disabled by default. The application
-	// only tails a deployment-provided, read-only JSONL file.
+	// Suricata EVE import is intentionally disabled by default. The container
+	// control process creates this persistent JSONL file only for local capture.
 	SuricataEVEEnabled     bool   `json:"suricata_eve_enabled" mapstructure:"suricata_eve_enabled"`
 	SuricataEVEPath        string `json:"suricata_eve_path" mapstructure:"suricata_eve_path"`
 	SuricataEVEPollSeconds int    `json:"suricata_eve_poll_seconds" mapstructure:"suricata_eve_poll_seconds"`
@@ -250,7 +250,7 @@ func initConfig() {
 	viper.SetDefault("system.base.web_audit_block_dot", false)
 	viper.SetDefault("system.base.web_audit_block_udp_443", false)
 	viper.SetDefault("system.base.suricata_eve_enabled", false)
-	viper.SetDefault("system.base.suricata_eve_path", "")
+	viper.SetDefault("system.base.suricata_eve_path", suricataBuiltInEVEPath)
 	viper.SetDefault("system.base.suricata_eve_poll_seconds", 5)
 	viper.SetDefault("system.base.suricata_eve_max_days", 0)
 	viper.SetDefault("system.base.renew_days", 365)

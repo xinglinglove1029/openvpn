@@ -1,0 +1,34 @@
+%YAML 1.1
+---
+
+default-log-dir: /data/suricata
+rule-files: []
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /data/suricata/eve.json
+      threaded: no
+      types:
+        - flow
+        - dns:
+            requests: yes
+            responses: yes
+        - tls:
+            extended: no
+        - http:
+            extended: no
+        - alert:
+            payload: no
+            payload-printable: no
+            packet: no
+            http-body: no
+            http-body-printable: no
+            metadata:
+              app-layer: no
+              flow: yes
+              rule:
+                metadata: yes
+                raw: no
+                reference: no

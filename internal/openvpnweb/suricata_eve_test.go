@@ -3,17 +3,100 @@ package openvpnweb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 	gormlogger "gorm.io/gorm/logger"
 )
+
+func TestInitConfigDefaultsSuricataInContainerDisabled(t *testing.T) {
+	previousOVData := ovData
+	ovData = t.TempDir()
+	viper.Reset()
+	t.Cleanup(func() {
+		ovData = previousOVData
+		viper.Reset()
+	})
+
+	initConfig()
+
+	if viper.GetBool("system.base.suricata_eve_enabled") {
+		t.Fatal("new configuration enables Suricata EVE import by default")
+	}
+	if got := viper.GetString("system.base.suricata_eve_path"); got != suricataBuiltInEVEPath {
+		t.Fatalf("default Suricata EVE path = %q, want %s", got, suricataBuiltInEVEPath)
+	}
+	contents, err := os.ReadFile(filepath.Join(ovData, "config.json"))
+	if err != nil {
+		t.Fatalf("read generated config.json: %v", err)
+	}
+	var generated struct {
+		System struct {
+			Base struct {
+				Enabled bool   `json:"suricata_eve_enabled"`
+				Path    string `json:"suricata_eve_path"`
+			} `json:"base"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(contents, &generated); err != nil {
+		t.Fatalf("parse generated config.json: %v", err)
+	}
+	if generated.System.Base.Enabled || generated.System.Base.Path != suricataBuiltInEVEPath {
+		t.Fatalf("generated Suricata defaults = %#v", generated.System.Base)
+	}
+}
+
+func TestEnsureBuiltInSuricataEVEFileLeavesExternalPathUnmanaged(t *testing.T) {
+	externalPath := filepath.Join(t.TempDir(), "external-eve.json")
+	if err := ensureBuiltInSuricataEVEFile(externalPath); err != nil {
+		t.Fatalf("external path should remain unmanaged: %v", err)
+	}
+	if _, err := os.Stat(externalPath); !os.IsNotExist(err) {
+		t.Fatalf("external EVE path was unexpectedly created: %v", err)
+	}
+}
+
+func TestEnsureSuricataEVEFileRejectsSymbolicLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links requires Windows developer privileges")
+	}
+	path := filepath.Join(t.TempDir(), "eve.json")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "target"), path); err != nil {
+		t.Fatalf("create EVE symlink: %v", err)
+	}
+	if err := ensureSuricataEVEFile(path); err == nil {
+		t.Fatal("Suricata EVE symbolic link was accepted")
+	}
+}
+
+func TestEnsureSuricataEVEFileRestrictsExistingFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX file modes")
+	}
+	path := filepath.Join(t.TempDir(), "eve.json")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("create existing EVE file: %v", err)
+	}
+	if err := ensureSuricataEVEFile(path); err != nil {
+		t.Fatalf("ensure EVE file: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat EVE file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("EVE file permissions = %04o, want 0600", got)
+	}
+}
 
 func setupSuricataEVETestDB(t *testing.T) func() {
 	t.Helper()

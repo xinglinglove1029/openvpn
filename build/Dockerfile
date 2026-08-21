@@ -63,11 +63,16 @@ RUN apk add --no-cache \
     sqlite \
     supervisor \
     tzdata \
+  # Alpine's Suricata post-install hook downloads third-party rules. The image
+  # is metadata-only by default, so install the package without maintainer hooks.
+  && apk add --no-cache --no-scripts suricata \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone
 
 COPY build/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
 COPY build/openvpn-auth /usr/lib/openvpn/plugins/openvpn-auth
+COPY build/suricata-audit.sh /usr/local/bin/suricata-audit
+COPY build/suricata.yaml /etc/suricata/suricata.yaml
 COPY build/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY --from=backend-builder /out/openvpn-web /usr/local/bin/openvpn-web
 
@@ -75,8 +80,11 @@ COPY --from=backend-builder /out/openvpn-web /usr/local/bin/openvpn-web
 # （容器启动报 "no such file or directory"），统一转换为 LF 后再 chmod。
 RUN sed -i 's/\r$//' /usr/bin/docker-entrypoint.sh \
  && sed -i 's/\r$//' /usr/lib/openvpn/plugins/openvpn-auth \
+ && sed -i 's/\r$//' /usr/local/bin/suricata-audit \
  && sed -i 's/\r$//' /etc/supervisor/conf.d/supervisord.conf \
- && chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth
+ && install -d -m 0700 /data/suricata \
+ && chmod +x /usr/local/bin/openvpn-web /usr/bin/docker-entrypoint.sh /usr/lib/openvpn/plugins/openvpn-auth /usr/local/bin/suricata-audit \
+ && suricata -T -c /etc/suricata/suricata.yaml
 
 VOLUME ["/data"]
 

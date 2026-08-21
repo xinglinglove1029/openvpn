@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	suricataBuiltInEVEPath  = "/data/suricata/eve.json"
 	suricataEVEMaxLineBytes = 1024 * 1024
 	suricataEVEMaxPollSecs  = 300
 )
@@ -88,6 +89,7 @@ type suricataEVEEvent struct {
 
 type suricataEVEService struct {
 	mu     sync.RWMutex
+	pollMu sync.Mutex
 	cancel context.CancelFunc
 	status SuricataEVEStatus
 }
@@ -177,6 +179,35 @@ func (s *suricataEVEService) setError(err error) {
 	s.status.LastError = err.Error()
 }
 
+func ensureBuiltInSuricataEVEFile(path string) error {
+	if strings.TrimSpace(path) != suricataBuiltInEVEPath {
+		return nil
+	}
+	return ensureSuricataEVEFile(path)
+}
+
+func ensureSuricataEVEFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("创建内置 Suricata EVE 目录失败: %w", err)
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("内置 Suricata EVE 路径必须是普通文件，不能是符号链接")
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("读取内置 Suricata EVE 文件状态失败: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return fmt.Errorf("创建内置 Suricata EVE 文件失败: %w", err)
+	}
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("收紧内置 Suricata EVE 文件权限失败: %w", err)
+	}
+	return file.Close()
+}
+
 func (s *suricataEVEService) reconcile() {
 	s.mu.Lock()
 	if s.cancel != nil {
@@ -188,7 +219,13 @@ func (s *suricataEVEService) reconcile() {
 		s.mu.Unlock()
 		return
 	}
-	path, err := validateSuricataEVEPath(viper.GetString("system.base.suricata_eve_path"))
+	configuredPath := viper.GetString("system.base.suricata_eve_path")
+	if err := ensureBuiltInSuricataEVEFile(configuredPath); err != nil {
+		s.status.LastError = err.Error()
+		s.mu.Unlock()
+		return
+	}
+	path, err := validateSuricataEVEPath(configuredPath)
 	if err != nil {
 		s.status.LastError = err.Error()
 		s.mu.Unlock()
@@ -216,6 +253,10 @@ func (s *suricataEVEService) loop(ctx context.Context, path string) {
 }
 
 func (s *suricataEVEService) poll(path string) {
+	// A settings save can replace the loop while an import is still in flight.
+	// Keep file reads and cursor writes serialized to avoid duplicate inserts.
+	s.pollMu.Lock()
+	defer s.pollMu.Unlock()
 	offset, imported, dropped, malformed, err := importSuricataEVEFile(path)
 	s.mu.Lock()
 	defer s.mu.Unlock()

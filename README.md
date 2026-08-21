@@ -38,7 +38,22 @@
 
 ## Suricata EVE 网络审计（可选）
 
-网络审计默认关闭。部署方可自行在 NAT 前的 `tun0` 旁路运行 Suricata，并将其 EVE JSONL 文件以**受信任的只读卷**挂载给应用；本项目不会安装、启动或配置 Suricata，也不要求额外网络权限。启用 `system.base.suricata_eve_enabled` 时，`suricata_eve_path` 必须为容器/主机内一个可读普通文件的绝对路径（符号链接会解析为真实路径作为断点键）；可用 `suricata_eve_poll_seconds` 调整轮询，`suricata_eve_max_days` 控制留存（未设置时回退 `history_max_days`）。Linux 通过设备/ inode 识别原子轮转；其他平台使用大小、修改时间和文件前缀的回退识别。
+网络审计默认关闭。镜像内置 Suricata，但只有 `system.base.suricata_eve_enabled=true` 时，采集控制进程才会等待 OpenVPN 创建 `tun0`，再以 IDS 模式在同一容器、NAT 前监听该接口。Compose 已声明所需的最小能力 `NET_RAW`（并保留 OpenVPN 所需的 `NET_ADMIN`）；不使用 `privileged`、host network、IPS、PCAP、payload 或规则下载。启用后 EVE JSONL 固定写入持久化路径 `/data/suricata/eve.json`，可通过 `docker compose logs -f openvpn` 查看采集控制进程和 Suricata 日志。关闭开关后，控制进程会终止 Suricata 子进程并保留已有 EVE 与已导入记录；Suricata 子进程异常退出时，控制进程会尝试重新启动它；控制进程自身退出时才由 Supervisor 重启。两类故障均不会中断 OpenVPN 或 Web 服务。
+
+首次启用前请确认 VPN 网关模式已创建 `tun0`，并让配置中的 `suricata_eve_path` 保持默认 `/data/suricata/eve.json`。在 `/data/config.json` 中保存以下配置即可开启，应用与控制进程会检测配置变化：
+
+```json
+{
+  "system": {
+    "base": {
+      "suricata_eve_enabled": true,
+      "suricata_eve_path": "/data/suricata/eve.json"
+    }
+  }
+}
+```
+
+使用 `docker compose exec openvpn supervisorctl status suricata-audit` 检查控制进程，使用 `docker compose exec openvpn test -f /data/suricata/eve.json` 检查 EVE 文件。可用 `suricata_eve_poll_seconds` 调整导入轮询，`suricata_eve_max_days` 控制留存（未设置时回退 `history_max_days`）。导入器可在文件缩小后从头读取；对于同大小且前缀相同的原子替换轮转，当前版本不能可靠识别，建议保留 `eve.json` 当前文件并使用 copytruncate 或在维护窗口重启导入服务。
 
 导入器只保存已关联 VPN 用户的 `flow`、`dns`、`tls`、`http`、`alert` 事件中的网络元数据，例如五元组、流量计数、DNS 名称、TLS SNI/版本、HTTP 主机、**不含 query/fragment 的路径**、方法及告警信息。它不会保存完整 EVE JSON、HTTP 请求或响应正文、Cookie、Authorization、URL 参数或任何 payload；HTTPS 仍仅提供可见的 TLS 元数据。查询、导出和状态接口复用 `web-audit:view` 权限及既有用户/分组数据范围。
 
@@ -434,6 +449,7 @@ docker compose down
 docker run -d \
   --name openvpn \
   --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
   -p 1194:1194/udp \
   -p 8888:8888 \
   -e ADMIN_USERNAME=admin \

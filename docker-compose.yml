@@ -6,6 +6,7 @@ services:
       dockerfile: build/Dockerfile
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     ports:
       - "1194:1194/udp"
       - "8888:8888"
