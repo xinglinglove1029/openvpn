@@ -9,6 +9,7 @@ import { Toaster } from './ui/sonner';
 // 懒加载页面组件
 const LoginPage = lazy(() => import('./pages/Login'));
 const OverviewPage = lazy(() => import('./pages/Overview'));
+const ExecutiveDashboardPage = lazy(() => import('./pages/ExecutiveDashboard'));
 const UsersPage = lazy(() => import('./pages/Users'));
 const ClientsPage = lazy(() => import('./pages/Clients'));
 const FirewallPage = lazy(() => import('./pages/Firewall'));
@@ -60,6 +61,7 @@ function App() {
               <Route path="/" element={<Layout />}>
                 <Route index element={<Navigate to="/overview" replace />} />
                 <Route path="overview" element={<SuspenseWrap><OverviewPage /></SuspenseWrap>} />
+                <Route path="screen" element={<SuspenseWrap><ExecutiveDashboardPage /></SuspenseWrap>} />
                 <Route path="users" element={<SuspenseWrap><UsersPage /></SuspenseWrap>} />
                 <Route path="clients" element={<SuspenseWrap><ClientsPage /></SuspenseWrap>} />
                 <Route path="firewall" element={<SuspenseWrap><FirewallPage /></SuspenseWrap>} />

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   Activity,
@@ -13,6 +14,7 @@ import {
   ShieldCheck,
   TrendingUp,
   Wifi,
+  MonitorUp,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/ui/card';
 import { Button } from '@/ui/button';
@@ -72,6 +74,7 @@ type ModalState =
 /* ---------- main component ---------- */
 
 export default function OverviewPage() {
+  const navigate = useNavigate();
   const [confirmState, setConfirmState] = useState<ConfirmState>();
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
 
@@ -290,9 +293,15 @@ export default function OverviewPage() {
                 {wsConnected ? '实时' : '连接中'}
               </span>
             </CardTitle>
-            <CardDescription>
-              账号、客户端、防火墙、连接历史、证书与系统设置已统一接入，日常 VPN 管理都可以在这里完成。
-            </CardDescription>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <CardDescription>
+                账号、客户端、防火墙、连接历史、证书与系统设置已统一接入，日常 VPN 管理都可以在这里完成。
+              </CardDescription>
+              <Button type="button" variant="outline" className="shrink-0" onClick={() => navigate('/screen')}>
+                <MonitorUp className="mr-2 h-4 w-4" />
+                打开运营大屏
+              </Button>
+            </div>
           </CardHeader>
         </Card>
       </CardGlow>

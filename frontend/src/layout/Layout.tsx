@@ -58,6 +58,8 @@ export function Layout() {
   }, [permissionTree]);
 
   function getRequiredPermission(pathname: string): string | undefined {
+    // 运营大屏不是独立菜单节点，但必须继承概览权限，避免普通用户绕过 RBAC。
+    if (pathname === '/screen' || pathname.startsWith('/screen/')) return 'menu:overview';
     // 精确匹配优先，前缀匹配兜底
     const exact = pathPermissionMap.find((item) => pathname === item.path);
     if (exact) return exact.permission;

@@ -3212,7 +3212,20 @@ func Run(info BuildInfo) {
 				c.JSON(http.StatusUnauthorized, gin.H{"message": "未登录"})
 				return
 			}
-			WsHubInstance().ServeWs(c.Writer, c.Request)
+			permissions := make(map[string]bool)
+			if isAdmin, ok := c.Get("isAdmin"); ok {
+				if admin, _ := isAdmin.(bool); admin {
+					permissions["*"] = true
+				}
+			}
+			if raw, ok := c.Get("permissions"); ok {
+				if codes, ok := raw.([]string); ok {
+					for _, code := range codes {
+						permissions[code] = true
+					}
+				}
+			}
+			WsHubInstance().ServeWs(c.Writer, c.Request, permissions)
 		})
 
 		// 通知渠道维护：CRUD + Test

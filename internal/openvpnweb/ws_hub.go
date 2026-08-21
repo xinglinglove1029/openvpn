@@ -18,20 +18,26 @@ type WsEnvelope struct {
 
 // WsClient 单个 WebSocket 客户端连接
 type WsClient struct {
-	hub     *WsHub
-	conn    *websocket.Conn
-	send    chan []byte
-	mu      sync.Mutex
-	closed  bool
-	closeOn sync.Once
+	hub         *WsHub
+	conn        *websocket.Conn
+	send        chan []byte
+	permissions map[string]bool
+	mu          sync.Mutex
+	closed      bool
+	closeOn     sync.Once
 }
 
 // WsHub 维护所有活跃连接并对外提供广播能力
+type wsBroadcast struct {
+	envType string
+	payload interface{}
+}
+
 type WsHub struct {
 	clients    map[*WsClient]struct{}
 	register   chan *WsClient
 	unregister chan *WsClient
-	broadcast  chan []byte
+	broadcast  chan wsBroadcast
 	mu         sync.RWMutex
 	once       sync.Once
 }
@@ -40,7 +46,7 @@ var globalHub = &WsHub{
 	clients:    make(map[*WsClient]struct{}),
 	register:   make(chan *WsClient, 16),
 	unregister: make(chan *WsClient, 16),
-	broadcast:  make(chan []byte, 256),
+	broadcast:  make(chan wsBroadcast, 256),
 }
 
 // WsHub 返回全局 Hub 单例
@@ -112,8 +118,12 @@ func (h *WsHub) loop() {
 		case msg := <-h.broadcast:
 			h.mu.RLock()
 			for client := range h.clients {
+				data, err := marshalForClient(client, msg)
+				if err != nil || data == nil {
+					continue
+				}
 				select {
-				case client.send <- msg:
+				case client.send <- data:
 				default:
 					// 单个客户端写阻塞，丢弃并关闭连接
 					go func(c *WsClient) {
@@ -140,16 +150,36 @@ func (h *WsHub) loop() {
 	}
 }
 
+func marshalForClient(client *WsClient, msg wsBroadcast) ([]byte, error) {
+	payload := msg.payload
+	// dashboard:stats also contains aggregate overview data. Users with the
+	// overview permission may receive that aggregate data, but online client
+	// identities require the separate client:view_online permission.
+	if msg.envType == dashboardStatsTopic && !client.permissions["*"] {
+		if !client.permissions["menu:overview"] {
+			return nil, nil
+		}
+		if !client.permissions["client:view_online"] {
+			switch snapshot := msg.payload.(type) {
+			case DashboardStatsPayload:
+				snapshot.Online = nil
+				payload = snapshot
+			case *DashboardStatsPayload:
+				if snapshot != nil {
+					copy := *snapshot
+					copy.Online = nil
+					payload = &copy
+				}
+			}
+		}
+	}
+	return json.Marshal(WsEnvelope{Type: msg.envType, Payload: payload})
+}
+
 // Broadcast 广播任意数据
 func (h *WsHub) Broadcast(envType string, payload interface{}) {
-	env := WsEnvelope{Type: envType, Payload: payload}
-	data, err := json.Marshal(env)
-	if err != nil {
-		log.Printf("ws hub marshal error: %v", err)
-		return
-	}
 	select {
-	case h.broadcast <- data:
+	case h.broadcast <- wsBroadcast{envType: envType, payload: payload}:
 	default:
 		// 队列已满，丢弃
 		log.Printf("ws hub broadcast queue full, drop message type=%s", envType)
@@ -173,16 +203,17 @@ var wsUpgrader = websocket.Upgrader{
 }
 
 // ServeWs 处理 WebSocket 升级请求
-func (h *WsHub) ServeWs(w http.ResponseWriter, r *http.Request) {
+func (h *WsHub) ServeWs(w http.ResponseWriter, r *http.Request, permissions map[string]bool) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("ws upgrade error: %v", err)
 		return
 	}
 	client := &WsClient{
-		hub:  h,
-		conn: conn,
-		send: make(chan []byte, 64),
+		hub:         h,
+		conn:        conn,
+		send:        make(chan []byte, 64),
+		permissions: permissions,
 	}
 	h.register <- client
 
