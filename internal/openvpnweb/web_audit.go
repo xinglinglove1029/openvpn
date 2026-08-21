@@ -228,6 +228,11 @@ type WebsiteAuditSummary struct {
 	Trend         []WebsiteAuditTrendItem `json:"trend"`
 }
 
+type WebsiteAuditUserOption struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+}
+
 type WebsiteAuditRecordsResponse struct {
 	Start        int64              `json:"start"`
 	End          int64              `json:"end"`
@@ -446,6 +451,25 @@ func parseWebsiteAuditFilter(c *gin.Context) WebsiteAuditFilter {
 	start, _ := strconv.ParseInt(c.Query("start"), 10, 64)
 	end, _ := strconv.ParseInt(c.Query("end"), 10, 64)
 	return normalizeWebsiteAuditFilter(WebsiteAuditFilter{Start: start, End: end, Username: c.Query("username"), Domain: c.Query("domain")})
+}
+
+func (ov *ovpn) websiteAuditUsers(c *gin.Context) {
+	accessibleUserIDs, skipFilter := webAuditAccessScope(c)
+	query := db.WithContext(c.Request.Context()).Model(&User{}).
+		Select("id, username").
+		Where("username <> ''")
+	if !skipFilter {
+		query = query.Where("id IN ?", accessibleUserIDs)
+	}
+	var users []WebsiteAuditUserOption
+	if err := query.Order("username ASC").Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "查询网站审计用户失败"})
+		return
+	}
+	if users == nil {
+		users = make([]WebsiteAuditUserOption, 0)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": users})
 }
 
 func (ov *ovpn) websiteAuditSummary(c *gin.Context) {

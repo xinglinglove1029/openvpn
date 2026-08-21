@@ -623,6 +623,15 @@ export interface WebsiteAuditSummary {
   trend: WebsiteAuditTrendItem[];
 }
 
+export interface WebsiteAuditUserOption {
+  id: number;
+  username: string;
+}
+
+export interface WebsiteAuditUsersResponse {
+  data: WebsiteAuditUserOption[];
+}
+
 export interface WebsiteAccessRecord {
   id: number;
   userId: number;

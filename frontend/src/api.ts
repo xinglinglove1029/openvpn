@@ -26,60 +26,107 @@ function toFormBody(data: Record<string, unknown>) {
   return body;
 }
 
+type MutationRequest = Promise<unknown>;
+const pendingMutations = new Map<string, MutationRequest>();
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key])}`).join(',')}}`;
+}
+
+function bodyFingerprint(options: RequestOptions): string {
+  if (options.form !== undefined) return `form:${stableSerialize(options.form)}`;
+  if (options.json !== undefined) return `json:${stableSerialize(options.json)}`;
+  if (typeof options.body === 'string') return `body:${options.body}`;
+  if (typeof FormData !== 'undefined' && options.body instanceof FormData) {
+    const entries: string[] = [];
+    options.body.forEach((value, key) => {
+      if (typeof value === 'string') entries.push(`${key}=${value}`);
+      else entries.push(`${key}=${value.name}:${value.size}:${value.lastModified}`);
+    });
+    return `multipart:${entries.sort().join('&')}`;
+  }
+  return '';
+}
+
+function mutationKey(url: string, options: RequestOptions): string | undefined {
+  const method = (options.method || (options.form !== undefined || options.json !== undefined ? 'POST' : 'GET')).toUpperCase();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return undefined;
+  return `${method}:${url}:${bodyFingerprint(options)}`;
+}
+
 async function request<T>(url: string, options: RequestOptions = {}): Promise<T> {
-  const init: RequestInit = {
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      ...(options.headers || {}),
-    },
-    ...options,
-  };
-
-  if (options.json !== undefined) {
-    init.method = init.method || 'POST';
-    init.body = JSON.stringify(options.json);
-    init.headers = {
-      ...init.headers,
-      'Content-Type': 'application/json; charset=UTF-8',
-    };
-  } else if (options.form) {
-    init.method = init.method || 'POST';
-    init.body = toFormBody(options.form);
-    init.headers = {
-      ...init.headers,
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    };
+  const key = mutationKey(url, options);
+  if (key) {
+    const pending = pendingMutations.get(key);
+    if (pending) return pending as Promise<T>;
   }
 
-  const response = await fetch(url, init);
+  const promise = (async (): Promise<T> => {
+    const init: RequestInit = {
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        ...(options.headers || {}),
+      },
+      ...options,
+    };
 
-  if (response.redirected && response.url.includes('/login')) {
-    // 清除本地登录态缓存，避免刷新后 localStorage 中的旧 user 再次触发自动跳转
-    window.localStorage.removeItem('openvpn-admin-user');
-    window.location.href = '/login';
-    throw new ApiError('登录状态已过期', 401, true);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  const payload = contentType.includes('application/json') ? await response.json() : await response.text();
-
-  if (!response.ok) {
-    // RBAC：403 无权限统一 toast 提示，不跳转
-    // 标记 handled=true，调用方捕获到 ApiError 时检查 handled 字段跳过自己的 toast
-    if (response.status === 403) {
-      const forbiddenMessage =
-        typeof payload === 'object' && payload && 'message' in payload
-          ? String(payload.message)
-          : '无权限执行此操作';
-      toast.error(forbiddenMessage);
-      throw new ApiError(forbiddenMessage, 403, true);
+    if (options.json !== undefined) {
+      init.method = init.method || 'POST';
+      init.body = JSON.stringify(options.json);
+      init.headers = {
+        ...init.headers,
+        'Content-Type': 'application/json; charset=UTF-8',
+      };
+    } else if (options.form) {
+      init.method = init.method || 'POST';
+      init.body = toFormBody(options.form);
+      init.headers = {
+        ...init.headers,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      };
     }
-    const message = typeof payload === 'object' && payload && 'message' in payload ? String(payload.message) : response.statusText;
-    throw new ApiError(message || '请求失败', response.status, false);
-  }
 
-  return payload as T;
+    const response = await fetch(url, init);
+
+    if (response.redirected && response.url.includes('/login')) {
+      // 清除本地登录态缓存，避免刷新后 localStorage 中的旧 user 再次触发自动跳转
+      window.localStorage.removeItem('openvpn-admin-user');
+      window.location.href = '/login';
+      throw new ApiError('登录状态已过期', 401, true);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await response.json() : await response.text();
+
+    if (!response.ok) {
+      // RBAC：403 无权限统一 toast 提示，不跳转
+      // 标记 handled=true，调用方捕获到 ApiError 时检查 handled 字段跳过自己的 toast
+      if (response.status === 403) {
+        const forbiddenMessage =
+          typeof payload === 'object' && payload && 'message' in payload
+            ? String(payload.message)
+            : '无权限执行此操作';
+        toast.error(forbiddenMessage);
+        throw new ApiError(forbiddenMessage, 403, true);
+      }
+      const message = typeof payload === 'object' && payload && 'message' in payload ? String(payload.message) : response.statusText;
+      throw new ApiError(message || '请求失败', response.status, false);
+    }
+
+    return payload as T;
+  })();
+
+  if (key) {
+    pendingMutations.set(key, promise);
+    const clear = () => {
+      if (pendingMutations.get(key) === promise) pendingMutations.delete(key);
+    };
+    void promise.then(clear, clear);
+  }
+  return promise;
 }
 
 export const api = {

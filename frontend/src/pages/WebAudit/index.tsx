@@ -5,9 +5,10 @@ import { PageHeader } from '@/components/PageHeader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/ui/card';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { Badge } from '@/ui/badge';
 import { formatDateTime } from '@/lib/utils';
-import type { WebsiteAccessRecord, WebsiteAuditRecordsResponse, WebsiteAuditStatus, WebsiteAuditSummary } from '../../types';
+import type { WebsiteAccessRecord, WebsiteAuditRecordsResponse, WebsiteAuditStatus, WebsiteAuditSummary, WebsiteAuditUsersResponse } from '../../types';
 
 const ranges = [
   ['1h', '近 1 小时'], ['6h', '近 6 小时'], ['24h', '近 24 小时'], ['7d', '近 7 天'], ['30d', '近 30 天'],
@@ -36,6 +37,7 @@ export default function WebAuditPage() {
   const [summary, setSummary] = useState<WebsiteAuditSummary>();
   const [records, setRecords] = useState<WebsiteAuditRecordsResponse>();
   const [status, setStatus] = useState<WebsiteAuditStatus>();
+  const [auditUsers, setAuditUsers] = useState<WebsiteAuditUsersResponse['data']>([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingRecords, setLoadingRecords] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -70,6 +72,11 @@ export default function WebAuditPage() {
   }, [applyFilters, refreshStatus]);
 
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
+  useEffect(() => {
+    void api.get<WebsiteAuditUsersResponse>('/ovpn/web-audit/users')
+      .then((next) => setAuditUsers(Array.isArray(next?.data) ? next.data : []))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : '加载网站审计用户失败'));
+  }, []);
   useEffect(() => {
     const requestID = ++summaryRequest.current;
     setLoadingSummary(true);
@@ -120,7 +127,15 @@ export default function WebAuditPage() {
           <select className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={draftRange} onChange={(event) => setDraftRange(event.target.value as RangeName)}>
             {ranges.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <Input value={draftUsername} onChange={(event) => setDraftUsername(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && applyFilters()} placeholder="VPN 用户名（可选）" />
+          <Select value={draftUsername || '__all__'} onValueChange={(value) => setDraftUsername(value === '__all__' ? '' : value)}>
+            <SelectTrigger aria-label="VPN 用户">
+              <SelectValue placeholder="VPN 用户名（可选）" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">全部 VPN 用户</SelectItem>
+              {auditUsers.map((user) => <SelectItem key={user.id} value={user.username}>{user.username}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <Input value={draftDomain} onChange={(event) => setDraftDomain(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && applyFilters()} placeholder="域名关键字，例如 youtube.com" />
           <Button onClick={applyFilters}><Search /> 应用筛选</Button>
         </CardContent>

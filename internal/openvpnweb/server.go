@@ -3091,6 +3091,7 @@ func Run(info BuildInfo) {
 		ovpn.GET("/web-audit/suricata/records", RequirePermission("web-audit:view"), ov.suricataNetworkAuditRecords)
 		ovpn.GET("/web-audit/suricata/export", RequirePermission("web-audit:view"), ov.suricataNetworkAuditExport)
 		ovpn.GET("/web-audit/summary", RequirePermission("web-audit:view"), ov.websiteAuditSummary)
+		ovpn.GET("/web-audit/users", RequirePermission("web-audit:view"), ov.websiteAuditUsers)
 		ovpn.GET("/web-audit/records", RequirePermission("web-audit:view"), ov.websiteAuditRecords)
 		ovpn.GET("/web-audit/export", RequirePermission("web-audit:view"), ov.websiteAuditExport)
 		// OpenVPN local hooks keep DNS audit attribution accurate during VPN IP reuse.
