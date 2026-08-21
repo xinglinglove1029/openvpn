@@ -73,9 +73,9 @@ export interface SettingsResponse {
   };
   ai?: {
     enabled: boolean;
-    provider: string;       // deepseek | openai | customize | legacy providers
+    provider: string; // deepseek | openai | customize | legacy providers
     base_url: string;
-    api_key: string;        // 脱敏后的值
+    api_key: string; // 脱敏后的值
     model: string;
     system_prompt: string;
     max_tokens: number;
@@ -299,6 +299,29 @@ export interface DashboardTrafficUsersResponse {
   };
 }
 
+export type DashboardGeoSource = 'online' | 'audit' | 'website';
+
+export interface DashboardGeoPoint {
+  source: DashboardGeoSource;
+  country: string;
+  province?: string;
+  city?: string;
+  label: string;
+  count: number;
+}
+
+export interface DashboardGeoResponse {
+  start: number;
+  end: number;
+  points: DashboardGeoPoint[];
+  unknown: Record<string, number>;
+  websiteDomainOnly: number;
+  availableSources: DashboardGeoSource[];
+  /** 在线客户端来源为实时快照时的采样时间（Unix 秒）。 */
+  onlineAsOf?: number;
+  notes: string[];
+}
+
 export interface DashboardStatsPayload {
   summary: DashboardSummary;
   online: OnlineClient[];
@@ -319,8 +342,8 @@ export interface DashboardStatsPayload {
 export interface NotifyLogRecord {
   id: number;
   event: string;
-  provider: string;     // 渠道类型：email / dingtalk / webhook ...
-  channelName: string;  // 渠道名称：用户自定义的名称
+  provider: string; // 渠道类型：email / dingtalk / webhook ...
+  channelName: string; // 渠道名称：用户自定义的名称
   username: string;
   success: boolean;
   message: string;
@@ -355,15 +378,7 @@ export interface CertRecord {
 
 // 通知渠道（多渠道维护）
 export type ChannelType =
-  | 'webhook'
-  | 'email'
-  | 'dingtalk'
-  | 'feishu'
-  | 'wecom'
-  | 'discord'
-  | 'slack'
-  | 'telegram'
-  | 'mattermost';
+  'webhook' | 'email' | 'dingtalk' | 'feishu' | 'wecom' | 'discord' | 'slack' | 'telegram' | 'mattermost';
 
 export interface ChannelTypeMeta {
   type: ChannelType;
@@ -569,7 +584,6 @@ declare global {
     __OPENVPN_ADMIN__?: AdminRuntime;
   }
 }
-
 
 export interface WebsiteAuditStatus {
   enabled: boolean;
