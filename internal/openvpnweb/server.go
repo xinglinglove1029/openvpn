@@ -1363,6 +1363,7 @@ func Run(info BuildInfo) {
 		ovpn.GET("/dashboard/geo-map", RequirePermission("menu:overview"), ov.dashboardGeo)
 		ovpn.GET("/dashboard/geo-map/ips", RequirePermission("menu:overview"), ov.dashboardGeoIPs)
 		ovpn.GET("/dashboard/geo-boundary/:iso3/:level", RequirePermission("menu:overview"), ov.dashboardGeoBoundary)
+		ovpn.GET("/dashboard/china-boundary/:adcode", RequirePermission("menu:overview"), ov.dashboardChinaBoundary)
 		ovpn.GET("/system-stats/history", RequirePermission("menu:overview"), func(c *gin.Context) {
 			history, latest := GetSystemStatsHistory()
 			c.JSON(http.StatusOK, gin.H{

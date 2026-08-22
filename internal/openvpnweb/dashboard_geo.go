@@ -666,6 +666,107 @@ func (ov *ovpn) dashboardGeoBoundary(c *gin.Context) {
 	c.Data(http.StatusOK, "application/geo+json; charset=utf-8", data)
 }
 
+// dashboardChinaBoundary uses a version-pinned mirror rather than the former
+// geo.datav.aliyun.com endpoint, which now returns HTTP 403 from many networks.
+// Routing through this authenticated endpoint keeps browser requests same-origin
+// and makes the boundary data available from the server-side cache.
+func (ov *ovpn) dashboardChinaBoundary(c *gin.Context) {
+	adcode := strings.TrimSpace(c.Param("adcode"))
+	if !dashboardChinaBoundaryRequestValid(adcode) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "中国行政区代码无效"})
+		return
+	}
+
+	data, err := dashboardChinaBoundary(c.Request.Context(), adcode)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": fmt.Sprintf("加载中国行政区边界失败: %v", err)})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.Data(http.StatusOK, "application/geo+json; charset=utf-8", data)
+}
+
+func dashboardChinaBoundaryRequestValid(adcode string) bool {
+	if len(adcode) != 6 {
+		return false
+	}
+	for _, char := range adcode {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func dashboardChinaBoundary(ctx context.Context, adcode string) ([]byte, error) {
+	cacheKey := "china:" + adcode
+	now := time.Now()
+	dashboardGeoBoundaryCache.RLock()
+	cached, found := dashboardGeoBoundaryCache.entries[cacheKey]
+	dashboardGeoBoundaryCache.RUnlock()
+	if found && now.Before(cached.expiresAt) {
+		return cached.data, nil
+	}
+
+	// GeoJSON_CDN mirrors the administrative GeoJSON convention already used by
+	// the dashboard (for example 110000_full.json), but is version pinned so a
+	// provider-side latest update cannot silently change the response shape.
+	// jsDelivr is preferred for edge caching; GitHub Raw is an independent
+	// server-side fallback when a regional CDN edge rejects the request.
+	fileName := url.PathEscape(adcode) + "_full.json"
+	boundaryURLs := []string{
+		"https://cdn.jsdelivr.net/gh/yaunfei/GeoJSON_CDN@1.0.0/" + fileName,
+		"https://raw.githubusercontent.com/yaunfei/GeoJSON_CDN/1.0.0/" + fileName,
+	}
+	var lastErr error
+	for _, boundaryURL := range boundaryURLs {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, boundaryURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("创建中国行政区边界请求失败: %w", err)
+			continue
+		}
+		request.Header.Set("Accept", "application/geo+json, application/json;q=0.9")
+		response, err := dashboardGeoBoundaryHTTPClient.Do(request)
+		if err != nil {
+			lastErr = fmt.Errorf("请求中国行政区边界失败: %w", err)
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			lastErr = fmt.Errorf("中国行政区边界返回 HTTP %d", response.StatusCode)
+			continue
+		}
+		if response.ContentLength > dashboardGeoBoundaryMaxBytes {
+			response.Body.Close()
+			lastErr = fmt.Errorf("中国行政区边界文件过大（超过 %d MiB）", dashboardGeoBoundaryMaxBytes>>20)
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, dashboardGeoBoundaryMaxBytes+1))
+		response.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("读取中国行政区边界失败: %w", readErr)
+			continue
+		}
+		if len(data) > dashboardGeoBoundaryMaxBytes {
+			lastErr = fmt.Errorf("中国行政区边界文件过大（超过 %d MiB）", dashboardGeoBoundaryMaxBytes>>20)
+			continue
+		}
+		if !json.Valid(data) {
+			lastErr = fmt.Errorf("中国行政区边界不是有效 GeoJSON")
+			continue
+		}
+
+		dashboardGeoBoundaryCache.Lock()
+		dashboardGeoBoundaryCache.entries[cacheKey] = dashboardGeoBoundaryCacheEntry{data: data, expiresAt: now.Add(dashboardGeoBoundaryCacheTTL)}
+		dashboardGeoBoundaryCache.Unlock()
+		return data, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("没有可用的中国行政区边界源")
+	}
+	return nil, lastErr
+}
+
 func dashboardGeoBoundaryRequestValid(iso3, level string) bool {
 	if len(iso3) != 3 || (level != "ADM1" && level != "ADM2") {
 		return false

@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/ui/dialog';
 import { ChinaUsageMap } from './ChinaUsageMap';
 import { CountryUsageMap, type CountryDrillContext } from './CountryUsageMap';
-import { InteractiveGeoGlobe, type GeoGlobeMarker, type GeoGlobeView } from './InteractiveGeoGlobe';
+import { InteractiveGeoGlobe, type GeoGlobeCountry, type GeoGlobeMarker, type GeoGlobeView } from './InteractiveGeoGlobe';
 
 type MapPosition = readonly [string, number, number];
 
@@ -102,7 +102,7 @@ const COUNTRY_DEFINITIONS: Record<string, CountryDefinition> = {
   '越南': { iso3: 'VNM', label: '越南' }, 'vietnam': { iso3: 'VNM', label: '越南' },
   '马来西亚': { iso3: 'MYS', label: '马来西亚' }, 'malaysia': { iso3: 'MYS', label: '马来西亚' },
   '菲律宾': { iso3: 'PHL', label: '菲律宾' }, 'philippines': { iso3: 'PHL', label: '菲律宾' },
-  '沙特阿拉伯': { iso3: 'SAU', label: '沙特阿拉伯' }, 'saudiarabia': { iso3: 'SAU', label: '沙特阿拉伯' },
+  '沙特阿拉伯': { iso3: 'SAU', label: '沙特阿拉伯' }, '沙特': { iso3: 'SAU', label: '沙特阿拉伯' }, 'saudiarabia': { iso3: 'SAU', label: '沙特阿拉伯' },
   '南非': { iso3: 'ZAF', label: '南非' }, 'southafrica': { iso3: 'ZAF', label: '南非' },
   '埃及': { iso3: 'EGY', label: '埃及' }, 'egypt': { iso3: 'EGY', label: '埃及' },
   '阿根廷': { iso3: 'ARG', label: '阿根廷' }, 'argentina': { iso3: 'ARG', label: '阿根廷' },
@@ -312,6 +312,24 @@ export function OperationsMap({
     }
     openDetail([marker]);
   }, [onViewChange, openDetail]);
+  // Country labels on the globe are clickable even without any current usage
+  // markers. This keeps administrative-map exploration available during quiet
+  // periods or when a source is temporarily empty.
+  const selectGlobeCountry = useCallback((country: GeoGlobeCountry) => {
+    const normalized = country.name.trim().toLowerCase();
+    const isChina = country.name.includes('中国') || normalized === 'china' || normalized === "people's republic of china";
+    if (isChina) {
+      setChinaDrillTarget(null);
+      setCountryDrill(null);
+      onViewChange('china');
+      return;
+    }
+    const definition = countryDefinition(country.name);
+    if (!definition) return;
+    setChinaDrillTarget(null);
+    setCountryDrill({ country: country.name, iso3: definition.iso3, label: definition.label });
+    onViewChange('country');
+  }, [onViewChange]);
   const selectChinaMarkers = useCallback((markers: GeoGlobeMarker[]) => openDetail(markers), [openDetail]);
   const handleChinaDrillTargetHandled = useCallback(() => setChinaDrillTarget(null), []);
   const loadChinaIPDetailsPreview = useCallback(async (markers: GeoGlobeMarker[]) => {
@@ -404,7 +422,7 @@ export function OperationsMap({
               <span className="rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] font-medium text-primary">交互式 3D</span>
             </div>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-              区域级地理聚合。拖动地球可旋转，滚轮或右上角按钮可缩放，点击发光节点可自动聚焦查看。
+              区域级地理聚合。拖动地球可旋转，滚轮或右上角按钮可缩放；点击国家名称或“国家下钻”选择器可进入行政区地图，点击发光节点可自动聚焦查看。
             </p>
           </div>
         </div>
@@ -494,6 +512,7 @@ export function OperationsMap({
               tone={meta.globeTone}
               emptyMessage={globeEmptyMessage}
               onMarkerSelect={selectGlobeMarker}
+              onCountrySelect={selectGlobeCountry}
             />
           )}
           {!hasGeoData && (

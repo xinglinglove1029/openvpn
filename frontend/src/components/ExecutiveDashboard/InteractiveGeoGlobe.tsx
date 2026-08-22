@@ -6,6 +6,12 @@ import { useTheme, type ThemeKey } from '@/store/theme';
 
 export type GeoGlobeView = 'world' | 'china' | 'country';
 
+export type GeoGlobeCountry = {
+  name: string;
+  longitude: number;
+  latitude: number;
+};
+
 export type GeoGlobeMarker = {
   id: string;
   label: string;
@@ -24,6 +30,9 @@ type InteractiveGeoGlobeProps = {
   className?: string;
   emptyMessage?: string;
   onMarkerSelect?: (marker: GeoGlobeMarker) => void;
+  // Country labels remain available when the selected data source has no
+  // geolocated records, so operators can still inspect administrative maps.
+  onCountrySelect?: (country: GeoGlobeCountry) => void;
 };
 
 const TONE_COLORS = {
@@ -46,7 +55,7 @@ const THEME_GLOBE_COLORS: Record<ThemeKey, { orbit: string; stars: string; light
 
 const EARTH_TEXTURE_BASE = `${import.meta.env.BASE_URL}maps/earth/`;
 
-type CountryLabel = { name: string; longitude: number; latitude: number };
+type CountryLabel = GeoGlobeCountry;
 
 // Country labels are intentionally limited to large and commonly recognised
 // countries/regions. Showing every sovereign state at this globe size would
@@ -160,6 +169,7 @@ export function InteractiveGeoGlobe({
   className,
   emptyMessage = '当前范围没有可定位的区域数据。',
   onMarkerSelect,
+  onCountrySelect,
 }: InteractiveGeoGlobeProps) {
   const { theme } = useTheme();
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -319,11 +329,16 @@ export function InteractiveGeoGlobe({
 
           const countryLabelSprites: import('three').Sprite[] = [];
           const countryLabelTextures: import('three').Texture[] = [];
+          // Both live data markers and the always-visible country labels are
+          // raycast targets. Labels provide a no-data drilldown path.
+          const clickTargets: import('three').Object3D[] = [];
           if (view === 'world') {
             WORLD_COUNTRY_LABELS.forEach(({ name, longitude, latitude }) => {
               const { sprite, texture } = createCountryLabelSprite(THREE, name, palette.light);
               sprite.position.copy(globeVector(THREE, longitude, latitude, 1.57));
+              sprite.userData.country = { name, longitude, latitude } satisfies GeoGlobeCountry;
               globe.add(sprite);
+              clickTargets.push(sprite);
               countryLabelSprites.push(sprite);
               countryLabelTextures.push(texture);
             });
@@ -373,7 +388,6 @@ export function InteractiveGeoGlobe({
             marker: GeoGlobeMarker;
             halo: import('three').Mesh;
           }> = [];
-          const clickTargets: import('three').Object3D[] = [];
           const maxCount = Math.max(...markers.map((marker) => marker.count), 1);
 
           markers.forEach((marker) => {
@@ -506,7 +520,15 @@ export function InteractiveGeoGlobe({
             raycaster.setFromCamera(pointer, camera);
             const match = raycaster.intersectObjects(clickTargets, false)[0];
             const marker = match?.object.userData.marker as GeoGlobeMarker | undefined;
-            if (marker) focusMarker(marker);
+            if (marker) {
+              focusMarker(marker);
+              return;
+            }
+            const country = match?.object.userData.country as GeoGlobeCountry | undefined;
+            if (country) {
+              pauseUntil = performance.now() + 4000;
+              onCountrySelect?.(country);
+            }
           };
           const handleWheel = (event: WheelEvent) => {
             event.preventDefault();
@@ -612,7 +634,7 @@ export function InteractiveGeoGlobe({
       disposed = true;
       cleanup?.();
     };
-  }, [markerSignature, onMarkerSelect, theme, tone, view]);
+  }, [markerSignature, onCountrySelect, onMarkerSelect, theme, tone, view]);
 
   const sendControl = (command: GlobeCommand) => controlsRef.current?.(command);
 
@@ -627,7 +649,7 @@ export function InteractiveGeoGlobe({
       <div
         ref={mountRef}
         tabIndex={0}
-        aria-label="可交互的地理态势地球。拖拽旋转，滚轮缩放，点击数据点聚焦。"
+        aria-label="可交互的地理态势地球。拖拽旋转，滚轮缩放；点击国家名称可进入行政区地图，点击数据点可聚焦。"
         className={cn(
           'absolute inset-0 cursor-grab touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset active:cursor-grabbing',
           renderError && 'pointer-events-none cursor-default'
@@ -649,6 +671,24 @@ export function InteractiveGeoGlobe({
         </span>
         {view === 'china' ? '中国区域聚焦' : '全球地理态势'}
       </div>
+
+      {view === 'world' && onCountrySelect ? (
+        <label className="geo-globe-control absolute left-3 top-[3.55rem] z-10 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium text-foreground shadow-sm backdrop-blur">
+          <span className="whitespace-nowrap text-muted-foreground">国家下钻</span>
+          <select
+            aria-label="进入国家行政区地图"
+            defaultValue=""
+            onChange={(event) => {
+              const country = WORLD_COUNTRY_LABELS.find((item) => item.name === event.target.value);
+              if (country) onCountrySelect(country);
+            }}
+            className="max-w-[116px] cursor-pointer appearance-none bg-transparent pr-3 text-[11px] font-medium text-primary outline-none"
+          >
+            <option value="" disabled>选择国家</option>
+            {WORLD_COUNTRY_LABELS.map((country) => <option key={country.name} value={country.name}>{country.name}</option>)}
+          </select>
+        </label>
+      ) : null}
 
       <div className="geo-globe-control absolute right-3 top-3 flex overflow-hidden rounded-lg border shadow-sm backdrop-blur">
         <button

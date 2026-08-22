@@ -223,6 +223,95 @@ func (fn dashboardGeoRoundTripper) RoundTrip(request *http.Request) (*http.Respo
 	return fn(request)
 }
 
+func TestDashboardChinaBoundaryValidation(t *testing.T) {
+	for _, test := range []struct {
+		adcode string
+		valid  bool
+	}{
+		{"100000", true}, {"110000", true}, {"330100", true},
+		{"11000", false}, {"1100000", false}, {"11A000", false}, {"", false},
+	} {
+		if actual := dashboardChinaBoundaryRequestValid(test.adcode); actual != test.valid {
+			t.Fatalf("validation(%q) = %v, want %v", test.adcode, actual, test.valid)
+		}
+	}
+}
+
+func TestDashboardChinaBoundaryProxiesAndCachesGeoJSON(t *testing.T) {
+	previousClient := dashboardGeoBoundaryHTTPClient
+	dashboardGeoBoundaryCache.Lock()
+	previousCache := dashboardGeoBoundaryCache.entries
+	dashboardGeoBoundaryCache.entries = make(map[string]dashboardGeoBoundaryCacheEntry)
+	dashboardGeoBoundaryCache.Unlock()
+	requests := 0
+	dashboardGeoBoundaryHTTPClient = &http.Client{Transport: dashboardGeoRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if actual, expected := request.URL.String(), "https://cdn.jsdelivr.net/gh/yaunfei/GeoJSON_CDN@1.0.0/110000_full.json"; actual != expected {
+			t.Fatalf("unexpected China boundary request: %s", actual)
+		}
+		body := `{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"东城区"},"geometry":{"type":"Polygon","coordinates":[]}}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})}
+	defer func() {
+		dashboardGeoBoundaryHTTPClient = previousClient
+		dashboardGeoBoundaryCache.Lock()
+		dashboardGeoBoundaryCache.entries = previousCache
+		dashboardGeoBoundaryCache.Unlock()
+	}()
+
+	first, err := dashboardChinaBoundary(context.Background(), "110000")
+	if err != nil {
+		t.Fatalf("first China boundary request failed: %v", err)
+	}
+	second, err := dashboardChinaBoundary(context.Background(), "110000")
+	if err != nil {
+		t.Fatalf("cached China boundary request failed: %v", err)
+	}
+	if !strings.Contains(string(first), "东城区") || string(first) != string(second) {
+		t.Fatalf("unexpected China GeoJSON result: %s", first)
+	}
+	if requests != 1 {
+		t.Fatalf("expected the China boundary to be fetched once, got %d requests", requests)
+	}
+}
+
+func TestDashboardChinaBoundaryFallsBackToGitHubRaw(t *testing.T) {
+	previousClient := dashboardGeoBoundaryHTTPClient
+	dashboardGeoBoundaryCache.Lock()
+	previousCache := dashboardGeoBoundaryCache.entries
+	dashboardGeoBoundaryCache.entries = make(map[string]dashboardGeoBoundaryCacheEntry)
+	dashboardGeoBoundaryCache.Unlock()
+	requests := []string{}
+	dashboardGeoBoundaryHTTPClient = &http.Client{Transport: dashboardGeoRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request.URL.Host)
+		if request.URL.Host == "cdn.jsdelivr.net" {
+			return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("denied")), Request: request}, nil
+		}
+		if request.URL.Host != "raw.githubusercontent.com" {
+			t.Fatalf("unexpected fallback host: %s", request.URL.Host)
+		}
+		body := `{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"杭州市"},"geometry":{"type":"Polygon","coordinates":[]}}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})}
+	defer func() {
+		dashboardGeoBoundaryHTTPClient = previousClient
+		dashboardGeoBoundaryCache.Lock()
+		dashboardGeoBoundaryCache.entries = previousCache
+		dashboardGeoBoundaryCache.Unlock()
+	}()
+
+	data, err := dashboardChinaBoundary(context.Background(), "330000")
+	if err != nil {
+		t.Fatalf("fallback China boundary request failed: %v", err)
+	}
+	if !strings.Contains(string(data), "杭州市") {
+		t.Fatalf("unexpected fallback GeoJSON result: %s", data)
+	}
+	if actual, expected := strings.Join(requests, ","), "cdn.jsdelivr.net,raw.githubusercontent.com"; actual != expected {
+		t.Fatalf("fallback requests = %s, want %s", actual, expected)
+	}
+}
+
 func TestDashboardGeoBoundaryValidation(t *testing.T) {
 	for _, test := range []struct {
 		iso3  string

@@ -79,7 +79,11 @@ const MAP_PADDING = 32;
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const CHINA_MAP_URL = `${import.meta.env.BASE_URL}maps/china-provinces.geo.json`;
-const ADMIN_BOUNDARY_URL = 'https://geo.datav.aliyun.com/areas_v3/bound';
+// Child administrative boundaries are proxied through our authenticated API.
+// The former geo.datav.aliyun.com browser endpoint now returns HTTP 403 in
+// many production networks; using the same-origin endpoint also allows the
+// server to cache a verified GeoJSON response.
+const ADMIN_BOUNDARY_URL = '/ovpn/dashboard/china-boundary';
 const INITIAL_VIEWPORT: MapViewport = { scale: 1, translateX: 0, translateY: 0 };
 
 function mercatorY(latitude: number) {
@@ -187,6 +191,7 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
   const mapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const requestIdRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const suppressMarkerClickRef = useRef(false);
   const hoverRequestIdRef = useRef(0);
@@ -195,6 +200,11 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
   const hoverDetailsCacheRef = useRef(new Map<string, DashboardGeoIPDetail[]>());
 
   const loadMap = useCallback(async (url: string, nextBreadcrumbs: DrilldownNode[], fallbackLevel: ChinaMapLevel) => {
+    // A new navigation supersedes an in-flight boundary request. Besides saving
+    // bandwidth, this prevents stale failures from briefly replacing the latest map.
+    loadAbortRef.current?.abort();
+    const abortController = new AbortController();
+    loadAbortRef.current = abortController;
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setLoadError(null);
@@ -207,7 +217,7 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
     setHoveredRegion(null);
     setSelected(null);
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: abortController.signal });
       if (!response.ok) throw new Error(`Unable to load China map (${response.status})`);
       const payload = await response.json() as GeoFeatureCollection;
       const nextFeatures = Array.isArray(payload.features) ? payload.features : [];
@@ -218,17 +228,22 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
       setBreadcrumbs(nextBreadcrumbs);
       setViewport(INITIAL_VIEWPORT);
     } catch (error) {
+      // The request was intentionally superseded by a newer drilldown/back action.
+      // It is not a user-visible failure and must not cause a retry loop.
+      if (abortController.signal.aborted || requestId !== requestIdRef.current) return;
       console.error('Unable to load China administrative map.', error);
-      if (requestId === requestIdRef.current) {
-        setLoadError(nextBreadcrumbs.length ? '下级行政区边界加载失败，请稍后重试。' : '中国地图资源加载失败，刷新页面后重试。');
-      }
+      setLoadError(nextBreadcrumbs.length ? '下级行政区边界加载失败，请稍后重试。' : '中国地图资源加载失败，刷新页面后重试。');
     } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        loadAbortRef.current = null;
+      }
     }
   }, []);
 
   useEffect(() => {
     void loadMap(CHINA_MAP_URL, [], 'province');
+    return () => loadAbortRef.current?.abort();
   }, [loadMap]);
 
   useEffect(() => {
@@ -507,6 +522,10 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
 
     if (mapLevel === 'province') {
       if (feature) {
+        // Consume the globe handoff before requesting the child map. If the
+        // boundary source is temporarily unavailable, leaving this target set
+        // would re-run the effect after every failed request and make the map flash.
+        setAutoDrillTarget(null);
         drillDown(feature);
         return;
       }
@@ -514,10 +533,12 @@ export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTarge
       return;
     }
 
+    // The city handoff is also one-shot for the same reason: a failed child
+    // boundary request should present one actionable error, never auto-retry.
+    setAutoDrillTarget(null);
     if (mapLevel === 'city' && autoDrillTarget.point.city && feature) {
       drillDown(feature);
     }
-    setAutoDrillTarget(null);
   }, [autoDrillTarget, features, loading, mapLevel]);
 
   const selectedText = selected
