@@ -47,6 +47,10 @@ type HoveredRegion = RegionUsage & {
 type ChinaUsageMapProps = {
   markers: GeoGlobeMarker[];
   emptyMessage: string;
+  // Set by the 3D globe when an operator selects a China marker. The target is
+  // consumed once, then this map loads the matching province/city boundary.
+  drillTarget?: GeoGlobeMarker | null;
+  onDrillTargetHandled?: () => void;
   onMarkerSelect?: (markers: GeoGlobeMarker[]) => void;
   loadIPDetails?: (markers: GeoGlobeMarker[]) => Promise<DashboardGeoIPDetail[]>;
 };
@@ -169,7 +173,7 @@ function matchesNode(marker: GeoGlobeMarker, node: DrilldownNode) {
   return normaliseRegionName(String(value || '')) === expected;
 }
 
-export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDetails }: ChinaUsageMapProps) {
+export function ChinaUsageMap({ markers, emptyMessage, drillTarget, onDrillTargetHandled, onMarkerSelect, loadIPDetails }: ChinaUsageMapProps) {
   const [features, setFeatures] = useState<GeoFeature[]>([]);
   const [mapLevel, setMapLevel] = useState<ChinaMapLevel>('province');
   const [breadcrumbs, setBreadcrumbs] = useState<DrilldownNode[]>([]);
@@ -179,6 +183,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDet
   const [hoveredRegion, setHoveredRegion] = useState<HoveredRegion | null>(null);
   const [viewport, setViewport] = useState<MapViewport>(INITIAL_VIEWPORT);
   const [dragging, setDragging] = useState(false);
+  const [autoDrillTarget, setAutoDrillTarget] = useState<GeoGlobeMarker | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const requestIdRef = useRef(0);
@@ -225,6 +230,12 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDet
   useEffect(() => {
     void loadMap(CHINA_MAP_URL, [], 'province');
   }, [loadMap]);
+
+  useEffect(() => {
+    if (!drillTarget) return;
+    setAutoDrillTarget(drillTarget);
+    onDrillTargetHandled?.();
+  }, [drillTarget, onDrillTargetHandled]);
 
   const scopedMarkers = useMemo(
     () => markers.filter((marker) => breadcrumbs.every((node) => matchesNode(marker, node))),
@@ -423,6 +434,14 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDet
 
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
+
+    // The map itself owns pan/zoom, but region and marker nodes own click-to-drill.
+    // Capturing a pointer that started on an interactive SVG child redirects the
+    // subsequent pointer sequence to the root <svg> in some browsers, which can
+    // swallow the child's click event. Start a drag only from the blank map area.
+    const target = event.target as Element | null;
+    if (target?.closest('.china-map-region, .china-map-marker')) return;
+
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, viewport, moved: false };
     setDragging(true);
@@ -472,6 +491,34 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDet
     if (!node) return;
     void loadMap(`${ADMIN_BOUNDARY_URL}/${node.adcode}_full.json`, breadcrumbs.slice(0, index + 1), node.level === 'province' ? 'city' : 'district');
   };
+
+  // Complete the handoff from the globe in a deterministic sequence:
+  // nationwide map → selected province → selected city/municipality. A missing
+  // administrative match is harmless: the operator remains on the closest map level.
+  useEffect(() => {
+    if (!autoDrillTarget || loading || !features.length) return;
+
+    const targetName = normaliseRegionName(String(
+      mapLevel === 'province'
+        ? autoDrillTarget.point.province || autoDrillTarget.point.city || autoDrillTarget.point.label
+        : autoDrillTarget.point.city || autoDrillTarget.point.label
+    ));
+    const feature = features.find((candidate) => normaliseRegionName(String(candidate.properties?.name || '')) === targetName);
+
+    if (mapLevel === 'province') {
+      if (feature) {
+        drillDown(feature);
+        return;
+      }
+      setAutoDrillTarget(null);
+      return;
+    }
+
+    if (mapLevel === 'city' && autoDrillTarget.point.city && feature) {
+      drillDown(feature);
+    }
+    setAutoDrillTarget(null);
+  }, [autoDrillTarget, features, loading, mapLevel]);
 
   const selectedText = selected
     ? `${selected.labels.slice(0, 3).join('、')}${selected.labels.length > 3 ? ` 等 ${selected.labels.length} 个区域` : ''} · ${selected.count} 个去重公网 IP`

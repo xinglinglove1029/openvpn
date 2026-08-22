@@ -5,6 +5,7 @@ import type { DashboardGeoIPDetail, DashboardGeoIPDetailsResponse, DashboardGeoP
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/ui/dialog';
 import { ChinaUsageMap } from './ChinaUsageMap';
+import { CountryUsageMap, type CountryDrillContext } from './CountryUsageMap';
 import { InteractiveGeoGlobe, type GeoGlobeMarker, type GeoGlobeView } from './InteractiveGeoGlobe';
 
 type MapPosition = readonly [string, number, number];
@@ -72,6 +73,61 @@ const WORLD_POSITIONS: MapPosition[] = [
   ['土耳其', 35.24, 38.96],
   ['印度尼西亚', 113.92, -0.79],
 ];
+
+type CountryDefinition = { iso3: string; label: string };
+
+const COUNTRY_DEFINITIONS: Record<string, CountryDefinition> = {
+  '美国': { iso3: 'USA', label: '美国' }, 'unitedstates': { iso3: 'USA', label: '美国' }, 'unitedstatesofamerica': { iso3: 'USA', label: '美国' },
+  '加拿大': { iso3: 'CAN', label: '加拿大' }, 'canada': { iso3: 'CAN', label: '加拿大' },
+  '英国': { iso3: 'GBR', label: '英国' }, 'unitedkingdom': { iso3: 'GBR', label: '英国' }, 'greatbritain': { iso3: 'GBR', label: '英国' },
+  '德国': { iso3: 'DEU', label: '德国' }, 'germany': { iso3: 'DEU', label: '德国' },
+  '法国': { iso3: 'FRA', label: '法国' }, 'france': { iso3: 'FRA', label: '法国' },
+  '俄罗斯': { iso3: 'RUS', label: '俄罗斯' }, 'russia': { iso3: 'RUS', label: '俄罗斯' }, 'russianfederation': { iso3: 'RUS', label: '俄罗斯' },
+  '日本': { iso3: 'JPN', label: '日本' }, 'japan': { iso3: 'JPN', label: '日本' },
+  '韩国': { iso3: 'KOR', label: '韩国' }, 'southkorea': { iso3: 'KOR', label: '韩国' }, 'republicofkorea': { iso3: 'KOR', label: '韩国' },
+  '朝鲜': { iso3: 'PRK', label: '朝鲜' }, 'northkorea': { iso3: 'PRK', label: '朝鲜' },
+  '新加坡': { iso3: 'SGP', label: '新加坡' }, 'singapore': { iso3: 'SGP', label: '新加坡' },
+  '印度': { iso3: 'IND', label: '印度' }, 'india': { iso3: 'IND', label: '印度' },
+  '澳大利亚': { iso3: 'AUS', label: '澳大利亚' }, 'australia': { iso3: 'AUS', label: '澳大利亚' },
+  '巴西': { iso3: 'BRA', label: '巴西' }, 'brazil': { iso3: 'BRA', label: '巴西' },
+  '阿联酋': { iso3: 'ARE', label: '阿联酋' }, 'unitedarabemirates': { iso3: 'ARE', label: '阿联酋' },
+  '荷兰': { iso3: 'NLD', label: '荷兰' }, 'netherlands': { iso3: 'NLD', label: '荷兰' },
+  '意大利': { iso3: 'ITA', label: '意大利' }, 'italy': { iso3: 'ITA', label: '意大利' },
+  '西班牙': { iso3: 'ESP', label: '西班牙' }, 'spain': { iso3: 'ESP', label: '西班牙' },
+  '瑞典': { iso3: 'SWE', label: '瑞典' }, 'sweden': { iso3: 'SWE', label: '瑞典' },
+  '土耳其': { iso3: 'TUR', label: '土耳其' }, 'turkey': { iso3: 'TUR', label: '土耳其' }, 'türkiye': { iso3: 'TUR', label: '土耳其' },
+  '印度尼西亚': { iso3: 'IDN', label: '印度尼西亚' }, 'indonesia': { iso3: 'IDN', label: '印度尼西亚' },
+  '墨西哥': { iso3: 'MEX', label: '墨西哥' }, 'mexico': { iso3: 'MEX', label: '墨西哥' },
+  '泰国': { iso3: 'THA', label: '泰国' }, 'thailand': { iso3: 'THA', label: '泰国' },
+  '越南': { iso3: 'VNM', label: '越南' }, 'vietnam': { iso3: 'VNM', label: '越南' },
+  '马来西亚': { iso3: 'MYS', label: '马来西亚' }, 'malaysia': { iso3: 'MYS', label: '马来西亚' },
+  '菲律宾': { iso3: 'PHL', label: '菲律宾' }, 'philippines': { iso3: 'PHL', label: '菲律宾' },
+  '沙特阿拉伯': { iso3: 'SAU', label: '沙特阿拉伯' }, 'saudiarabia': { iso3: 'SAU', label: '沙特阿拉伯' },
+  '南非': { iso3: 'ZAF', label: '南非' }, 'southafrica': { iso3: 'ZAF', label: '南非' },
+  '埃及': { iso3: 'EGY', label: '埃及' }, 'egypt': { iso3: 'EGY', label: '埃及' },
+  '阿根廷': { iso3: 'ARG', label: '阿根廷' }, 'argentina': { iso3: 'ARG', label: '阿根廷' },
+  '新西兰': { iso3: 'NZL', label: '新西兰' }, 'newzealand': { iso3: 'NZL', label: '新西兰' },
+  '瑞士': { iso3: 'CHE', label: '瑞士' }, 'switzerland': { iso3: 'CHE', label: '瑞士' },
+  '波兰': { iso3: 'POL', label: '波兰' }, 'poland': { iso3: 'POL', label: '波兰' },
+  '乌克兰': { iso3: 'UKR', label: '乌克兰' }, 'ukraine': { iso3: 'UKR', label: '乌克兰' },
+  '中国香港': { iso3: 'HKG', label: '中国香港' }, '香港': { iso3: 'HKG', label: '中国香港' }, 'hongkong': { iso3: 'HKG', label: '中国香港' },
+  '中国台湾': { iso3: 'TWN', label: '中国台湾' }, '台湾': { iso3: 'TWN', label: '中国台湾' }, 'taiwan': { iso3: 'TWN', label: '中国台湾' },
+  '澳门': { iso3: 'MAC', label: '中国澳门' }, 'macao': { iso3: 'MAC', label: '中国澳门' },
+};
+
+function normaliseCountryName(value: string) {
+  return value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[\s\-_'’.,()]/g, '');
+}
+
+function countryDefinition(country: string) {
+  return COUNTRY_DEFINITIONS[normaliseCountryName(country)];
+}
+
+function sameCountry(left: string, right: string) {
+  const a = normaliseCountryName(left);
+  const b = normaliseCountryName(right);
+  return a === b || Boolean(countryDefinition(left) && countryDefinition(right) && countryDefinition(left)?.iso3 === countryDefinition(right)?.iso3);
+}
 
 const CHINA_POSITIONS: MapPosition[] = [
   ['北京市', 116.41, 39.9],
@@ -157,12 +213,14 @@ export function OperationsMap({
   error: boolean;
   className?: string;
 }) {
+  const [countryDrill, setCountryDrill] = useState<CountryDrillContext | null>(null);
   const available = data?.availableSources ?? [];
   const allPoints = (data?.points ?? []).filter((point) => point.source === source);
   const chinaPoints = allPoints.filter(
     (point) => point.country.includes('中国') || point.country.toLowerCase() === 'china'
   );
-  const pointsForView = view === 'china' ? chinaPoints : allPoints;
+  const countryPoints = countryDrill ? allPoints.filter((point) => sameCountry(point.country, countryDrill.country)) : [];
+  const pointsForView = view === 'china' ? chinaPoints : view === 'country' ? countryPoints : allPoints;
   const displayPoints = pointsForView.slice(0, 12);
   const total = pointsForView.reduce((sum, point) => sum + point.count, 0);
   const max = Math.max(...displayPoints.map((point) => point.count), 1);
@@ -191,6 +249,14 @@ export function OperationsMap({
     [pointsForView, source, view]
   );
   const visibleMarkers = mappedMarkers.slice(0, 48);
+  // The ranking doubles as an accessible fallback for the WebGL hit target:
+  // operators can enter a country drill-down even when using a keyboard,
+  // screen reader, touch screen, or a very dense globe view.
+  const rankedPoints = displayPoints.map((point, index) => ({
+    point,
+    index,
+    marker: mappedMarkers.find((marker) => marker.point === point),
+  }));
   const unmappedRegions = pointsForView.length - mappedMarkers.length;
   const sourceAvailable = available.includes(source);
   // The 3D globe is a core visual anchor for the command center, not a data
@@ -207,8 +273,13 @@ export function OperationsMap({
         ? `当前账号没有查看${sourceTitle(source)}明细的权限。`
         : view === 'china'
           ? '当前来源暂无可定位的中国区域数据。'
-          : '当前时间范围没有可定位的公网 IP。';
+          : view === 'country'
+            ? `当前来源暂无可定位的${countryDrill?.label || '该国家'}区域数据。`
+            : '当前时间范围没有可定位的公网 IP。';
   const [detailMarkers, setDetailMarkers] = useState<GeoGlobeMarker[]>([]);
+  // A world marker can hand its geographic context to the administrative map.
+  // The China map consumes this target once and continues its own province/city drill path.
+  const [chinaDrillTarget, setChinaDrillTarget] = useState<GeoGlobeMarker | null>(null);
   const [detailPage, setDetailPage] = useState(1);
   const [detailItems, setDetailItems] = useState<DashboardGeoIPDetail[]>([]);
   const [detailTotal, setDetailTotal] = useState(0);
@@ -225,8 +296,24 @@ export function OperationsMap({
     setDetailPage(1);
     setDetailError('');
   }, []);
-  const selectGlobeMarker = useCallback((marker: GeoGlobeMarker) => openDetail([marker]), [openDetail]);
+  const selectGlobeMarker = useCallback((marker: GeoGlobeMarker) => {
+    const country = marker.point.country.trim().toLowerCase();
+    const isChina = marker.point.country.includes('中国') || country === 'china' || country === "people's republic of china";
+    if (isChina) {
+      setChinaDrillTarget(marker);
+      onViewChange('china');
+      return;
+    }
+    const definition = countryDefinition(marker.point.country);
+    if (definition) {
+      setCountryDrill({ country: marker.point.country, iso3: definition.iso3, label: definition.label, target: marker });
+      onViewChange('country');
+      return;
+    }
+    openDetail([marker]);
+  }, [onViewChange, openDetail]);
   const selectChinaMarkers = useCallback((markers: GeoGlobeMarker[]) => openDetail(markers), [openDetail]);
+  const handleChinaDrillTargetHandled = useCallback(() => setChinaDrillTarget(null), []);
   const loadChinaIPDetailsPreview = useCallback(async (markers: GeoGlobeMarker[]) => {
     const responses = await Promise.all(markers.map((marker) => {
       const params = new URLSearchParams({
@@ -248,7 +335,9 @@ export function OperationsMap({
 
   useEffect(() => {
     setDetailMarkers([]);
-  }, [source, view]);
+    setChinaDrillTarget(null);
+    setCountryDrill(null);
+  }, [source]);
 
   useEffect(() => {
     if (!detailOpen || !detailMarkers.length) return;
@@ -343,12 +432,16 @@ export function OperationsMap({
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <MapPinned className="h-3.5 w-3.5 text-primary" />
           <span>视图范围</span>
-          <span className="font-medium text-foreground">{view === 'china' ? '中国区域' : '全球区域'}</span>
+          <span className="font-medium text-foreground">{view === 'china' ? '中国区域' : view === 'country' ? `${countryDrill?.label || '国家'}行政区` : '全球区域'}</span>
         </div>
         <div className="flex rounded-lg border border-border bg-card/75 p-0.5 text-xs">
           <button
             type="button"
-            onClick={() => onViewChange('world')}
+            onClick={() => {
+              setChinaDrillTarget(null);
+              setCountryDrill(null);
+              onViewChange('world');
+            }}
             className={cn(
               'cursor-pointer rounded-md px-2.5 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
               view === 'world' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
@@ -358,7 +451,11 @@ export function OperationsMap({
           </button>
           <button
             type="button"
-            onClick={() => onViewChange('china')}
+            onClick={() => {
+              setChinaDrillTarget(null);
+              setCountryDrill(null);
+              onViewChange('china');
+            }}
             title="切换到中国区域视角（暂无数据时仍可查看）"
             className={cn(
               'cursor-pointer rounded-md px-2.5 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
@@ -376,6 +473,17 @@ export function OperationsMap({
             <ChinaUsageMap
               markers={globeMarkers}
               emptyMessage={globeEmptyMessage}
+              drillTarget={chinaDrillTarget}
+              onDrillTargetHandled={handleChinaDrillTargetHandled}
+              onMarkerSelect={selectChinaMarkers}
+              loadIPDetails={loadChinaIPDetailsPreview}
+            />
+          ) : view === 'country' && countryDrill ? (
+            <CountryUsageMap
+              country={countryDrill}
+              markers={globeMarkers}
+              emptyMessage={globeEmptyMessage}
+              onBackToWorld={() => { setCountryDrill(null); onViewChange('world'); }}
               onMarkerSelect={selectChinaMarkers}
               loadIPDetails={loadChinaIPDetailsPreview}
             />
@@ -435,23 +543,44 @@ export function OperationsMap({
             </div>
             {hasGeoData ? (
               <div className="mt-3 max-h-[188px] space-y-2 overflow-auto pr-1">
-                {displayPoints.map((point, index) => (
-                  <div key={`${point.label}-${index}`} className="group">
-                    <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                      <span className="min-w-0 truncate font-medium text-foreground">
-                        <span className="mr-1.5 text-[10px] tabular-nums text-muted-foreground/70">{String(index + 1).padStart(2, '0')}</span>
-                        {point.label}
-                      </span>
-                      <strong className="shrink-0 tabular-nums text-foreground">{point.count}</strong>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500 ease-out"
-                        style={{ width: `${Math.max(5, (point.count / max) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                {rankedPoints.map(({ point, index, marker }) => {
+                  const canSelect = Boolean(marker);
+                  const action = marker
+                    ? view === 'world'
+                      ? () => selectGlobeMarker(marker)
+                      : () => selectChinaMarkers([marker])
+                    : undefined;
+                  const hint = !canSelect
+                    ? '该区域缺少地图示意坐标，无法打开地图视图'
+                    : view === 'world'
+                      ? `查看 ${point.country} 的行政区地图`
+                      : `查看 ${point.label} 的去重公网 IP 明细`;
+                  return (
+                    <button
+                      key={`${point.label}-${index}`}
+                      type="button"
+                      disabled={!canSelect}
+                      onClick={action}
+                      title={hint}
+                      aria-label={`${hint}，${point.count} 个去重公网 IP`}
+                      className="group w-full rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 truncate font-medium text-foreground">
+                          <span className="mr-1.5 text-[10px] tabular-nums text-muted-foreground/70">{String(index + 1).padStart(2, '0')}</span>
+                          {point.label}
+                        </span>
+                        <strong className="shrink-0 tabular-nums text-foreground">{point.count}</strong>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500 ease-out"
+                          style={{ width: `${Math.max(5, (point.count / max) * 100)}%` }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
                 {!displayPoints.length && <p className="py-6 text-center text-xs text-muted-foreground">暂无可展示的区域排行</p>}
               </div>
             ) : (

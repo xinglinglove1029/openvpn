@@ -113,6 +113,9 @@ importers:
       three:
         specifier: ^0.185.1
         version: 0.185.1
+      topojson-client:
+        specifier: ^3.1.0
+        version: 3.1.0
       typescript:
         specifier: latest
         version: 7.0.2
@@ -1227,6 +1230,9 @@ packages:
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
 
+  commander@2.20.3:
+    resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
+
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
@@ -1886,6 +1892,10 @@ packages:
 
   three@0.185.1:
     resolution: {integrity: sha512-5aojFCXKwnjBRZvUnt3WFfEcvUJgkN5LlijRFN95hMy8WVkG4I0QNcJE+OuWvuJ0bOdStrbfXn0pkd6/QyiAlg==}
+
+  topojson-client@3.1.0:
+    resolution: {integrity: sha512-605uxS6bcYxGXw9qi62XyrV6Q3xwbndjachmNxu8HWTtVPxZfEJN9fd/SZS1Q54Sn2y0TMyMxFj/cJINqGHrKw==}
+    hasBin: true
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -2950,6 +2960,8 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
+  commander@2.20.3: {}
+
   cookie@1.1.1: {}
 
   csstype@3.2.3: {}
@@ -3766,6 +3778,10 @@ snapshots:
   tapable@2.3.3: {}
 
   three@0.185.1: {}
+
+  topojson-client@3.1.0:
+    dependencies:
+      commander: 2.20.3
 
   tinyglobby@0.2.17:
     dependencies:

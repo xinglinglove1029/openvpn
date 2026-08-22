@@ -47,6 +47,7 @@
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3",
     "three": "^0.185.1",
+    "topojson-client": "^3.1.0",
     "typescript": "latest",
     "vite": "latest",
     "zod": "^4.4.3"

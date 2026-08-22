@@ -325,7 +325,7 @@ export default function ExecutiveDashboardPage() {
   const [traffic, setTraffic] = useState<DashboardTrafficUsersResponse>();
   const [geo, setGeo] = useState<DashboardGeoResponse>();
   const [geoSource, setGeoSource] = useState<DashboardGeoSource>('online');
-  const [geoView, setGeoView] = useState<'world' | 'china'>('world');
+  const [geoView, setGeoView] = useState<'world' | 'china' | 'country'>('world');
   const [summaryState, setSummaryState] = useState<LoadState>('loading');
   const [onlineState, setOnlineState] = useState<OnlineLoadState>(canViewOnline ? 'loading' : 'forbidden');
   const [trafficState, setTrafficState] = useState<LoadState>('loading');

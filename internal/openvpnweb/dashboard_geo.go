@@ -2,11 +2,16 @@ package openvpnweb
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,7 +21,34 @@ const (
 	dashboardGeoSourceOnline  = "online"
 	dashboardGeoSourceAudit   = "audit"
 	dashboardGeoSourceWebsite = "website"
+
+	dashboardGeoBoundaryMaxBytes = 30 << 20
+	dashboardGeoBoundaryCacheTTL = 24 * time.Hour
 )
+
+var dashboardGeoBoundaryHTTPClient = newDashboardGeoBoundaryHTTPClient()
+
+func newDashboardGeoBoundaryHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSHandshakeTimeout = 25 * time.Second
+	transport.ResponseHeaderTimeout = 45 * time.Second
+	return &http.Client{Timeout: 90 * time.Second, Transport: transport}
+}
+
+var dashboardGeoBoundaryCache = struct {
+	sync.RWMutex
+	entries map[string]dashboardGeoBoundaryCacheEntry
+}{entries: make(map[string]dashboardGeoBoundaryCacheEntry)}
+
+type dashboardGeoBoundaryCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
+}
+
+type dashboardGeoBoundaryMetadata struct {
+	SimplifiedGeometryGeoJSON string `json:"simplifiedGeometryGeoJSON"`
+	GeoJSONDownloadURL        string `json:"gjDownloadURL"`
+}
 
 // DashboardGeoPoint is deliberately an area-level aggregate. It contains no
 // exact coordinate or raw IP address, preventing the dashboard from becoming
@@ -611,4 +643,134 @@ func parseDashboardGeoEndUnix(value string) (int64, error) {
 		return parsed.AddDate(0, 0, 1).Add(-time.Second).Unix(), nil
 	}
 	return strconv.ParseInt(value, 10, 64)
+}
+
+// dashboardGeoBoundary proxies the country subdivision GeoJSON through the
+// authenticated API. Browsers cannot reliably follow geoBoundaries' Git-LFS
+// redirect from github.com because the intermediate response omits CORS
+// headers; proxying also lets us cache the data and cap its size.
+func (ov *ovpn) dashboardGeoBoundary(c *gin.Context) {
+	iso3 := strings.ToUpper(strings.TrimSpace(c.Param("iso3")))
+	level := strings.ToUpper(strings.TrimSpace(c.Param("level")))
+	if !dashboardGeoBoundaryRequestValid(iso3, level) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "国家代码或行政区层级无效"})
+		return
+	}
+
+	data, err := dashboardGeoBoundary(c.Request.Context(), iso3, level)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"message": fmt.Sprintf("加载%s行政区边界失败: %v", iso3, err)})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.Data(http.StatusOK, "application/geo+json; charset=utf-8", data)
+}
+
+func dashboardGeoBoundaryRequestValid(iso3, level string) bool {
+	if len(iso3) != 3 || (level != "ADM1" && level != "ADM2") {
+		return false
+	}
+	for _, char := range iso3 {
+		if char < 'A' || char > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func dashboardGeoBoundary(ctx context.Context, iso3, level string) ([]byte, error) {
+	cacheKey := iso3 + ":" + level
+	now := time.Now()
+	dashboardGeoBoundaryCache.RLock()
+	cached, found := dashboardGeoBoundaryCache.entries[cacheKey]
+	dashboardGeoBoundaryCache.RUnlock()
+	if found && now.Before(cached.expiresAt) {
+		return cached.data, nil
+	}
+
+	metadataURL := fmt.Sprintf("https://www.geoboundaries.org/api/current/gbOpen/%s/%s/", url.PathEscape(iso3), url.PathEscape(level))
+	metadataRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建行政区元数据请求失败: %w", err)
+	}
+	metadataResponse, err := dashboardGeoBoundaryHTTPClient.Do(metadataRequest)
+	if err != nil {
+		return nil, fmt.Errorf("请求行政区元数据失败: %w", err)
+	}
+	defer metadataResponse.Body.Close()
+	if metadataResponse.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("行政区元数据返回 HTTP %d", metadataResponse.StatusCode)
+	}
+	var metadata dashboardGeoBoundaryMetadata
+	if err := json.NewDecoder(io.LimitReader(metadataResponse.Body, 1<<20)).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("解析行政区元数据失败: %w", err)
+	}
+	geometryURL := strings.TrimSpace(metadata.SimplifiedGeometryGeoJSON)
+	if geometryURL == "" {
+		geometryURL = strings.TrimSpace(metadata.GeoJSONDownloadURL)
+	}
+	geometryURL = dashboardGeoBoundaryMediaURL(geometryURL)
+	if !dashboardGeoBoundaryDownloadURLValid(geometryURL) {
+		return nil, fmt.Errorf("行政区元数据未提供可信 GeoJSON 下载地址")
+	}
+
+	geometryRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, geometryURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建行政区边界请求失败: %w", err)
+	}
+	geometryResponse, err := dashboardGeoBoundaryHTTPClient.Do(geometryRequest)
+	if err != nil {
+		return nil, fmt.Errorf("请求行政区边界失败: %w", err)
+	}
+	defer geometryResponse.Body.Close()
+	if geometryResponse.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("行政区边界返回 HTTP %d", geometryResponse.StatusCode)
+	}
+	if geometryResponse.ContentLength > dashboardGeoBoundaryMaxBytes {
+		return nil, fmt.Errorf("行政区边界文件过大（超过 %d MiB）", dashboardGeoBoundaryMaxBytes>>20)
+	}
+	data, err := io.ReadAll(io.LimitReader(geometryResponse.Body, dashboardGeoBoundaryMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取行政区边界失败: %w", err)
+	}
+	if len(data) > dashboardGeoBoundaryMaxBytes {
+		return nil, fmt.Errorf("行政区边界文件过大（超过 %d MiB）", dashboardGeoBoundaryMaxBytes>>20)
+	}
+	if !json.Valid(data) {
+		return nil, fmt.Errorf("行政区边界不是有效 GeoJSON")
+	}
+
+	dashboardGeoBoundaryCache.Lock()
+	dashboardGeoBoundaryCache.entries[cacheKey] = dashboardGeoBoundaryCacheEntry{data: data, expiresAt: now.Add(dashboardGeoBoundaryCacheTTL)}
+	dashboardGeoBoundaryCache.Unlock()
+	return data, nil
+}
+
+// dashboardGeoBoundaryMediaURL resolves a GitHub raw URL to its Git-LFS media
+// endpoint directly. The media endpoint serves the actual GeoJSON, while
+// raw.githubusercontent.com only returns the Git-LFS pointer text.
+func dashboardGeoBoundaryMediaURL(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || strings.ToLower(parsed.Hostname()) != "github.com" || !strings.HasPrefix(parsed.Path, "/wmgeolab/geoBoundaries/raw/") {
+		return value
+	}
+	parts := strings.Split(strings.TrimPrefix(parsed.Path, "/wmgeolab/geoBoundaries/raw/"), "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
+		return value
+	}
+	parsed.Host = "media.githubusercontent.com"
+	parsed.Path = "/media/wmgeolab/geoBoundaries/" + strings.Join(parts, "/")
+	return parsed.String()
+}
+
+func dashboardGeoBoundaryDownloadURLValid(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "github.com" {
+		return strings.HasPrefix(parsed.Path, "/wmgeolab/geoBoundaries/raw/")
+	}
+	return host == "media.githubusercontent.com" && strings.HasPrefix(parsed.Path, "/media/wmgeolab/geoBoundaries/")
 }

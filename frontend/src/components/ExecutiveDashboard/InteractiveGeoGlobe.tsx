@@ -4,7 +4,7 @@ import type { DashboardGeoPoint } from '@/types';
 import { cn } from '@/lib/utils';
 import { useTheme, type ThemeKey } from '@/store/theme';
 
-export type GeoGlobeView = 'world' | 'china';
+export type GeoGlobeView = 'world' | 'china' | 'country';
 
 export type GeoGlobeMarker = {
   id: string;
@@ -32,17 +32,19 @@ const TONE_COLORS = {
   violet: '#8067ff',
 };
 
-// Source tones distinguish the kind of data being displayed; the sphere itself
-// follows the selected console theme so it never remains blue in aurora,
-// emerald, amber or daylight mode.
-const THEME_GLOBE_COLORS: Record<ThemeKey, { surface: string; land: string; orbit: string; stars: string; light: string }> = {
-  midnight: { surface: '#173b78', land: '#dbeafe', orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
-  aurora: { surface: '#4b236d', land: '#f5d0fe', orbit: '#c4b5fd', stars: '#e9d5ff', light: '#f5d0fe' },
-  emerald: { surface: '#0f5944', land: '#bbf7d0', orbit: '#86efac', stars: '#d1fae5', light: '#d1fae5' },
-  daylight: { surface: '#1d4ed8', land: '#dbeafe', orbit: '#60a5fa', stars: '#bfdbfe', light: '#dbeafe' },
-  'amber-glass': { surface: '#6b3d10', land: '#fde68a', orbit: '#fcd34d', stars: '#fef3c7', light: '#fde68a' },
-  'deep-blue': { surface: '#1e3a8a', land: '#dbeafe', orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
+// Theme colors decorate controls, signals and the surrounding space. The earth
+// itself intentionally uses physical imagery so its continents and oceans stay
+// recognisable in every console theme.
+const THEME_GLOBE_COLORS: Record<ThemeKey, { orbit: string; stars: string; light: string }> = {
+  midnight: { orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
+  aurora: { orbit: '#c4b5fd', stars: '#e9d5ff', light: '#f5d0fe' },
+  emerald: { orbit: '#86efac', stars: '#d1fae5', light: '#d1fae5' },
+  daylight: { orbit: '#60a5fa', stars: '#bfdbfe', light: '#dbeafe' },
+  'amber-glass': { orbit: '#fcd34d', stars: '#fef3c7', light: '#fde68a' },
+  'deep-blue': { orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
 };
+
+const EARTH_TEXTURE_BASE = `${import.meta.env.BASE_URL}maps/earth/`;
 
 type CountryLabel = { name: string; longitude: number; latitude: number };
 
@@ -151,21 +153,6 @@ function createMarkerCountSprite(THREE: typeof import('three'), count: number, c
   return { sprite, texture };
 }
 
-function isApproximateLand(latitude: number, longitude: number) {
-  const ellipse = (lng: number, lat: number, centerLng: number, centerLat: number, width: number, height: number) =>
-    ((lng - centerLng) / width) ** 2 + ((lat - centerLat) / height) ** 2 < 1;
-  return [
-    [-104, 48, 58, 28],
-    [-76, 5, 24, 40],
-    [15, 49, 30, 26],
-    [25, 5, 30, 38],
-    [87, 48, 90, 29],
-    [135, -25, 28, 18],
-    [48, 24, 24, 15],
-    [-40, 72, 18, 12],
-  ].some(([lng, lat, width, height]) => ellipse(longitude, latitude, lng, lat, width, height));
-}
-
 export function InteractiveGeoGlobe({
   markers,
   view,
@@ -228,60 +215,57 @@ export function InteractiveGeoGlobe({
           const globe = new THREE.Group();
           scene.add(globe);
 
+          // The dashboard keeps Earth imagery in the application bundle rather than
+          // depending on an external tile service. This uses the same public texture
+          // set as the Three.js Earth example, while remaining WebGL compatible.
+          const textureLoader = new THREE.TextureLoader();
+          const configureTexture = (texture: import('three').Texture, srgb = false) => {
+            if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
+            texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            return texture;
+          };
+          const earthDayTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_day_4096.jpg`), true);
+          const earthNightTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_night_4096.jpg`), true);
+          const earthBumpTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_bump_roughness_clouds_4096.jpg`));
+
           const surface = new THREE.Mesh(
-            new THREE.SphereGeometry(1.42, 96, 96),
-            new THREE.MeshPhysicalMaterial({
-              color: palette.surface,
-              roughness: 0.44,
-              metalness: 0.08,
-              transmission: 0.13,
-              thickness: 0.55,
-              transparent: true,
-              opacity: 0.88,
-              clearcoat: 0.55,
-              clearcoatRoughness: 0.24,
+            new THREE.SphereGeometry(1.42, 128, 128),
+            new THREE.MeshPhongMaterial({
+              map: earthDayTexture,
+              bumpMap: earthBumpTexture,
+              bumpScale: 0.038,
+              specularMap: earthBumpTexture,
+              specular: new THREE.Color('#35506d'),
+              shininess: 7,
+              emissiveMap: earthNightTexture,
+              emissive: new THREE.Color('#18233f'),
+              emissiveIntensity: 0.34,
             })
           );
+          surface.rotation.y = Math.PI;
           globe.add(surface);
 
+          // Keep the operations-console grid as a quiet overlay; it must not obscure
+          // the terrain texture or turn the globe back into a synthetic wireframe.
           const grid = new THREE.Mesh(
             new THREE.SphereGeometry(1.435, 38, 24),
-            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.24, wireframe: true })
+            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.055, wireframe: true, depthWrite: false })
           );
+          grid.rotation.y = Math.PI;
           globe.add(grid);
 
-          const landPositions: number[] = [];
-          for (let latitude = -56; latitude <= 78; latitude += 3.25) {
-            for (let longitude = -178; longitude <= 178; longitude += 3.25) {
-              if (!isApproximateLand(latitude, longitude)) continue;
-              const point = globeVector(THREE, longitude + (latitude % 2 ? 1.1 : 0), latitude, 1.458);
-              landPositions.push(point.x, point.y, point.z);
-            }
-          }
-          const landGeometry = new THREE.BufferGeometry();
-          landGeometry.setAttribute('position', new THREE.Float32BufferAttribute(landPositions, 3));
-          const land = new THREE.Points(
-            landGeometry,
-            new THREE.PointsMaterial({
-              color: palette.land,
-              size: 0.026,
-              transparent: true,
-              opacity: 0.82,
-              depthWrite: false,
-            })
-          );
-          globe.add(land);
+          // Keep a restrained atmospheric rim. The previous large back-face
+          // sphere produced an obvious turquoise outer ring around the Earth,
+          // so it is deliberately omitted in favour of the real surface texture.
 
-          const atmosphere = new THREE.Mesh(
-            new THREE.SphereGeometry(1.52, 72, 72),
-            new THREE.MeshBasicMaterial({
-              color: accent,
-              transparent: true,
-              opacity: 0.13,
-              blending: THREE.AdditiveBlending,
-            })
+          const scanRing = new THREE.Mesh(
+            new THREE.TorusGeometry(1.61, 0.009, 10, 132),
+            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false })
           );
-          globe.add(atmosphere);
+          scanRing.rotation.x = Math.PI / 2;
+          globe.add(scanRing);
 
           const orbitGroup = new THREE.Group();
           const orbitOne = new THREE.Mesh(
@@ -297,11 +281,22 @@ export function InteractiveGeoGlobe({
           orbitTwo.rotation.x = Math.PI / 2.8;
           orbitTwo.rotation.z = 0.55;
           orbitGroup.add(orbitTwo);
+          const satellite = new THREE.Group();
+          const satelliteCore = new THREE.Mesh(
+            new THREE.IcosahedronGeometry(0.052, 1),
+            new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95 })
+          );
+          const solarPanel = new THREE.Mesh(
+            new THREE.BoxGeometry(0.16, 0.012, 0.06),
+            new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.88 })
+          );
+          satellite.add(satelliteCore, solarPanel);
+          orbitGroup.add(satellite);
           scene.add(orbitGroup);
 
-          const stars = new Float32Array(180 * 3);
-          for (let index = 0; index < 180; index += 1) {
-            const radius = 2.6 + Math.random() * 1.15;
+          const stars = new Float32Array(760 * 3);
+          for (let index = 0; index < 760; index += 1) {
+            const radius = 2.55 + Math.random() * 2.35;
             const phi = Math.acos(2 * Math.random() - 1);
             const theta = Math.random() * Math.PI * 2;
             stars[index * 3] = radius * Math.sin(phi) * Math.cos(theta);
@@ -326,7 +321,7 @@ export function InteractiveGeoGlobe({
           const countryLabelTextures: import('three').Texture[] = [];
           if (view === 'world') {
             WORLD_COUNTRY_LABELS.forEach(({ name, longitude, latitude }) => {
-              const { sprite, texture } = createCountryLabelSprite(THREE, name, palette.land);
+              const { sprite, texture } = createCountryLabelSprite(THREE, name, palette.light);
               sprite.position.copy(globeVector(THREE, longitude, latitude, 1.57));
               globe.add(sprite);
               countryLabelSprites.push(sprite);
@@ -338,13 +333,39 @@ export function InteractiveGeoGlobe({
           const labelNormal = new THREE.Vector3();
           const cameraDirection = new THREE.Vector3();
 
-          scene.add(new THREE.AmbientLight(palette.light, 1.15));
-          const keyLight = new THREE.PointLight('#ffffff', 3.8, 10);
-          keyLight.position.set(-2.8, 2.8, 4.3);
-          scene.add(keyLight);
-          const rimLight = new THREE.PointLight(accent, 3.3, 8);
+          scene.add(new THREE.HemisphereLight('#dceeff', '#071226', 1.18));
+          const sunLight = new THREE.DirectionalLight('#fff4dc', 3.0);
+          sunLight.position.set(-3.8, 2.7, 4.6);
+          scene.add(sunLight);
+          const rimLight = new THREE.PointLight(accent, 2.1, 8);
           rimLight.position.set(2.8, -1.4, 2.6);
           scene.add(rimLight);
+
+          // Curved data links and moving signal particles make the global view
+          // readable as a live network rather than a static collection of pins.
+          const flightParticles: Array<{ curve: import('three').CatmullRomCurve3; particle: import('three').Mesh; speed: number; offset: number }> = [];
+          const flightMarkers = [...markers].sort((a, b) => b.count - a.count).slice(0, 7);
+          if (flightMarkers.length > 1) {
+            const hub = flightMarkers[0];
+            flightMarkers.slice(1).forEach((marker, index) => {
+              if (Math.abs(marker.longitude - hub.longitude) < 0.1 && Math.abs(marker.latitude - hub.latitude) < 0.1) return;
+              const start = globeVector(THREE, hub.longitude, hub.latitude, 1.48);
+              const end = globeVector(THREE, marker.longitude, marker.latitude, 1.48);
+              const midpoint = start.clone().add(end).normalize().multiplyScalar(1.72 + Math.min(0.2, start.distanceTo(end) * 0.06));
+              const curve = new THREE.CatmullRomCurve3([start, midpoint, end]);
+              const path = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(curve.getPoints(46)),
+                new THREE.LineBasicMaterial({ color: accentLight, transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false })
+              );
+              globe.add(path);
+              const particle = new THREE.Mesh(
+                new THREE.SphereGeometry(0.018, 10, 10),
+                new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending })
+              );
+              globe.add(particle);
+              flightParticles.push({ curve, particle, speed: 0.075 + index * 0.011, offset: index / Math.max(1, flightMarkers.length - 1) });
+            });
+          }
 
           const markerLabelTextures: import('three').Texture[] = [];
           const markerRoots: Array<{
@@ -525,7 +546,6 @@ export function InteractiveGeoGlobe({
             camera.lookAt(0, 0, 0);
             orbitGroup.rotation.z = elapsed * 0.12;
             orbitGroup.rotation.y = elapsed * 0.05;
-            atmosphere.scale.setScalar(1 + Math.sin(elapsed * 1.4) * 0.006);
             starField.rotation.y = -elapsed * 0.018;
             globe.getWorldPosition(globeWorldPosition);
             countryLabelSprites.forEach((sprite) => {
@@ -568,6 +588,9 @@ export function InteractiveGeoGlobe({
             });
             countryLabelTextures.forEach((texture) => texture.dispose());
             markerLabelTextures.forEach((texture) => texture.dispose());
+            earthDayTexture.dispose();
+            earthNightTexture.dispose();
+            earthBumpTexture.dispose();
             renderer.dispose();
             renderer.domElement.remove();
           };

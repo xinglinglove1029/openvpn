@@ -1,8 +1,11 @@
 package openvpnweb
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +214,81 @@ func TestDashboardGeoDetailPaginationBounds(t *testing.T) {
 	}
 	if size := dashboardGeoDetailPageSize("999"); size != 100 {
 		t.Fatalf("expected capped page size, got %d", size)
+	}
+}
+
+type dashboardGeoRoundTripper func(*http.Request) (*http.Response, error)
+
+func (fn dashboardGeoRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestDashboardGeoBoundaryValidation(t *testing.T) {
+	for _, test := range []struct {
+		iso3  string
+		level string
+		valid bool
+	}{
+		{"USA", "ADM1", true}, {"CHN", "ADM2", true}, {"US", "ADM1", false},
+		{"USA", "ADM3", false}, {"uSa", "ADM1", false},
+	} {
+		if actual := dashboardGeoBoundaryRequestValid(test.iso3, test.level); actual != test.valid {
+			t.Fatalf("validation(%q, %q) = %v, want %v", test.iso3, test.level, actual, test.valid)
+		}
+	}
+	if !dashboardGeoBoundaryDownloadURLValid("https://github.com/wmgeolab/geoBoundaries/raw/a/releaseData/gbOpen/USA/ADM1/test.geojson") {
+		t.Fatal("expected trusted geoBoundaries GitHub raw URL to be allowed")
+	}
+	for _, value := range []string{
+		"http://github.com/wmgeolab/geoBoundaries/raw/a/test.geojson",
+		"https://example.test/boundary.geojson",
+		"https://github.com/other/repository/raw/a/test.geojson",
+	} {
+		if dashboardGeoBoundaryDownloadURLValid(value) {
+			t.Fatalf("unexpected trusted download URL: %s", value)
+		}
+	}
+}
+
+func TestDashboardGeoBoundaryProxiesAndCachesGeoJSON(t *testing.T) {
+	previousClient := dashboardGeoBoundaryHTTPClient
+	previousCache := dashboardGeoBoundaryCache.entries
+	dashboardGeoBoundaryCache.Lock()
+	dashboardGeoBoundaryCache.entries = make(map[string]dashboardGeoBoundaryCacheEntry)
+	dashboardGeoBoundaryCache.Unlock()
+	requests := 0
+	dashboardGeoBoundaryHTTPClient = &http.Client{Transport: dashboardGeoRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		body := ""
+		switch request.URL.Host {
+		case "www.geoboundaries.org":
+			body = `{"simplifiedGeometryGeoJSON":"https://github.com/wmgeolab/geoBoundaries/raw/version/releaseData/gbOpen/USA/ADM1/boundary.geojson"}`
+		case "media.githubusercontent.com":
+			body = `{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"shapeName":"California"},"geometry":{"type":"Polygon","coordinates":[]}}]}`
+		default:
+			t.Fatalf("unexpected proxy request: %s", request.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})}
+	defer func() {
+		dashboardGeoBoundaryHTTPClient = previousClient
+		dashboardGeoBoundaryCache.Lock()
+		dashboardGeoBoundaryCache.entries = previousCache
+		dashboardGeoBoundaryCache.Unlock()
+	}()
+
+	first, err := dashboardGeoBoundary(context.Background(), "USA", "ADM1")
+	if err != nil {
+		t.Fatalf("first boundary request failed: %v", err)
+	}
+	second, err := dashboardGeoBoundary(context.Background(), "USA", "ADM1")
+	if err != nil {
+		t.Fatalf("cached boundary request failed: %v", err)
+	}
+	if !strings.Contains(string(first), `"California"`) || string(first) != string(second) {
+		t.Fatalf("unexpected GeoJSON result: %s", first)
+	}
+	if requests != 2 {
+		t.Fatalf("expected metadata and GeoJSON to be fetched once each, got %d requests", requests)
 	}
 }
