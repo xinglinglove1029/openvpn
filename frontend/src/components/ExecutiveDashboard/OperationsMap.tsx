@@ -227,6 +227,24 @@ export function OperationsMap({
   }, []);
   const selectGlobeMarker = useCallback((marker: GeoGlobeMarker) => openDetail([marker]), [openDetail]);
   const selectChinaMarkers = useCallback((markers: GeoGlobeMarker[]) => openDetail(markers), [openDetail]);
+  const loadChinaIPDetailsPreview = useCallback(async (markers: GeoGlobeMarker[]) => {
+    const responses = await Promise.all(markers.map((marker) => {
+      const params = new URLSearchParams({
+        source,
+        country: marker.point.country,
+        page: '1',
+        pageSize: '5',
+      });
+      if (marker.point.province) params.set('province', marker.point.province);
+      if (marker.point.city) params.set('city', marker.point.city);
+      if (data?.start) params.set('start', String(data.start));
+      if (data?.end) params.set('end', String(data.end));
+      return api.get<DashboardGeoIPDetailsResponse>(`/ovpn/dashboard/geo-map/ips?${params.toString()}`);
+    }));
+    const unique = new Map<string, DashboardGeoIPDetail>();
+    responses.forEach((response) => response.items.forEach((item) => unique.set(item.ip, item)));
+    return [...unique.values()].sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true })).slice(0, 5);
+  }, [data?.end, data?.start, source]);
 
   useEffect(() => {
     setDetailMarkers([]);
@@ -355,7 +373,12 @@ export function OperationsMap({
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(220px,.72fr)]">
         <div className="relative min-h-[260px] xl:min-h-0 [&_.china-usage-map]:h-full [&_.geo-globe-shell]:h-full">
           {view === 'china' ? (
-            <ChinaUsageMap markers={globeMarkers} emptyMessage={globeEmptyMessage} onMarkerSelect={selectChinaMarkers} />
+            <ChinaUsageMap
+              markers={globeMarkers}
+              emptyMessage={globeEmptyMessage}
+              onMarkerSelect={selectChinaMarkers}
+              loadIPDetails={loadChinaIPDetailsPreview}
+            />
           ) : (
             <InteractiveGeoGlobe
               markers={globeMarkers}

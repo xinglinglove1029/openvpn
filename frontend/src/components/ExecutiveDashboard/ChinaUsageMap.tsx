@@ -1,6 +1,7 @@
 import { ChevronLeft, MapPinned, MousePointer2, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import { cn } from '@/lib/utils';
+import type { DashboardGeoIPDetail } from '@/types';
 import type { GeoGlobeMarker } from './InteractiveGeoGlobe';
 
 type Position = [number, number];
@@ -25,16 +26,29 @@ type MapPoint = {
   latitude: number;
   labels: string[];
   markers: GeoGlobeMarker[];
+  drillFeature?: GeoFeature;
 };
 type RegionUsage = {
   name: string;
   locationCount: number;
   ipCount: number;
   labels: string[];
+  markers: GeoGlobeMarker[];
 };
 type HoveredRegion = RegionUsage & {
   x: number;
   y: number;
+  key: string;
+  canDrillDown: boolean;
+  ipDetails: DashboardGeoIPDetail[];
+  detailsLoading: boolean;
+  detailsError: boolean;
+};
+type ChinaUsageMapProps = {
+  markers: GeoGlobeMarker[];
+  emptyMessage: string;
+  onMarkerSelect?: (markers: GeoGlobeMarker[]) => void;
+  loadIPDetails?: (markers: GeoGlobeMarker[]) => Promise<DashboardGeoIPDetail[]>;
 };
 type DrilldownNode = {
   name: string;
@@ -155,7 +169,7 @@ function matchesNode(marker: GeoGlobeMarker, node: DrilldownNode) {
   return normaliseRegionName(String(value || '')) === expected;
 }
 
-export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { markers: GeoGlobeMarker[]; emptyMessage: string; onMarkerSelect?: (markers: GeoGlobeMarker[]) => void }) {
+export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect, loadIPDetails }: ChinaUsageMapProps) {
   const [features, setFeatures] = useState<GeoFeature[]>([]);
   const [mapLevel, setMapLevel] = useState<ChinaMapLevel>('province');
   const [breadcrumbs, setBreadcrumbs] = useState<DrilldownNode[]>([]);
@@ -170,11 +184,21 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
   const requestIdRef = useRef(0);
   const dragRef = useRef<DragState | null>(null);
   const suppressMarkerClickRef = useRef(false);
+  const hoverRequestIdRef = useRef(0);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverKeyRef = useRef('');
+  const hoverDetailsCacheRef = useRef(new Map<string, DashboardGeoIPDetail[]>());
 
   const loadMap = useCallback(async (url: string, nextBreadcrumbs: DrilldownNode[], fallbackLevel: ChinaMapLevel) => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setLoadError(null);
+    hoverRequestIdRef.current += 1;
+    hoverKeyRef.current = '';
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
     setHoveredRegion(null);
     setSelected(null);
     try {
@@ -264,6 +288,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
         latitude,
         labels: [marker.label],
         markers: [marker],
+        drillFeature: feature,
       });
     });
     return [...grouped.values()].sort((a, b) => b.count - a.count);
@@ -273,7 +298,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
     const usage = new Map<string, RegionUsage>();
     features.forEach((feature, index) => {
       const name = feature.properties?.name || `区域 ${index + 1}`;
-      usage.set(normaliseRegionName(name), { name, locationCount: 0, ipCount: 0, labels: [] });
+      usage.set(normaliseRegionName(name), { name, locationCount: 0, ipCount: 0, labels: [], markers: [] });
     });
     if (mapLevel === 'district') return usage;
 
@@ -285,6 +310,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
       current.locationCount += 1;
       current.ipCount += marker.count;
       if (!current.labels.includes(marker.label)) current.labels.push(marker.label);
+      current.markers.push(marker);
     });
     return usage;
   }, [features, mapLevel, scopedMarkers]);
@@ -296,20 +322,74 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
   const maxCount = Math.max(...points.map((point) => point.count), 1);
   const activeRegionCount = activeRegions.size;
 
+  const clearHover = useCallback(() => {
+    hoverRequestIdRef.current += 1;
+    hoverKeyRef.current = '';
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoveredRegion(null);
+  }, []);
+
   useEffect(() => {
     setSelected(null);
-    setHoveredRegion(null);
-  }, [markers]);
+    hoverDetailsCacheRef.current.clear();
+    clearHover();
+  }, [clearHover, markers]);
 
-  const showRegionTooltip = (event: ReactPointerEvent<SVGPathElement>, usage: RegionUsage) => {
+  const showRegionTooltip = useCallback((event: ReactPointerEvent<SVGElement>, usage: RegionUsage, canDrillDown = false) => {
     const container = mapRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const tooltipWidth = 230;
+    const tooltipWidth = 276;
     const x = Math.min(Math.max(event.clientX - rect.left, tooltipWidth / 2 + 12), rect.width - tooltipWidth / 2 - 12);
     const y = Math.min(Math.max(event.clientY - rect.top, 98), rect.height - 14);
-    setHoveredRegion({ ...usage, x, y });
-  };
+    const markerKey = usage.markers.map((marker) => marker.id).sort().join('|');
+    const key = `${usage.name}:${markerKey}`;
+    const cached = hoverDetailsCacheRef.current.get(key);
+
+    if (hoverKeyRef.current === key) {
+      setHoveredRegion((current) => current ? { ...current, x, y } : current);
+      return;
+    }
+
+    hoverRequestIdRef.current += 1;
+    const requestId = hoverRequestIdRef.current;
+    hoverKeyRef.current = key;
+    if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
+    setHoveredRegion({
+      ...usage,
+      x,
+      y,
+      key,
+      canDrillDown,
+      ipDetails: cached || [],
+      detailsLoading: Boolean(loadIPDetails && usage.markers.length && !cached),
+      detailsError: false,
+    });
+    if (!loadIPDetails || !usage.markers.length || cached) return;
+
+    hoverTimerRef.current = window.setTimeout(() => {
+      hoverTimerRef.current = null;
+      void loadIPDetails(usage.markers)
+        .then((items) => {
+          if (requestId !== hoverRequestIdRef.current || hoverKeyRef.current !== key) return;
+          const unique = new Map(items.map((item) => [item.ip, item]));
+          const details = [...unique.values()].sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true })).slice(0, 5);
+          hoverDetailsCacheRef.current.set(key, details);
+          setHoveredRegion((current) => current?.key === key ? { ...current, ipDetails: details, detailsLoading: false } : current);
+        })
+        .catch(() => {
+          if (requestId !== hoverRequestIdRef.current || hoverKeyRef.current !== key) return;
+          setHoveredRegion((current) => current?.key === key ? { ...current, detailsLoading: false, detailsError: true } : current);
+        });
+    }, 350);
+  }, [loadIPDetails]);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
+  }, []);
 
   const svgPoint = useCallback((clientX: number, clientY: number): Position => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -375,7 +455,9 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
     const name = feature.properties?.name || '当前区域';
     const adcode = String(feature.properties?.adcode || '').trim();
     const featureLevel = mapLevelForFeatures([feature], mapLevel);
-    if (!adcode || featureLevel === 'district' || Number(feature.properties?.childrenNum || 0) <= 0) return;
+    // Some direct-administered municipalities omit or under-report childrenNum in the boundary data.
+    // As long as an adcode exists, attempt to load its child boundary and report a real loading error if absent.
+    if (!adcode || featureLevel === 'district' || loading) return;
     const center = featureCenter(feature);
     const nextBreadcrumbs = [...breadcrumbs, { name, adcode, level: featureLevel, center }];
     void loadMap(`${ADMIN_BOUNDARY_URL}/${adcode}_full.json`, nextBreadcrumbs, featureLevel === 'province' ? 'city' : 'district');
@@ -427,9 +509,9 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
           <g className="china-map-provinces">
             {features.map((feature, index) => {
               const name = feature.properties?.name || `区域 ${index + 1}`;
-              const usage = regionUsage.get(normaliseRegionName(name)) || { name, locationCount: 0, ipCount: 0, labels: [] };
+              const usage = regionUsage.get(normaliseRegionName(name)) || { name, locationCount: 0, ipCount: 0, labels: [], markers: [] };
               const active = activeRegions.has(normaliseRegionName(name));
-              const canDrillDown = mapLevel !== 'district' && Boolean(feature.properties?.adcode) && Number(feature.properties?.childrenNum || 0) > 0;
+              const canDrillDown = mapLevel !== 'district' && Boolean(feature.properties?.adcode);
               const tooltipText = districtPrecisionNotice
                 ? `${name}：当前数据仅精确到市级，区县边界用于辅助查看`
                 : usage.ipCount
@@ -449,9 +531,9 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
                     event.preventDefault();
                     drillDown(feature);
                   }}
-                  onPointerEnter={(event) => showRegionTooltip(event, usage)}
-                  onPointerMove={(event) => showRegionTooltip(event, usage)}
-                  onPointerLeave={() => setHoveredRegion(null)}
+                  onPointerEnter={(event) => showRegionTooltip(event, usage, canDrillDown)}
+                  onPointerMove={(event) => showRegionTooltip(event, usage, canDrillDown)}
+                  onPointerLeave={clearHover}
                 >
                   <title>{tooltipText}</title>
                 </path>
@@ -497,14 +579,19 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
                     if (suppressMarkerClickRef.current) return;
                     setSelected(point);
                     onMarkerSelect?.(point.markers);
+                    if (point.drillFeature) drillDown(point.drillFeature);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
                       setSelected(point);
                       onMarkerSelect?.(point.markers);
+                      if (point.drillFeature) drillDown(point.drillFeature);
                     }
                   }}
+                  onPointerEnter={(event) => showRegionTooltip(event, { name: point.label, locationCount: point.markers.length, ipCount: point.count, labels: point.labels, markers: point.markers }, Boolean(point.drillFeature && mapLevel !== 'district'))}
+                  onPointerMove={(event) => showRegionTooltip(event, { name: point.label, locationCount: point.markers.length, ipCount: point.count, labels: point.labels, markers: point.markers }, Boolean(point.drillFeature && mapLevel !== 'district'))}
+                  onPointerLeave={clearHover}
                 >
                   <title>{`${point.label}：${point.count} 个去重公网 IP`}</title>
                   <circle cx={x} cy={y} r={radius * 1.85} className="china-map-marker-glow" style={style} />
@@ -576,7 +663,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
 
       {hoveredRegion && (
         <div
-          className="china-map-control pointer-events-none absolute z-30 w-[230px] -translate-x-1/2 -translate-y-[calc(100%+12px)] rounded-xl border px-3 py-2.5 text-xs text-foreground shadow-xl backdrop-blur"
+          className="china-map-control pointer-events-none absolute z-30 w-[276px] -translate-x-1/2 -translate-y-[calc(100%+12px)] rounded-xl border px-3 py-2.5 text-xs text-foreground shadow-xl backdrop-blur"
           style={{ left: hoveredRegion.x, top: hoveredRegion.y }}
           role="tooltip"
         >
@@ -586,7 +673,19 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
           ) : hoveredRegion.ipCount ? (
             <>
               <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">{hoveredRegion.locationCount} 个使用位置 · {hoveredRegion.ipCount} 个去重公网 IP</p>
-              <p className="mt-1 truncate text-[10px] text-primary">{hoveredRegion.labels.slice(0, 3).join('、')}{hoveredRegion.labels.length > 3 ? ` 等 ${hoveredRegion.labels.length} 个区域` : ''}</p>
+              {hoveredRegion.detailsLoading ? (
+                <p className="mt-1 text-[10px] text-muted-foreground">正在读取去重后的公网 IP 明细…</p>
+              ) : hoveredRegion.ipDetails.length ? (
+                <div className="mt-1.5 rounded-lg border border-border/80 bg-background/45 px-2 py-1.5">
+                  <p className="text-[10px] font-medium text-muted-foreground">去重公网 IP（展示前 {hoveredRegion.ipDetails.length} 条）</p>
+                  <ul className="mt-1 space-y-0.5 font-mono text-[10px] leading-4 text-primary">
+                    {hoveredRegion.ipDetails.map((item) => <li key={item.ip} className="truncate">{item.ip}{item.city ? ` · ${item.city}` : ''}</li>)}
+                  </ul>
+                </div>
+              ) : hoveredRegion.detailsError ? (
+                <p className="mt-1 text-[10px] text-muted-foreground">IP 明细暂时无法读取，点击节点可重试查看完整列表。</p>
+              ) : null}
+              <p className="mt-1 text-[10px] text-primary">{hoveredRegion.canDrillDown ? `点击节点可下钻至${mapLevelChildLabel(mapLevel)}，并打开完整 IP 明细` : '点击节点可打开完整去重 IP 明细'}</p>
             </>
           ) : (
             <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">当前暂无已定位的使用记录</p>
@@ -608,7 +707,7 @@ export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { marke
           <MousePointer2 className="h-3.5 w-3.5 shrink-0 text-primary" />
           {mapLevel === 'district'
             ? '区县边界辅助查看 · 拖动平移、滚轮或右上角按钮缩放 · 点击圆点查看 IP 明细'
-            : `点击${mapLevel === 'province' ? '省份' : '城市'}下钻至${mapLevelChildLabel(mapLevel)} · 拖动平移、滚轮或右上角按钮缩放`}
+            : `点击节点或${mapLevel === 'province' ? '省份' : '城市'}下钻至${mapLevelChildLabel(mapLevel)} · 节点悬浮可查看 IP · 拖动平移、滚轮或右上角按钮缩放`}
         </div>
       ) : (
         <div className="china-map-control pointer-events-none absolute inset-x-8 bottom-3 rounded-xl border px-4 py-2.5 text-center text-sm text-muted-foreground shadow-sm backdrop-blur">

@@ -74,15 +74,12 @@
 
 ```mermaid
 flowchart LR
-  O[OpenVPN management
-在线会话] --> G[地理聚合与连接拓扑]
-  H[连接历史
-时间段流量] --> T[用户流量排行]
-  A[操作审计] --> G
-  W[网站访问审计
-可选] --> G
-  S[服务状态与风险] --> R[服务健康 / 风险提示]
-  G --> D[/screen 运营大屏]
+  O["OpenVPN management（在线会话）"] --> G["地理聚合与连接拓扑"]
+  H["连接历史（时间段流量）"] --> T["用户流量排行"]
+  A["操作审计"] --> G
+  W["网站访问审计（可选）"] --> G
+  S["服务状态与风险"] --> R["服务健康 / 风险提示"]
+  G --> D["/screen 运营大屏"]
   T --> D
   R --> D
 ```
@@ -524,6 +521,7 @@ docker run -d \
   -p 8888:8888 \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=admin \
+  -e TZ=Asia/Shanghai \
   -v $(pwd)/data:/data \
   xinglinglove1029/openvpn:latest
 ```
@@ -688,6 +686,23 @@ sudo rm -f /etc/openvpn-web/initial-admin-password
 
 升级已有安装不会覆盖 `config.json`、数据库、PKI、客户端配置或管理员密码。Docker 部署保持原有初始化行为；不要让原生服务与 Docker 容器同时使用同一数据目录或端口。
 
+### Docker 容器时区
+
+Docker 镜像默认使用 `Asia/Shanghai`（东八区）。`docker-compose.yml` 通过 `TZ` 环境变量显式设置该默认值，不再挂载宿主机 `/etc/localtime`，避免宿主机仍为 UTC 时覆盖容器时区而导致 OpenVPN 日志、连接记录整体相差 8 小时。
+
+如需使用其他时区，在部署目录创建 `.env`，例如：
+
+```env
+TZ=America/Los_Angeles
+```
+
+修改时区后重新创建容器：
+
+```bash
+docker compose up -d --force-recreate
+```
+
+> 若自行使用 `docker run`，请不要再额外挂载 `/etc/localtime`；可加 `-e TZ=Asia/Shanghai` 显式指定时区。
 ### 单架构 Docker 镜像
 
 ```bash

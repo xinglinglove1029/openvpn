@@ -14,6 +14,7 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin
       OVPN_GATEWAY: "true"
+      # 默认使用东八区；如需其他时区，可在宿主机 .env 或执行命令时设置 TZ。
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./data:/data
-      - /etc/localtime:/etc/localtime:ro

@@ -230,6 +230,7 @@ docker run --rm -it \
   -p 8888:8888 \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=admin \
+  -e TZ=Asia/Shanghai \
   -e OVPN_GATEWAY=false \
   -v $(pwd)/data:/data \
   xinglinglove1029/openvpn:latest
