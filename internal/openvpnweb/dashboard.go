@@ -79,8 +79,10 @@ func (ov *ovpn) buildDashboardSummary() DashboardSummary {
 	if err := db.WithContext(context.Background()).Model(&Firewall{}).Count(&stats.FirewallRules).Error; err != nil {
 		risks = append(risks, DashboardRisk{Level: "warning", Title: "防火墙规则统计异常", Message: err.Error()})
 	}
-	if err := db.WithContext(context.Background()).Model(&History{}).Where("time_unix >= ?", todayStart).Count(&stats.TodayConnections).Error; err != nil {
-		risks = append(risks, DashboardRisk{Level: "warning", Title: "今日上线统计异常", Message: err.Error()})
+	var todayConnectionsErr error
+	stats.TodayConnections, todayConnectionsErr = countTodayConnections(context.Background(), todayStart, clients)
+	if todayConnectionsErr != nil {
+		risks = append(risks, DashboardRisk{Level: "warning", Title: "今日上线统计异常", Message: todayConnectionsErr.Error()})
 	}
 
 	return DashboardSummary{
@@ -89,6 +91,61 @@ func (ov *ovpn) buildDashboardSummary() DashboardSummary {
 	}
 }
 
+// countTodayConnections returns the number of VPN sessions established since
+// the start of the local day. History is written by the disconnect hook, so a
+// session which is still online has no History row yet. Add those live
+// sessions explicitly, while using the OpenVPN management connection ID to
+// avoid counting a session twice when a history row already exists.
+func countTodayConnections(ctx context.Context, todayStart int64, clients []ClientData) (int64, error) {
+	var historyCount int64
+	if err := db.WithContext(ctx).Model(&History{}).Where("time_unix >= ?", todayStart).Count(&historyCount).Error; err != nil {
+		return 0, err
+	}
+
+	var recordedConnectionIDs []string
+	if err := db.WithContext(ctx).
+		Model(&History{}).
+		Where("time_unix >= ? AND connection_id <> ''", todayStart).
+		Pluck("connection_id", &recordedConnectionIDs).Error; err != nil {
+		return 0, err
+	}
+	recorded := make(map[string]struct{}, len(recordedConnectionIDs))
+	for _, connectionID := range recordedConnectionIDs {
+		if connectionID = strings.TrimSpace(connectionID); connectionID != "" {
+			recorded[connectionID] = struct{}{}
+		}
+	}
+
+	live := make(map[string]struct{}, len(clients))
+	for _, client := range clients {
+		connectedAt, err := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(client.ConnDate), time.Local)
+		if err != nil || connectedAt.Unix() < todayStart {
+			continue
+		}
+
+		// A management connection ID is unique for each successful session. A
+		// defensive fallback preserves the correct count for older OpenVPN
+		// versions that do not return an ID in status 3 output.
+		connectionKey := strings.TrimSpace(client.ID)
+		if connectionKey == "" {
+			connectionKey = strings.Join([]string{
+				strings.TrimSpace(client.Username),
+				strings.TrimSpace(client.CommonName),
+				strings.TrimSpace(client.ConnDate),
+				strings.TrimSpace(client.Vip),
+			}, "|")
+		}
+		if connectionKey == "" {
+			continue
+		}
+		if _, exists := recorded[connectionKey]; exists {
+			continue
+		}
+		live[connectionKey] = struct{}{}
+	}
+
+	return historyCount + int64(len(live)), nil
+}
 func (ov *ovpn) dashboardSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, ov.buildDashboardSummary())
 }
