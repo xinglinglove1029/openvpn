@@ -23,6 +23,7 @@ type InteractiveGeoGlobeProps = {
   tone?: 'emerald' | 'sky' | 'violet';
   className?: string;
   emptyMessage?: string;
+  onMarkerSelect?: (marker: GeoGlobeMarker) => void;
 };
 
 const TONE_COLORS = {
@@ -120,6 +121,36 @@ function createCountryLabelSprite(THREE: typeof import('three'), label: string, 
 
 // A restrained dot field gives the sphere a geographic silhouette without
 // requesting map tiles or sending audit data to a third party.
+function createMarkerCountSprite(THREE: typeof import('three'), count: number, color: string) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context is unavailable');
+  const label = String(count);
+  const fontSize = 36;
+  context.font = `700 ${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  const paddingX = 18;
+  const paddingY = 10;
+  canvas.width = Math.ceil(context.measureText(label).width) + paddingX * 2;
+  canvas.height = fontSize + paddingY * 2;
+  context.font = `700 ${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineJoin = 'round';
+  context.lineWidth = 8;
+  context.strokeStyle = 'rgba(2, 6, 23, 0.88)';
+  context.strokeText(label, canvas.width / 2, canvas.height / 2 + 1);
+  context.fillStyle = color;
+  context.fillText(label, canvas.width / 2, canvas.height / 2 + 1);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set((canvas.width / canvas.height) * 0.21, 0.21, 1);
+  sprite.renderOrder = 8;
+  return { sprite, texture };
+}
+
 function isApproximateLand(latitude: number, longitude: number) {
   const ellipse = (lng: number, lat: number, centerLng: number, centerLat: number, width: number, height: number) =>
     ((lng - centerLng) / width) ** 2 + ((lat - centerLat) / height) ** 2 < 1;
@@ -141,6 +172,7 @@ export function InteractiveGeoGlobe({
   tone = 'sky',
   className,
   emptyMessage = '当前范围没有可定位的区域数据。',
+  onMarkerSelect,
 }: InteractiveGeoGlobeProps) {
   const { theme } = useTheme();
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -314,6 +346,7 @@ export function InteractiveGeoGlobe({
           rimLight.position.set(2.8, -1.4, 2.6);
           scene.add(rimLight);
 
+          const markerLabelTextures: import('three').Texture[] = [];
           const markerRoots: Array<{
             root: import('three').Group;
             marker: GeoGlobeMarker;
@@ -364,7 +397,10 @@ export function InteractiveGeoGlobe({
             );
             hitArea.position.z = 0.15 + size;
             hitArea.userData.marker = marker;
-            root.add(column, halo, core, beacon, hitArea);
+            const countLabel = createMarkerCountSprite(THREE, marker.count, '#ffffff');
+            countLabel.sprite.position.z = 0.24 + size * 2.1;
+            markerLabelTextures.push(countLabel.texture);
+            root.add(column, halo, core, beacon, countLabel.sprite, hitArea);
             globe.add(root);
             clickTargets.push(hitArea);
             markerRoots.push({ root, marker, halo });
@@ -391,6 +427,7 @@ export function InteractiveGeoGlobe({
             selectedId = marker.id;
             pauseUntil = performance.now() + 4000;
             setSelected(marker);
+            onMarkerSelect?.(marker);
           };
 
           const reset = () => {
@@ -530,6 +567,7 @@ export function InteractiveGeoGlobe({
               else material?.dispose?.();
             });
             countryLabelTextures.forEach((texture) => texture.dispose());
+            markerLabelTextures.forEach((texture) => texture.dispose());
             renderer.dispose();
             renderer.domElement.remove();
           };
@@ -551,7 +589,7 @@ export function InteractiveGeoGlobe({
       disposed = true;
       cleanup?.();
     };
-  }, [markerSignature, theme, tone, view]);
+  }, [markerSignature, onMarkerSelect, theme, tone, view]);
 
   const sendControl = (command: GlobeCommand) => controlsRef.current?.(command);
 

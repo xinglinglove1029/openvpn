@@ -16,6 +16,7 @@ type MapPoint = {
   longitude: number;
   latitude: number;
   labels: string[];
+  markers: GeoGlobeMarker[];
 };
 type ProvinceUsage = {
   name: string;
@@ -77,7 +78,26 @@ function normaliseRegionName(value: string) {
     .trim();
 }
 
-export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMarker[]; emptyMessage: string }) {
+function geometryLabelPosition(geometry: GeoFeature['geometry']): Position | undefined {
+  const positions = collectPositions(geometry?.coordinates);
+  if (!positions.length) return undefined;
+  const longitudes = positions.map(([longitude]) => longitude);
+  const latitudes = positions.map(([, latitude]) => latitude);
+  return [
+    (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
+    (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
+  ];
+}
+
+function pointLocationLabel(point: MapPoint) {
+  const names = point.markers
+    .flatMap((marker) => [marker.point.province, marker.point.city, marker.point.label])
+    .map((value) => String(value || '').trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+  return names.slice(0, 2).join(' · ') || point.labels.slice(0, 2).join(' · ');
+}
+
+export function ChinaUsageMap({ markers, emptyMessage, onMarkerSelect }: { markers: GeoGlobeMarker[]; emptyMessage: string; onMarkerSelect?: (markers: GeoGlobeMarker[]) => void }) {
   const [features, setFeatures] = useState<GeoFeature[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [selected, setSelected] = useState<MapPoint | null>(null);
@@ -112,6 +132,7 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
       if (current) {
         current.count += marker.count;
         if (!current.labels.includes(marker.label)) current.labels.push(marker.label);
+        current.markers.push(marker);
         return;
       }
       grouped.set(key, {
@@ -121,6 +142,7 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
         longitude: marker.longitude,
         latitude: marker.latitude,
         labels: [marker.label],
+        markers: [marker],
       });
     });
     return [...grouped.values()].sort((a, b) => b.count - a.count);
@@ -231,6 +253,29 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
             );
           })}
         </g>
+        <g className="pointer-events-none select-none" aria-label="省级行政区名称">
+          {features.map((feature, index) => {
+            const name = feature.properties?.name || `区域 ${index + 1}`;
+            const center = geometryLabelPosition(feature.geometry);
+            if (!center) return null;
+            const [x, y] = project(center);
+            const active = activeRegions.has(normaliseRegionName(name));
+            return (
+              <text
+                key={`province-label-${name}-${index}`}
+                x={x}
+                y={y}
+                textAnchor="middle"
+                className={cn('fill-muted-foreground text-[12px] font-semibold', active && 'fill-primary')}
+                stroke="color-mix(in srgb, var(--background) 86%, transparent)"
+                strokeWidth="4"
+                paintOrder="stroke"
+              >
+                {name}
+              </text>
+            );
+          })}
+        </g>
         <g aria-label="使用位置">
           {points.map((point) => {
             const [x, y] = project([point.longitude, point.latitude]);
@@ -243,11 +288,12 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
                 role="button"
                 tabIndex={0}
                 aria-label={`${point.label}，${point.count} 个去重公网 IP`}
-                onClick={() => setSelected(point)}
+                onClick={() => { setSelected(point); onMarkerSelect?.(point.markers); }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     setSelected(point);
+                    onMarkerSelect?.(point.markers);
                   }
                 }}
               >
@@ -255,6 +301,28 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
                 <circle cx={x} cy={y} r={radius * 1.85} className="china-map-marker-glow" style={style} />
                 <circle cx={x} cy={y} r={radius} className="china-map-marker-ring" />
                 <circle cx={x} cy={y} r={Math.max(4, radius * 0.36)} className="china-map-marker-core" />
+                <text
+                  x={x}
+                  y={y - radius - 10}
+                  textAnchor="middle"
+                  className="pointer-events-none select-none fill-foreground text-[11px] font-semibold"
+                  stroke="color-mix(in srgb, var(--background) 88%, transparent)"
+                  strokeWidth="4"
+                  paintOrder="stroke"
+                >
+                  {pointLocationLabel(point)}
+                </text>
+                <text
+                  x={x}
+                  y={y + 4}
+                  textAnchor="middle"
+                  className="pointer-events-none select-none fill-primary-foreground text-[12px] font-bold"
+                  stroke="rgba(2, 6, 23, 0.68)"
+                  strokeWidth="3"
+                  paintOrder="stroke"
+                >
+                  {point.count}
+                </text>
               </g>
             );
           })}
@@ -263,7 +331,7 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
 
       <div className="china-map-control pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-[11px] font-medium text-foreground shadow-sm backdrop-blur">
         <MapPinned className="h-3.5 w-3.5 text-primary" />
-        中国省级使用分布
+        省级行政区 · 使用位置
       </div>
       <div className="china-map-control pointer-events-none absolute right-3 top-3 rounded-lg border px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
         {points.length ? `${points.length} 个使用位置 · ${activeRegionCount} 个省级区域` : '等待位置数据'}
@@ -295,7 +363,7 @@ export function ChinaUsageMap({ markers, emptyMessage }: { markers: GeoGlobeMark
       ) : points.length ? (
         <div className="china-map-control pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
           <MousePointer2 className="h-3.5 w-3.5 text-primary" />
-          悬停省份查看统计 · 点击发光圆点查看详情
+          省份、位置默认显示 · 悬停省份查看统计 · 点击发光圆点查看详情
         </div>
       ) : (
         <div className="china-map-control pointer-events-none absolute inset-x-8 bottom-3 rounded-xl border px-4 py-2.5 text-center text-sm text-muted-foreground shadow-sm backdrop-blur">

@@ -14,6 +14,10 @@ export function Layout() {
   // 移动端 Sidebar 抽屉开关
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isMobile = useIsMobile();
+  const [browserFullscreen, setBrowserFullscreen] = useState(() =>
+    typeof document !== 'undefined' && Boolean(document.fullscreenElement)
+  );
+  const screenOnlyMode = browserFullscreen && (location.pathname === '/screen' || location.pathname.startsWith('/screen/'));
   // 桌面端 Sidebar 折叠状态（仅图标模式），持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -22,6 +26,13 @@ export function Layout() {
       return false;
     }
   });
+
+  // 原生全屏下，大屏页面只保留运营看板，避免侧栏、顶部栏及 AI 浮标干扰展示。
+  useEffect(() => {
+    const syncFullscreen = () => setBrowserFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
 
   // 折叠状态变更时持久化
   useEffect(() => {
@@ -121,10 +132,10 @@ export function Layout() {
   return (
     <div className="relative flex h-screen h-dvh min-h-screen min-h-dvh min-w-0 overflow-hidden bg-background">
       {/* 全屏 three.js 背景层（z-0） */}
-      <BackgroundScene />
+      {!screenOnlyMode && <BackgroundScene />}
       {/* CSS 动态光晕层 - 呼吸+漂浮效果，与全站风格统一
           移动端：减小尺寸/降低透明度，提升性能并避免视觉过载 */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
+      {!screenOnlyMode && <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
         <div
           className={`absolute -top-32 -right-32 w-[28rem] h-[28rem] sm:w-[40rem] sm:h-[40rem] lg:w-[50rem] lg:h-[50rem] rounded-full blur-3xl ${isMobile ? 'opacity-10 dark:opacity-8' : 'opacity-20 dark:opacity-15 sm:opacity-25 sm:dark:opacity-20 lg:opacity-30 lg:dark:opacity-20'} animate-pulse`}
           style={{
@@ -150,12 +161,12 @@ export function Layout() {
             }}
           />
         )}
-      </div>
+      </div>}
       {/* 遮罩让背景不抢戏（z-5） */}
-      <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />
+      {!screenOnlyMode && <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />}
 
       {/* 移动端 Sidebar 抽屉遮罩 */}
-      {sidebarOpen && (
+      {!screenOnlyMode && sidebarOpen && (
         <div
           aria-hidden
           onClick={() => setSidebarOpen(false)}
@@ -167,22 +178,22 @@ export function Layout() {
       {/* Sidebar 容器：
           - lg+ 桌面端常驻显示
           - 移动端为抽屉，由 sidebarOpen 控制滑入/滑出 */}
-      <div
+      {!screenOnlyMode && <div
         data-testid="mobile-sidebar-drawer"
         className={`fixed z-40 lg:z-20 lg:!translate-x-0 lg:!block ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         } transition-transform duration-300 ease-out lg:transition-none lg:static inset-y-0 left-0 lg:!flex lg:flex`}
       >
         <Sidebar collapsed={isMobile ? false : sidebarCollapsed} />
-      </div>
+      </div>}
 
       <div className="relative z-10 flex min-w-0 flex-1 basis-0 flex-col overflow-hidden">
-        <TopBar
+        {!screenOnlyMode && <TopBar
           onMenuClick={() => setSidebarOpen((v) => !v)}
           sidebarCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
-        />
-        <main data-testid="app-main" className="flex-1 min-w-0 overflow-y-auto overflow-x-clip p-4 sm:p-6" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
+        />}
+        <main data-testid="app-main" className={screenOnlyMode ? 'flex-1 min-w-0 overflow-y-auto overflow-x-clip p-0' : 'flex-1 min-w-0 overflow-y-auto overflow-x-clip p-4 sm:p-6'} style={{ paddingBottom: screenOnlyMode ? 0 : 'calc(1rem + env(safe-area-inset-bottom))' }}>
           {/* key 绑定路由路径，切换页面时重新触发 panel-enter 入场动画 */}
           <div key={location.pathname} className="panel-enter">
             <Outlet />
@@ -191,7 +202,7 @@ export function Layout() {
       </div>
 
       {/* 全局 AI 助手入口 */}
-      <AIWidget />
+      {!screenOnlyMode && <AIWidget />}
     </div>
   );
 }

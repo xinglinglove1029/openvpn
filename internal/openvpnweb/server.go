@@ -1361,6 +1361,7 @@ func Run(info BuildInfo) {
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
 		ovpn.GET("/dashboard/traffic-users", RequirePermission("menu:overview"), ov.dashboardTrafficUsers)
 		ovpn.GET("/dashboard/geo-map", RequirePermission("menu:overview"), ov.dashboardGeo)
+		ovpn.GET("/dashboard/geo-map/ips", RequirePermission("menu:overview"), ov.dashboardGeoIPs)
 		ovpn.GET("/system-stats/history", RequirePermission("menu:overview"), func(c *gin.Context) {
 			history, latest := GetSystemStatsHistory()
 			c.JSON(http.StatusOK, gin.H{

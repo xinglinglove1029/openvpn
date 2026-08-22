@@ -140,12 +140,14 @@ function Panel({
   icon: Icon,
   children,
   className,
+  contentClassName,
 }: {
   title: string;
   subtitle?: string;
   icon: ComponentType<{ className?: string }>;
   children: ReactNode;
   className?: string;
+  contentClassName?: string;
 }) {
   return (
     <section
@@ -154,7 +156,7 @@ function Panel({
         className
       )}
     >
-      <div className="flex items-start justify-between gap-4 border-b border-border/50 px-4 py-3.5 sm:px-5">
+      <div className="shrink-0 flex items-start justify-between gap-4 border-b border-border/50 px-4 py-3.5 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="rounded-lg bg-primary/10 p-2 text-primary">
             <Icon className="h-4 w-4" />
@@ -165,12 +167,14 @@ function Panel({
           </div>
         </div>
       </div>
-      <div className="p-4 sm:p-5">{children}</div>
+      <div className={cn('p-4 sm:p-5', contentClassName)}>{children}</div>
     </section>
   );
 }
 
-function TrendChart({ points }: { points: TrendPoint[] }) {
+function TrendChart({ points, compact = false }: { points: TrendPoint[]; compact?: boolean }) {
+  const chartHeight = compact ? 154 : 190;
+  const emptyHeight = compact ? 174 : 210;
   const values = points.map((point) => point.online);
   const max = Math.max(1, ...values);
   const min = Math.min(0, ...values);
@@ -187,7 +191,7 @@ function TrendChart({ points }: { points: TrendPoint[] }) {
 
   if (!points.length) {
     return (
-      <div className="flex h-[210px] items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/20 text-sm text-muted-foreground">
+      <div style={{ height: emptyHeight }} className="flex items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/20 text-sm text-muted-foreground">
         等待实时连接数据…
       </div>
     );
@@ -195,7 +199,7 @@ function TrendChart({ points }: { points: TrendPoint[] }) {
 
   return (
     <div className="rounded-xl border border-border/50 bg-background/25 p-2">
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-[190px] w-full" role="img" aria-label="在线连接趋势">
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ height: chartHeight }} className="w-full" role="img" aria-label="在线连接趋势">
         <defs>
           <linearGradient id="screenTrendFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="var(--accent)" stopOpacity=".28" />
@@ -245,7 +249,7 @@ function TrendChart({ points }: { points: TrendPoint[] }) {
 function Topology({ online, state }: { online: OnlineClient[]; state: OnlineLoadState }) {
   const nodes = online.slice(0, 8);
   return (
-    <div className="relative min-h-[330px] overflow-x-auto overflow-y-hidden rounded-xl border border-border/50 bg-[radial-gradient(circle_at_center,color-mix(in_srgb,var(--accent)_12%,transparent),transparent_58%)] p-4">
+    <div className="relative min-h-[330px] h-full overflow-x-auto overflow-y-hidden rounded-xl border border-border/50 bg-[radial-gradient(circle_at_center,color-mix(in_srgb,var(--accent)_12%,transparent),transparent_58%)] p-4 xl:min-h-0">
       <div className="pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(color-mix(in_srgb,var(--accent)_12%,transparent)_1px,transparent_1px),linear-gradient(90deg,color-mix(in_srgb,var(--accent)_12%,transparent)_1px,transparent_1px)] [background-size:32px_32px]" />
       {state === 'forbidden' ? (
         <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-muted-foreground">
@@ -504,9 +508,9 @@ export default function ExecutiveDashboardPage() {
         </div>
       </header>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(220px,.72fr)_minmax(0,1.72fr)_minmax(240px,.78fr)]">
-        <aside className="space-y-4">
-          <section className="relative overflow-hidden rounded-[1.45rem] border border-primary/15 bg-card/80 p-4 shadow-lg shadow-primary/10 backdrop-blur-xl">
+      <div className="screen-dashboard-grid">
+        <aside className="screen-dashboard-metrics min-w-0">
+          <section className="relative h-full overflow-hidden rounded-[1.45rem] border border-primary/15 bg-card/80 p-4 shadow-lg shadow-primary/10 backdrop-blur-xl">
             <div className="absolute -right-9 -top-10 h-32 w-32 rounded-full bg-primary/10 blur-2xl" />
             <div className="relative">
               <div className="flex items-center justify-between gap-3">
@@ -547,8 +551,16 @@ export default function ExecutiveDashboardPage() {
               </div>
             </div>
           </section>
+        </aside>
 
-          <Panel title="用户流量排行" subtitle="最近 24 小时 · 按用户汇总" icon={ArrowDownToLine}>
+        <aside className="screen-dashboard-traffic min-w-0">
+          <Panel
+            title="用户流量排行"
+            subtitle="最近 24 小时 · 按用户汇总"
+            icon={ArrowDownToLine}
+            className="flex h-full flex-col"
+            contentClassName="min-h-0 flex-1"
+          >
             {trafficState === 'loading' ? (
               <div className="flex h-44 items-center justify-center text-sm text-muted-foreground"><RefreshCw className="mr-2 h-4 w-4 animate-spin" />正在加载流量统计…</div>
             ) : trafficState === 'error' ? (
@@ -574,8 +586,9 @@ export default function ExecutiveDashboardPage() {
           </Panel>
         </aside>
 
-        <main className="min-w-0">
+        <main className="screen-dashboard-map min-w-0">
           <OperationsMap
+            className="h-full"
             data={geo}
             source={geoSource}
             view={geoView}
@@ -584,29 +597,51 @@ export default function ExecutiveDashboardPage() {
             loading={geoState === 'loading'}
             error={geoState === 'error'}
           />
-          <div className="mt-4">
-            <Panel title="实时连接拓扑" subtitle="OpenVPN Server 与在线客户端关系 · 不代表地理位置" icon={Share2Icon}>
-              <Topology online={online} state={onlineState} />
-            </Panel>
-          </div>
         </main>
 
-        <aside className="space-y-4">
-          <Panel title="服务健康" subtitle="运行状态与管理通道" icon={Server}>
-            <div className="space-y-2.5">
+        <main className="screen-dashboard-topology min-w-0">
+          <Panel
+            title="实时连接拓扑"
+            subtitle="OpenVPN Server 与在线客户端关系 · 不代表地理位置"
+            icon={Share2Icon}
+            className="flex h-full flex-col"
+            contentClassName="min-h-0 flex-1"
+          >
+            <Topology online={online} state={onlineState} />
+          </Panel>
+        </main>
+
+        <aside className="screen-dashboard-health min-w-0">
+          <Panel
+            title="服务健康"
+            subtitle="运行状态与管理通道"
+            icon={Server}
+            className="flex h-full flex-col"
+            contentClassName="min-h-0 flex-1 p-3 sm:p-3"
+          >
+            <div className="space-y-2">
               <HealthRow icon={serviceOk ? CheckCircle2 : XCircle} label="OpenVPN management" value={status} ok={serviceOk} />
               <HealthRow icon={server?.RunDate ? CheckCircle2 : WifiOff} label="运行信息" value={server?.RunDate || '暂无信息'} ok={Boolean(server?.RunDate)} />
               <HealthRow icon={server?.Address ? CheckCircle2 : WifiOff} label="监听地址" value={server?.Address || '暂无信息'} ok={Boolean(server?.Address)} />
               <HealthRow icon={Wifi} label="WebSocket 实时通道" value={wsConnected ? '已连接' : '连接中'} ok={wsConnected} />
             </div>
-            {!serviceOk && <div className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs leading-5 text-destructive"><strong>管理通道异常：</strong>在线客户端数据可能暂不可用，请优先检查 OpenVPN 服务。</div>}
           </Panel>
+        </aside>
 
-          <Panel title="在线连接趋势" subtitle="持续采样 · 最近 18 个节点" icon={Activity}>
-            <TrendChart points={trend} />
+        <aside className="screen-dashboard-trend min-w-0">
+          <Panel title="在线连接趋势" subtitle="持续采样 · 最近 18 个节点" icon={Activity} className="flex h-full flex-col" contentClassName="min-h-0 flex-1">
+            <TrendChart points={trend} compact />
           </Panel>
+        </aside>
 
-          <Panel title="风险与运维提示" subtitle="仅展示，不提供危险操作" icon={ShieldAlert}>
+        <aside className="screen-dashboard-risks min-w-0">
+          <Panel
+            title="风险与运维提示"
+            subtitle="仅展示，不提供危险操作"
+            icon={ShieldAlert}
+            className="flex h-full flex-col"
+            contentClassName="flex min-h-0 flex-1 flex-col justify-center"
+          >
             {risks.length ? (
               <div className="space-y-2">{risks.slice(0, 3).map((risk, index) => <RiskCard key={`${risk.title}-${index}`} risk={risk} />)}</div>
             ) : <EmptyState title="当前没有待处理风险" description="未发现账号、证书、防火墙或服务异常。" compact />}
@@ -641,7 +676,7 @@ function HealthRow({
   ok: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/25 px-3 py-3">
+    <div className="flex items-center gap-2.5 rounded-xl border border-border/50 bg-background/25 px-3 py-2">
       <Icon className={cn('h-4 w-4 shrink-0', ok ? 'text-emerald-500' : 'text-destructive')} />
       <span className="min-w-0 flex-1 text-sm">{label}</span>
       <span className={cn('max-w-[50%] truncate text-right text-xs', ok ? 'text-foreground' : 'text-destructive')}>

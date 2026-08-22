@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">OpenVPN 运营大屏功能导览</title>
+  <desc id="desc">深色运营看板示意，展示核心指标、交互式地理态势、用户流量、服务健康、实时连接拓扑、风险提示与在线趋势。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#071326"/><stop offset=".5" stop-color="#0b1f3b"/><stop offset="1" stop-color="#06101e"/></linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#152d4f" stop-opacity=".96"/><stop offset="1" stop-color="#0b1930" stop-opacity=".94"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#67e8f9"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6ee7b7"/><stop offset="1" stop-color="#10b981"/></linearGradient>
+    <radialGradient id="globe"><stop stop-color="#174e82"/><stop offset=".62" stop-color="#0b3968"/><stop offset="1" stop-color="#061c3d"/></radialGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity=".35"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <path d="M0 140 C350 30 570 260 900 130 S1380 10 1600 110" fill="none" stroke="#38bdf8" stroke-opacity=".12" stroke-width="2"/>
+  <path d="M0 720 C300 610 620 800 950 690 S1360 610 1600 730" fill="none" stroke="#67e8f9" stroke-opacity=".09" stroke-width="2"/>
+  <g font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif">
+    <text x="54" y="62" fill="#f8fafc" font-size="29" font-weight="700">OpenVPN 运营大屏</text>
+    <text x="54" y="94" fill="#93c5fd" font-size="16">全屏运营模式 · 实时态势 · 权限范围内的数据可见</text>
+    <rect x="1318" y="43" width="226" height="42" rx="21" fill="#073c39" stroke="#34d399" stroke-opacity=".5"/>
+    <circle cx="1344" cy="64" r="6" fill="#34d399" filter="url(#glow)"/><text x="1361" y="70" fill="#bbf7d0" font-size="15" font-weight="600">REALTIME CONNECTED</text>
+
+    <g filter="url(#shadow)">
+      <rect x="48" y="125" width="230" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+      <rect x="294" y="125" width="230" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+      <rect x="540" y="125" width="230" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+      <rect x="786" y="125" width="230" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+      <rect x="1032" y="125" width="250" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+      <rect x="1298" y="125" width="254" height="124" rx="20" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".35"/>
+    </g>
+    <g fill="#b6c9e6" font-size="14"><text x="72" y="160">在线连接</text><text x="318" y="160">活跃用户</text><text x="564" y="160">时间段流量</text><text x="810" y="160">管理通道</text><text x="1056" y="160">待处理风险</text><text x="1322" y="160">数据来源</text></g>
+    <g fill="#f8fafc" font-size="38" font-weight="700"><text x="72" y="211">24</text><text x="318" y="211">18</text><text x="564" y="211">38.6 GB</text><text x="810" y="211">正常</text><text x="1056" y="211">2</text><text x="1322" y="211">3 类</text></g>
+    <g font-size="13"><text x="72" y="232" fill="#6ee7b7">● 实时会话</text><text x="318" y="232" fill="#93c5fd">近 24 小时</text><text x="564" y="232" fill="#93c5fd">↓ 24.1 / ↑ 14.5</text><text x="810" y="232" fill="#6ee7b7">● WebSocket</text><text x="1056" y="232" fill="#fbbf24">需关注</text><text x="1322" y="232" fill="#93c5fd">在线 / 审计 / 网站</text></g>
+
+    <g filter="url(#shadow)"><rect x="48" y="274" width="842" height="427" rx="24" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".38"/></g>
+    <text x="76" y="315" fill="#f8fafc" font-size="20" font-weight="700">地理态势中心</text>
+    <text x="76" y="341" fill="#9fb7d6" font-size="14">在线客户端来源 · 管理操作来源 · 网站目标服务</text>
+    <g font-size="14" font-weight="600"><rect x="76" y="366" width="126" height="34" rx="17" fill="#1d4ed8"/><text x="97" y="388" fill="#eff6ff">全球地球</text><rect x="214" y="366" width="126" height="34" rx="17" fill="#102846"/><text x="235" y="388" fill="#b6c9e6">中国聚焦</text><rect x="352" y="366" width="138" height="34" rx="17" fill="#102846"/><text x="371" y="388" fill="#b6c9e6">来源切换</text></g>
+    <circle cx="443" cy="547" r="133" fill="url(#globe)" stroke="#67e8f9" stroke-opacity=".7" stroke-width="2"/>
+    <ellipse cx="443" cy="547" rx="131" ry="53" fill="none" stroke="#7dd3fc" stroke-opacity=".42"/>
+    <path d="M311 547h264M443 414v266M345 469c55 29 141 29 196 0M345 625c55-29 141-29 196 0" fill="none" stroke="#7dd3fc" stroke-opacity=".30"/>
+    <path d="M361 493l38-32 44 10 15 34 43 11 18 45-44 22-37-17-20 26-48-17-23-47z" fill="#1c729e" stroke="#67e8f9" stroke-opacity=".5"/>
+    <path d="M478 604l35-8 26 20-10 26-48 2z" fill="#1c729e" stroke="#67e8f9" stroke-opacity=".5"/>
+    <g filter="url(#glow)"><circle cx="394" cy="495" r="7" fill="#fbbf24"/><circle cx="483" cy="526" r="8" fill="#34d399"/><circle cx="523" cy="615" r="7" fill="#f472b6"/></g>
+    <g fill="#e0f2fe" font-size="13"><text x="349" y="480">亚洲 · 8</text><text x="495" y="512">北美 · 12</text><text x="536" y="602">大洋洲 · 4</text></g>
+    <rect x="623" y="429" width="230" height="231" rx="18" fill="#0a1830" stroke="#29517f"/>
+    <text x="648" y="462" fill="#f8fafc" font-size="15" font-weight="700">点击区域 · 去重公网 IP</text>
+    <text x="648" y="491" fill="#9fb7d6" font-size="13">中国 · 广东 · 广州</text>
+    <g><rect x="648" y="512" width="178" height="31" rx="9" fill="#122b4a"/><text x="664" y="533" fill="#dbeafe" font-size="13">203.0.113.10</text><rect x="648" y="551" width="178" height="31" rx="9" fill="#122b4a"/><text x="664" y="572" fill="#dbeafe" font-size="13">198.51.100.8</text><rect x="648" y="590" width="178" height="31" rx="9" fill="#122b4a"/><text x="664" y="611" fill="#dbeafe" font-size="13">… 分页加载更多</text></g>
+
+    <g filter="url(#shadow)"><rect x="914" y="274" width="638" height="200" rx="24" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".38"/><rect x="914" y="496" width="304" height="205" rx="24" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".38"/><rect x="1240" y="496" width="312" height="205" rx="24" fill="url(#panel)" stroke="#60a5fa" stroke-opacity=".38"/></g>
+    <text x="942" y="315" fill="#f8fafc" font-size="20" font-weight="700">用户流量排行</text><text x="942" y="341" fill="#9fb7d6" font-size="14">最近 24 小时 · 上传 / 下载 / 总量</text>
+    <g font-size="14"><text x="942" y="382" fill="#dbeafe">01  wangchengbing</text><rect x="1102" y="369" width="337" height="15" rx="7" fill="url(#blue)"/><text x="1452" y="382" fill="#dbeafe">12.4 GB</text><text x="942" y="417" fill="#dbeafe">02  ops-team</text><rect x="1102" y="404" width="250" height="15" rx="7" fill="#22c55e"/><text x="1366" y="417" fill="#dbeafe">8.7 GB</text><text x="942" y="452" fill="#dbeafe">03  guest-01</text><rect x="1102" y="439" width="164" height="15" rx="7" fill="#a78bfa"/><text x="1280" y="452" fill="#dbeafe">5.1 GB</text></g>
+    <text x="942" y="538" fill="#f8fafc" font-size="18" font-weight="700">实时连接拓扑</text><text x="942" y="563" fill="#9fb7d6" font-size="13">连接关系不等于地理位置</text>
+    <rect x="986" y="596" width="104" height="42" rx="12" fill="#1d4ed8"/><text x="1007" y="622" fill="#eff6ff" font-size="14" font-weight="700">VPN Server</text>
+    <g stroke="#67e8f9" stroke-width="2" stroke-opacity=".65"><path d="M1090 617h70"/><path d="M1090 617l62-44"/><path d="M1090 617l62 44"/></g><g fill="#12365b" stroke="#67e8f9" stroke-opacity=".8"><circle cx="1171" cy="617" r="16"/><circle cx="1163" cy="573" r="16"/><circle cx="1163" cy="661" r="16"/></g>
+    <text x="1268" y="538" fill="#f8fafc" font-size="18" font-weight="700">服务健康</text><text x="1268" y="563" fill="#9fb7d6" font-size="13">运行状态与管理通道</text>
+    <g font-size="13"><circle cx="1272" cy="601" r="6" fill="#34d399"/><text x="1287" y="606" fill="#dbeafe">OpenVPN management</text><text x="1494" y="606" fill="#bbf7d0" text-anchor="end">正常</text><circle cx="1272" cy="632" r="6" fill="#34d399"/><text x="1287" y="637" fill="#dbeafe">WebSocket 实时通道</text><text x="1494" y="637" fill="#bbf7d0" text-anchor="end">已连接</text><circle cx="1272" cy="663" r="6" fill="#fbbf24"/><text x="1287" y="668" fill="#dbeafe">风险与运维提示</text><text x="1494" y="668" fill="#fde68a" text-anchor="end">2 项待处理</text></g>
+
+    <g filter="url(#shadow)"><rect x="48" y="726" width="1504" height="126" rx="24" fill="#0b1930" stroke="#29517f"/></g>
+    <text x="76" y="766" fill="#f8fafc" font-size="17" font-weight="700">在线连接趋势</text><text x="76" y="792" fill="#9fb7d6" font-size="13">持续采样 · 最近 18 个节点</text>
+    <path d="M294 816 C340 775 384 809 432 781 S530 814 582 754 S684 793 742 744 S846 770 902 720 S1004 761 1062 735 S1161 755 1224 702 S1354 741 1485 670" fill="none" stroke="url(#green)" stroke-width="4"/>
+    <path d="M294 816 C340 775 384 809 432 781 S530 814 582 754 S684 793 742 744 S846 770 902 720 S1004 761 1062 735 S1161 755 1224 702 S1354 741 1485 670 L1485 829 L294 829Z" fill="#34d399" fill-opacity=".10"/>
+    <text x="1484" y="793" fill="#bbf7d0" font-size="14" text-anchor="end">实时数据 + 权限控制 + 安全边界</text>
+  </g>
+</svg>

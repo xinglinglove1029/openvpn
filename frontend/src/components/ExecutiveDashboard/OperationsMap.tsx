@@ -1,7 +1,9 @@
-import { Globe2, MapPinned, Router, ShieldCheck, UsersRound } from 'lucide-react';
-import { useMemo } from 'react';
-import type { DashboardGeoPoint, DashboardGeoResponse, DashboardGeoSource } from '@/types';
+import { ChevronLeft, ChevronRight, Copy, Globe2, MapPinned, Router, ShieldCheck, UsersRound } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { api } from '@/api';
+import type { DashboardGeoIPDetail, DashboardGeoIPDetailsResponse, DashboardGeoPoint, DashboardGeoResponse, DashboardGeoSource } from '@/types';
 import { cn } from '@/lib/utils';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/ui/dialog';
 import { ChinaUsageMap } from './ChinaUsageMap';
 import { InteractiveGeoGlobe, type GeoGlobeMarker, type GeoGlobeView } from './InteractiveGeoGlobe';
 
@@ -144,6 +146,7 @@ export function OperationsMap({
   onViewChange,
   loading,
   error,
+  className,
 }: {
   data?: DashboardGeoResponse;
   source: DashboardGeoSource;
@@ -152,6 +155,7 @@ export function OperationsMap({
   onViewChange: (view: GeoGlobeView) => void;
   loading: boolean;
   error: boolean;
+  className?: string;
 }) {
   const available = data?.availableSources ?? [];
   const allPoints = (data?.points ?? []).filter((point) => point.source === source);
@@ -204,10 +208,85 @@ export function OperationsMap({
         : view === 'china'
           ? '当前来源暂无可定位的中国区域数据。'
           : '当前时间范围没有可定位的公网 IP。';
+  const [detailMarkers, setDetailMarkers] = useState<GeoGlobeMarker[]>([]);
+  const [detailPage, setDetailPage] = useState(1);
+  const [detailItems, setDetailItems] = useState<DashboardGeoIPDetail[]>([]);
+  const [detailTotal, setDetailTotal] = useState(0);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const detailOpen = detailMarkers.length > 0;
+  const detailLabel = detailMarkers.length === 1 ? detailMarkers[0].label : detailMarkers.map((marker) => marker.label).join('、');
+  const detailPageSize = 50;
+  const detailPages = Math.max(1, Math.ceil(detailTotal / detailPageSize));
+
+  const openDetail = useCallback((markers: GeoGlobeMarker[]) => {
+    if (!markers.length) return;
+    setDetailMarkers(markers);
+    setDetailPage(1);
+    setDetailError('');
+  }, []);
+  const selectGlobeMarker = useCallback((marker: GeoGlobeMarker) => openDetail([marker]), [openDetail]);
+  const selectChinaMarkers = useCallback((markers: GeoGlobeMarker[]) => openDetail(markers), [openDetail]);
+
+  useEffect(() => {
+    setDetailMarkers([]);
+  }, [source, view]);
+
+  useEffect(() => {
+    if (!detailOpen || !detailMarkers.length) return;
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError('');
+    const requestRegion = (marker: GeoGlobeMarker, page: number) => {
+      const params = new URLSearchParams({
+        source,
+        country: marker.point.country,
+        page: String(page),
+        pageSize: '100',
+      });
+      if (marker.point.province) params.set('province', marker.point.province);
+      if (marker.point.city) params.set('city', marker.point.city);
+      if (data?.start) params.set('start', String(data.start));
+      if (data?.end) params.set('end', String(data.end));
+      return api.get<DashboardGeoIPDetailsResponse>(`/ovpn/dashboard/geo-map/ips?${params.toString()}`);
+    };
+    Promise.all(detailMarkers.map((marker) => requestRegion(marker, 1)))
+      .then(async (firstPages) => {
+        const remaining = firstPages.flatMap((response, markerIndex) =>
+          Array.from({ length: Math.max(0, Math.ceil(response.total / 100) - 1) }, (_, index) => requestRegion(detailMarkers[markerIndex], index + 2))
+        );
+        return [...firstPages, ...(remaining.length ? await Promise.all(remaining) : [])];
+      })
+      .then((responses) => {
+        if (cancelled) return;
+        const unique = new Map<string, DashboardGeoIPDetail>();
+        responses.forEach((response) => response.items.forEach((item) => unique.set(item.ip, item)));
+        const allItems = [...unique.values()].sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+        setDetailItems(allItems);
+        setDetailTotal(allItems.length);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetailItems([]);
+          setDetailTotal(0);
+          setDetailError('公网 IP 明细暂时无法读取，请稍后重试。');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [data?.end, data?.start, detailMarkers, detailOpen, source]);
+
+  const pageItems = detailItems.slice((detailPage - 1) * detailPageSize, detailPage * detailPageSize);
+
+  const copyIP = useCallback((ip: string) => {
+    navigator.clipboard?.writeText(ip).catch(() => undefined);
+  }, []);
 
   return (
-    <section className="rounded-[1.4rem] border border-primary/20 bg-card/85 p-4 shadow-lg shadow-primary/10 backdrop-blur">
-      <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+    <section className={cn('flex min-h-[560px] flex-col rounded-[1.4rem] border border-primary/20 bg-card/85 p-4 shadow-lg shadow-primary/10 backdrop-blur xl:min-h-0', className)}>
+      <div className="mb-3 shrink-0 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-primary/20 to-accent/20 text-primary shadow-inner">
             <Globe2 className="h-5 w-5" />
@@ -222,7 +301,7 @@ export function OperationsMap({
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-muted/65 p-1">
+        <div className="flex w-full flex-nowrap gap-1 overflow-x-auto rounded-xl border border-border bg-muted/65 p-1 xl:w-auto xl:overflow-visible">
           {(Object.keys(SOURCE_META) as DashboardGeoSource[]).map((candidate) => (
             <button
               key={candidate}
@@ -230,7 +309,7 @@ export function OperationsMap({
               disabled={!available.includes(candidate)}
               onClick={() => onSourceChange(candidate)}
               className={cn(
-                'cursor-pointer rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40',
+                'min-w-max flex-1 cursor-pointer whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40 xl:flex-none',
                 source === candidate
                   ? 'bg-card text-foreground shadow-sm ring-1 ring-border'
                   : 'text-muted-foreground hover:bg-card/85 hover:text-foreground'
@@ -242,7 +321,7 @@ export function OperationsMap({
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-3 py-2">
+      <div className="mb-3 shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-3 py-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <MapPinned className="h-3.5 w-3.5 text-primary" />
           <span>视图范围</span>
@@ -273,16 +352,17 @@ export function OperationsMap({
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(220px,.72fr)]">
-        <div className="relative">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(220px,.72fr)]">
+        <div className="relative min-h-[260px] xl:min-h-0 [&_.china-usage-map]:h-full [&_.geo-globe-shell]:h-full">
           {view === 'china' ? (
-            <ChinaUsageMap markers={globeMarkers} emptyMessage={globeEmptyMessage} />
+            <ChinaUsageMap markers={globeMarkers} emptyMessage={globeEmptyMessage} onMarkerSelect={selectChinaMarkers} />
           ) : (
             <InteractiveGeoGlobe
               markers={globeMarkers}
               view={view}
               tone={meta.globeTone}
               emptyMessage={globeEmptyMessage}
+              onMarkerSelect={selectGlobeMarker}
             />
           )}
           {!hasGeoData && (
@@ -306,7 +386,7 @@ export function OperationsMap({
           )}
         </div>
 
-        <aside className="geo-insight-panel flex min-h-[320px] flex-col rounded-[1.35rem] border p-3">
+        <aside className="geo-insight-panel flex min-h-[260px] flex-col rounded-[1.35rem] border p-3 xl:min-h-0">
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-xl border border-emerald-500/20 bg-card/75 p-3 shadow-sm">
               <p className="text-[11px] text-muted-foreground">已定位公网 IP</p>
@@ -366,7 +446,7 @@ export function OperationsMap({
         </aside>
       </div>
 
-      <p className="mt-4 rounded-xl border border-border bg-muted/50 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+      <p className="mt-3 shrink-0 rounded-xl border border-border bg-muted/50 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
         {meta.description}{' '}
         {source === 'website'
           ? '普通 DNS 域名无法确定用户位置。'
@@ -376,6 +456,52 @@ export function OperationsMap({
           : ''}{' '}
         {data?.notes?.join(' ')}
       </p>
+
+      <Dialog open={detailOpen} onOpenChange={(open) => { if (!open) setDetailMarkers([]); }}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>公网 IP 明细 · {detailLabel}</DialogTitle>
+            <DialogDescription>
+              {sourceTitle(source)} · 已按公网 IPv4 去重，仅展示当前账号有权限查看的数据。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-xl border border-border bg-muted/45 px-3 py-2 text-sm text-muted-foreground">
+            去重公网 IP：<strong className="text-foreground">{detailLoading ? '读取中…' : detailTotal}</strong> 个
+            {source === 'online' && data?.onlineAsOf ? ` · 在线快照 ${new Date(data.onlineAsOf * 1000).toLocaleString()}` : ''}
+          </div>
+          {detailError ? <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{detailError}</p> : null}
+          <div className="max-h-[48vh] overflow-auto rounded-xl border border-border">
+            {detailLoading ? (
+              <p className="px-4 py-10 text-center text-sm text-muted-foreground">正在读取公网 IP 明细…</p>
+            ) : detailItems.length ? (
+              <ul className="divide-y divide-border">
+                {pageItems.map((item) => (
+                  <li key={item.ip} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="font-mono text-sm font-medium text-foreground">{item.ip}</p>
+                      <p className="truncate text-xs text-muted-foreground">{[item.country, item.province, item.city].filter(Boolean).join(' · ')}</p>
+                    </div>
+                    <button type="button" onClick={() => copyIP(item.ip)} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" title={`复制 ${item.ip}`} aria-label={`复制 ${item.ip}`}>
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="px-4 py-10 text-center text-sm text-muted-foreground">当前区域没有可展示的公网 IP。</p>
+            )}
+          </div>
+          {detailTotal > detailPageSize ? (
+            <div className="flex items-center justify-between text-sm text-muted-foreground">
+              <span>第 {detailPage} / {detailPages} 页</span>
+              <div className="flex gap-1">
+                <button type="button" disabled={detailPage <= 1 || detailLoading} onClick={() => setDetailPage((page) => Math.max(1, page - 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-2.5 disabled:cursor-not-allowed disabled:opacity-45"><ChevronLeft className="h-4 w-4" />上一页</button>
+                <button type="button" disabled={detailPage >= detailPages || detailLoading} onClick={() => setDetailPage((page) => Math.min(detailPages, page + 1))} className="inline-flex h-9 items-center gap-1 rounded-lg border border-border px-2.5 disabled:cursor-not-allowed disabled:opacity-45">下一页<ChevronRight className="h-4 w-4" /></button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

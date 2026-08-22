@@ -4651,3 +4651,25 @@ a[href] {
 [data-cursor="pointer"] {
   cursor: pointer !important;
 }
+
+/* Executive dashboard: a stable 4-row bento grid keeps cards aligned across all columns. */
+.screen-dashboard-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 1280px) {
+  .screen-dashboard-grid {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.72fr) minmax(240px, 0.78fr);
+    grid-template-rows: repeat(4, 280px);
+    align-items: stretch;
+  }
+
+  .screen-dashboard-metrics { grid-column: 1; grid-row: 1 / span 2; }
+  .screen-dashboard-traffic { grid-column: 1; grid-row: 3 / span 2; }
+  .screen-dashboard-map { grid-column: 2; grid-row: 1 / span 2; }
+  .screen-dashboard-topology { grid-column: 2; grid-row: 3 / span 2; }
+  .screen-dashboard-health { grid-column: 3; grid-row: 1; }
+  .screen-dashboard-trend { grid-column: 3; grid-row: 2; }
+  .screen-dashboard-risks { grid-column: 3; grid-row: 3 / span 2; }
+}

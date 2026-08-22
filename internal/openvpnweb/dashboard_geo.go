@@ -41,6 +41,30 @@ type DashboardGeoResponse struct {
 	Notes             []string            `json:"notes"`
 }
 
+// DashboardGeoIPDetail is a permission-scoped, de-duplicated public IPv4
+// record for a selected map area. It intentionally exposes no internal/VPN
+// address and is returned only through the details endpoint.
+type DashboardGeoIPDetail struct {
+	IP       string `json:"ip"`
+	Country  string `json:"country"`
+	Province string `json:"province,omitempty"`
+	City     string `json:"city,omitempty"`
+	Label    string `json:"label"`
+}
+
+type DashboardGeoIPDetailsResponse struct {
+	Source     string                 `json:"source"`
+	Country    string                 `json:"country"`
+	Province   string                 `json:"province,omitempty"`
+	City       string                 `json:"city,omitempty"`
+	Label      string                 `json:"label"`
+	Total      int                    `json:"total"`
+	Page       int                    `json:"page"`
+	PageSize   int                    `json:"pageSize"`
+	Items      []DashboardGeoIPDetail `json:"items"`
+	OnlineAsOf int64                  `json:"onlineAsOf,omitempty"`
+}
+
 type dashboardGeoRegion struct {
 	Country  string
 	Province string
@@ -395,6 +419,155 @@ func (ov *ovpn) dashboardGeoData(ctx context.Context, start, end int64, requeste
 		return result.Points[i].Label < result.Points[j].Label
 	})
 	return result
+}
+
+func dashboardGeoRegionMatches(region dashboardGeoRegion, country, province, city string) bool {
+	return (country == "" || region.Country == country) &&
+		(province == "" || region.Province == province) &&
+		(city == "" || region.City == city)
+}
+
+func dashboardGeoDetailsAdd(items map[string]DashboardGeoIPDetail, rawIP, country, province, city string) {
+	ip, region, ok := dashboardGeoIP(rawIP)
+	if !ok || !dashboardGeoRegionMatches(region, country, province, city) {
+		return
+	}
+	if _, exists := items[ip]; exists {
+		return
+	}
+	items[ip] = DashboardGeoIPDetail{IP: ip, Country: region.Country, Province: region.Province, City: region.City, Label: region.Label}
+}
+
+// dashboardGeoIPDetails only obtains input IPs from the source already scoped
+// by the authenticated user, then resolves and region-matches them server-side.
+// It never accepts an IP query from the browser, preventing arbitrary GeoIP
+// lookup or an RBAC bypass.
+func (ov *ovpn) dashboardGeoIPDetails(ctx context.Context, start, end int64, source, country, province, city string, page, pageSize int, c *gin.Context) DashboardGeoIPDetailsResponse {
+	start, end = normalizeDashboardGeoRange(start, end)
+	label := city
+	if label == "" {
+		label = province
+	}
+	if label == "" {
+		label = country
+	}
+	result := DashboardGeoIPDetailsResponse{Source: source, Country: country, Province: province, City: city, Label: label, Page: page, PageSize: pageSize, Items: make([]DashboardGeoIPDetail, 0)}
+	userIDs, skipFilter := dashboardGeoScope(c)
+	visibleUsers := dashboardGeoVisibleUsers(ctx, userIDs, skipFilter)
+	items := make(map[string]DashboardGeoIPDetail)
+
+	switch source {
+	case dashboardGeoSourceOnline:
+		result.OnlineAsOf = time.Now().Unix()
+		if ov != nil {
+			if clients, managementOK := ov.safeOnlineClients(); managementOK {
+				for _, client := range clients {
+					if dashboardGeoCanSeeOnlineClient(client, visibleUsers, skipFilter) {
+						dashboardGeoDetailsAdd(items, client.Rip, country, province, city)
+					}
+				}
+			}
+		}
+	case dashboardGeoSourceAudit:
+		if db != nil {
+			var ips []string
+			query := db.WithContext(ctx).Model(&AuditLog{}).Where("created_at >= ? AND created_at <= ?", time.Unix(start, 0), time.Unix(end, 0))
+			if !skipFilter {
+				if len(userIDs) == 0 {
+					query = query.Where("1 = 0")
+				} else {
+					query = query.Where("operator_id IN ?", userIDs)
+				}
+			}
+			if query.Distinct("ip").Pluck("ip", &ips).Error == nil {
+				for _, ip := range ips {
+					dashboardGeoDetailsAdd(items, ip, country, province, city)
+				}
+			}
+		}
+	case dashboardGeoSourceWebsite:
+		if db != nil {
+			var ips []string
+			query := db.WithContext(ctx).Model(&SuricataNetworkEvent{}).Where("observed_at >= ? AND observed_at <= ? AND destination_ip <> ''", start, end)
+			if !skipFilter {
+				if len(userIDs) == 0 {
+					query = query.Where("1 = 0")
+				} else {
+					query = query.Where("user_id IN ?", userIDs)
+				}
+			}
+			if query.Distinct("destination_ip").Pluck("destination_ip", &ips).Error == nil {
+				for _, ip := range ips {
+					dashboardGeoDetailsAdd(items, ip, country, province, city)
+				}
+			}
+		}
+	}
+
+	for _, item := range items {
+		result.Items = append(result.Items, item)
+	}
+	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].IP < result.Items[j].IP })
+	result.Total = len(result.Items)
+	startIndex := (page - 1) * pageSize
+	if startIndex >= result.Total {
+		result.Items = make([]DashboardGeoIPDetail, 0)
+	} else {
+		endIndex := startIndex + pageSize
+		if endIndex > result.Total {
+			endIndex = result.Total
+		}
+		result.Items = result.Items[startIndex:endIndex]
+	}
+	return result
+}
+
+func dashboardGeoDetailPage(value string) int {
+	page, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func dashboardGeoDetailPageSize(value string) int {
+	pageSize, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || pageSize < 1 {
+		return 50
+	}
+	if pageSize > 100 {
+		return 100
+	}
+	return pageSize
+}
+
+func (ov *ovpn) dashboardGeoIPs(c *gin.Context) {
+	source := strings.TrimSpace(strings.ToLower(c.Query("source")))
+	if source != dashboardGeoSourceOnline && source != dashboardGeoSourceAudit && source != dashboardGeoSourceWebsite {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "source 参数无效"})
+		return
+	}
+	if !dashboardGeoHasSource(c, source) {
+		c.JSON(http.StatusForbidden, gin.H{"message": "当前账号没有查看该地理来源公网 IP 明细的权限"})
+		return
+	}
+	start, err := parseDashboardGeoUnix(strings.TrimSpace(c.Query("start")))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "start 参数格式无效"})
+		return
+	}
+	end, err := parseDashboardGeoEndUnix(strings.TrimSpace(c.Query("end")))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "end 参数格式无效"})
+		return
+	}
+	country, province, city := strings.TrimSpace(c.Query("country")), strings.TrimSpace(c.Query("province")), strings.TrimSpace(c.Query("city"))
+	if country == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "country 参数不能为空"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, ov.dashboardGeoIPDetails(c.Request.Context(), start, end, source, country, province, city, dashboardGeoDetailPage(c.Query("page")), dashboardGeoDetailPageSize(c.Query("pageSize")), c))
 }
 
 func dashboardGeoSourceValid(source string) bool {

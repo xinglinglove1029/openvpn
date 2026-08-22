@@ -322,6 +322,27 @@ export interface DashboardGeoResponse {
   notes: string[];
 }
 
+export interface DashboardGeoIPDetail {
+  ip: string;
+  country: string;
+  province?: string;
+  city?: string;
+  label: string;
+}
+
+export interface DashboardGeoIPDetailsResponse {
+  source: DashboardGeoSource;
+  country: string;
+  province?: string;
+  city?: string;
+  label: string;
+  total: number;
+  page: number;
+  pageSize: number;
+  items: DashboardGeoIPDetail[];
+  onlineAsOf?: number;
+}
+
 export interface DashboardStatsPayload {
   summary: DashboardSummary;
   online: OnlineClient[];

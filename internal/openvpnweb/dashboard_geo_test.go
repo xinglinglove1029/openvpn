@@ -185,3 +185,31 @@ func TestDashboardGeoHasSourceUsesFineGrainedPermissions(t *testing.T) {
 		t.Fatal("ungranted data sources must remain unavailable")
 	}
 }
+
+func TestDashboardGeoRegionMatchesExactSelectedArea(t *testing.T) {
+	region := dashboardGeoRegion{Country: "中国", Province: "浙江省", City: "杭州市", Label: "杭州市"}
+	if !dashboardGeoRegionMatches(region, "中国", "浙江省", "杭州市") {
+		t.Fatal("exact selected area should match")
+	}
+	if dashboardGeoRegionMatches(region, "中国", "浙江省", "宁波市") {
+		t.Fatal("a different city must not appear in the selected area details")
+	}
+	if dashboardGeoRegionMatches(region, "美国", "", "") {
+		t.Fatal("a different country must not appear in the selected area details")
+	}
+}
+
+func TestDashboardGeoDetailPaginationBounds(t *testing.T) {
+	if page := dashboardGeoDetailPage("0"); page != 1 {
+		t.Fatalf("expected page 1, got %d", page)
+	}
+	if page := dashboardGeoDetailPage("3"); page != 3 {
+		t.Fatalf("expected page 3, got %d", page)
+	}
+	if size := dashboardGeoDetailPageSize("0"); size != 50 {
+		t.Fatalf("expected default page size, got %d", size)
+	}
+	if size := dashboardGeoDetailPageSize("999"); size != 100 {
+		t.Fatalf("expected capped page size, got %d", size)
+	}
+}
