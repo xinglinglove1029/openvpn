@@ -1,96 +1,114 @@
 import { Globe2, MapPinned, Router, ShieldCheck, UsersRound } from 'lucide-react';
+import { useMemo } from 'react';
 import type { DashboardGeoPoint, DashboardGeoResponse, DashboardGeoSource } from '@/types';
 import { cn } from '@/lib/utils';
+import { ChinaUsageMap } from './ChinaUsageMap';
+import { InteractiveGeoGlobe, type GeoGlobeMarker, type GeoGlobeView } from './InteractiveGeoGlobe';
 
-type MapView = 'world' | 'china';
 type MapPosition = readonly [string, number, number];
 
 const SOURCE_META: Record<
   DashboardGeoSource,
-  { label: string; short: string; icon: typeof UsersRound; description: string; tone: string }
+  {
+    label: string;
+    short: string;
+    icon: typeof UsersRound;
+    description: string;
+    tone: string;
+    globeTone: 'emerald' | 'sky' | 'violet';
+  }
 > = {
   online: {
     label: '在线客户端来源',
     short: '客户端来源',
     icon: UsersRound,
-    description: '来源 IP 归属地：仅使用 OpenVPN management 返回的客户端公网 Rip。',
-    tone: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/25',
+    description: '实时快照：仅使用 OpenVPN management 返回的客户端公网 Rip。',
+    tone: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/25 dark:text-emerald-300',
+    globeTone: 'emerald',
   },
   audit: {
     label: '管理操作来源',
     short: '管理操作',
     icon: ShieldCheck,
-    description: '来源 IP 归属地：仅使用管理后台操作审计日志记录的访问来源。',
-    tone: 'text-sky-500 bg-sky-500/10 border-sky-500/25',
+    description: '历史审计：仅使用管理后台操作审计日志记录的访问来源。',
+    tone: 'text-sky-700 bg-sky-500/10 border-sky-500/25 dark:text-sky-300',
+    globeTone: 'sky',
   },
   website: {
     label: '网站目标服务',
     short: '目标服务',
     icon: Router,
     description: '网站目标服务所在地：仅使用 Suricata 观察到的目标 IP，不代表 VPN 用户所在地。',
-    tone: 'text-violet-500 bg-violet-500/10 border-violet-500/25',
+    tone: 'text-violet-700 bg-violet-500/10 border-violet-500/25 dark:text-violet-300',
+    globeTone: 'violet',
   },
 };
 
-// These are only approximate, curated regional anchor points for the lightweight
-// SVG illustration. Regions without an anchor remain in the ranking instead of
-// being rendered at a fabricated random coordinate.
+// Curated country/province centroids are used only for visualising an already
+// aggregated region. The backend never returns raw IPs or exact coordinates.
 const WORLD_POSITIONS: MapPosition[] = [
-  ['中国香港', 75, 51],
-  ['中国台湾', 78, 52],
-  ['中国', 73, 42],
-  ['美国', 22, 39],
-  ['加拿大', 19, 24],
-  ['英国', 46, 30],
-  ['德国', 50, 33],
-  ['法国', 47, 36],
-  ['俄罗斯', 63, 25],
-  ['日本', 81, 42],
-  ['韩国', 79, 42],
-  ['新加坡', 74, 68],
-  ['印度', 67, 55],
-  ['澳大利亚', 84, 76],
-  ['巴西', 34, 68],
-  ['阿联酋', 59, 51],
+  ['中国香港', 114.17, 22.32],
+  ['中国台湾', 120.96, 23.7],
+  ['中国', 104.2, 35.86],
+  ['美国', -98.58, 39.83],
+  ['加拿大', -106.35, 56.13],
+  ['英国', -3.44, 55.38],
+  ['德国', 10.45, 51.17],
+  ['法国', 2.21, 46.23],
+  ['俄罗斯', 105.32, 61.52],
+  ['日本', 138.25, 36.2],
+  ['韩国', 127.77, 35.91],
+  ['新加坡', 103.82, 1.35],
+  ['印度', 78.96, 20.59],
+  ['澳大利亚', 133.78, -25.27],
+  ['巴西', -51.93, -14.24],
+  ['阿联酋', 53.85, 23.42],
+  ['荷兰', 5.29, 52.13],
+  ['意大利', 12.57, 41.87],
+  ['西班牙', -3.75, 40.46],
+  ['瑞典', 18.64, 60.13],
+  ['土耳其', 35.24, 38.96],
+  ['印度尼西亚', 113.92, -0.79],
 ];
+
 const CHINA_POSITIONS: MapPosition[] = [
-  ['内蒙古', 55, 25],
-  ['黑龙江', 80, 17],
-  ['北京市', 69, 29],
-  ['北京', 69, 29],
-  ['天津', 71, 33],
-  ['河北', 64, 36],
-  ['山西', 59, 37],
-  ['辽宁', 76, 28],
-  ['吉林', 79, 23],
-  ['上海市', 76, 54],
-  ['上海', 76, 54],
-  ['江苏', 73, 50],
-  ['浙江', 75, 59],
-  ['安徽', 68, 52],
-  ['福建', 70, 65],
-  ['江西', 64, 62],
-  ['山东', 70, 42],
-  ['河南', 62, 47],
-  ['湖北', 60, 55],
-  ['湖南', 57, 62],
-  ['广东', 59, 71],
-  ['广西', 50, 70],
-  ['海南', 51, 84],
-  ['重庆', 51, 57],
-  ['四川', 43, 55],
-  ['贵州', 47, 65],
-  ['云南', 39, 69],
-  ['西藏', 23, 55],
-  ['陕西', 53, 46],
-  ['甘肃', 43, 39],
-  ['青海', 34, 43],
-  ['宁夏', 49, 38],
-  ['新疆', 23, 28],
-  ['香港', 61, 75],
-  ['澳门', 59, 76],
-  ['台湾', 79, 68],
-  ['中国', 60, 50],
+  ['北京市', 116.41, 39.9],
+  ['北京', 116.41, 39.9],
+  ['天津', 117.2, 39.12],
+  ['河北', 114.5, 38.04],
+  ['山西', 112.55, 37.87],
+  ['内蒙古', 111.67, 40.82],
+  ['辽宁', 123.43, 41.81],
+  ['吉林', 125.32, 43.9],
+  ['黑龙江', 126.64, 45.76],
+  ['上海市', 121.47, 31.23],
+  ['上海', 121.47, 31.23],
+  ['江苏', 118.8, 32.06],
+  ['浙江', 120.16, 30.25],
+  ['安徽', 117.28, 31.86],
+  ['福建', 119.3, 26.08],
+  ['江西', 115.86, 28.68],
+  ['山东', 117.0, 36.67],
+  ['河南', 113.62, 34.75],
+  ['湖北', 114.3, 30.6],
+  ['湖南', 112.94, 28.23],
+  ['广东', 113.27, 23.13],
+  ['广西', 108.32, 22.82],
+  ['海南', 110.35, 20.02],
+  ['重庆', 106.55, 29.56],
+  ['四川', 104.07, 30.67],
+  ['贵州', 106.63, 26.65],
+  ['云南', 102.71, 25.04],
+  ['西藏', 91.13, 29.65],
+  ['陕西', 108.94, 34.34],
+  ['甘肃', 103.83, 36.06],
+  ['青海', 101.78, 36.62],
+  ['宁夏', 106.28, 38.47],
+  ['新疆', 87.62, 43.82],
+  ['香港', 114.17, 22.32],
+  ['澳门', 113.54, 22.2],
+  ['台湾', 121.51, 25.04],
+  ['中国', 104.2, 35.86],
 ];
 
 function coordinateForCandidates(positions: MapPosition[], candidates: string[]): [number, number] | undefined {
@@ -105,15 +123,13 @@ function coordinateForCandidates(positions: MapPosition[], candidates: string[])
   return undefined;
 }
 
-function approximatePoint(point: DashboardGeoPoint, view: MapView): [number, number] | undefined {
-  if (view === 'china')
-    return coordinateForCandidates(CHINA_POSITIONS, [
-      point.city || '',
-      point.province || '',
-      point.country,
-      point.label,
-    ]);
-  return coordinateForCandidates(WORLD_POSITIONS, [point.country, point.province || '', point.label]);
+function coordinateForPoint(point: DashboardGeoPoint, view: GeoGlobeView): [number, number] | undefined {
+  const positions = view === 'china' ? CHINA_POSITIONS : WORLD_POSITIONS;
+  const candidates =
+    view === 'china'
+      ? [point.city || '', point.province || '', point.country, point.label]
+      : [point.country, point.province || '', point.city || '', point.label];
+  return coordinateForCandidates(positions, candidates);
 }
 
 function sourceTitle(source: DashboardGeoSource) {
@@ -131,9 +147,9 @@ export function OperationsMap({
 }: {
   data?: DashboardGeoResponse;
   source: DashboardGeoSource;
-  view: MapView;
+  view: GeoGlobeView;
   onSourceChange: (source: DashboardGeoSource) => void;
-  onViewChange: (view: MapView) => void;
+  onViewChange: (view: GeoGlobeView) => void;
   loading: boolean;
   error: boolean;
 }) {
@@ -144,48 +160,80 @@ export function OperationsMap({
   );
   const pointsForView = view === 'china' ? chinaPoints : allPoints;
   const displayPoints = pointsForView.slice(0, 12);
-  const mappedPoints = displayPoints.flatMap((point) => {
-    const coordinates = approximatePoint(point, view);
-    return coordinates ? [{ point, coordinates }] : [];
-  });
-  const unmappedCount = displayPoints.length - mappedPoints.length;
   const total = pointsForView.reduce((sum, point) => sum + point.count, 0);
   const max = Math.max(...displayPoints.map((point) => point.count), 1);
   const meta = SOURCE_META[source];
   const Icon = meta.icon;
   const unknown = data?.unknown?.[source] || 0;
-  const hasChinaPoints = chinaPoints.length > 0;
-  const hasChinaDataForSource = (candidate: DashboardGeoSource) =>
-    (data?.points ?? []).some(
-      (point) =>
-        point.source === candidate && (point.country.includes('中国') || point.country.toLowerCase() === 'china')
-    );
+  // Camera presets must remain usable even when the selected data source has
+  // no points yet. This lets operators inspect the China view before data
+  // arrives, and prevents a refresh from unexpectedly changing their view.
+  const mappedMarkers = useMemo<GeoGlobeMarker[]>(
+    () =>
+      pointsForView.flatMap((point, index) => {
+        const coordinate = coordinateForPoint(point, view);
+        if (!coordinate) return [];
+        return [
+          {
+            id: `${source}:${point.country}:${point.province ?? ''}:${point.city ?? ''}:${index}`,
+            label: point.label,
+            count: point.count,
+            longitude: coordinate[0],
+            latitude: coordinate[1],
+            point,
+          },
+        ];
+      }),
+    [pointsForView, source, view]
+  );
+  const visibleMarkers = mappedMarkers.slice(0, 48);
+  const unmappedRegions = pointsForView.length - mappedMarkers.length;
+  const sourceAvailable = available.includes(source);
+  // The 3D globe is a core visual anchor for the command center, not a data
+  // response. Keep it mounted while the API is loading, unavailable, or the
+  // account lacks the selected source permission so transient backend issues
+  // never turn the central map area into an empty placeholder.
+  const hasGeoData = !loading && !error && sourceAvailable;
+  const globeMarkers = hasGeoData ? visibleMarkers : [];
+  const globeEmptyMessage = loading
+    ? '正在同步区域态势数据…'
+    : error
+      ? '区域数据暂不可用；仍可拖动、缩放并查看地球。'
+      : !sourceAvailable
+        ? `当前账号没有查看${sourceTitle(source)}明细的权限。`
+        : view === 'china'
+          ? '当前来源暂无可定位的中国区域数据。'
+          : '当前时间范围没有可定位的公网 IP。';
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card/75 p-4 shadow-sm backdrop-blur">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="flex items-center gap-2">
-            <MapPinned className="h-4 w-4 text-primary" />
-            <h2 className="font-semibold">地理态势</h2>
+    <section className="rounded-[1.4rem] border border-primary/20 bg-card/85 p-4 shadow-lg shadow-primary/10 backdrop-blur">
+      <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-primary/20 to-accent/20 text-primary shadow-inner">
+            <Globe2 className="h-5 w-5" />
+          </span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-semibold tracking-tight">地理态势中心</h2>
+              <span className="rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] font-medium text-primary">交互式 3D</span>
+            </div>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+              区域级地理聚合。拖动地球可旋转，滚轮或右上角按钮可缩放，点击发光节点可自动聚焦查看。
+            </p>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">按区域聚合的公网 IP 分布，不展示原始 IP 或精确坐标。</p>
         </div>
-        <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-xs">
+        <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-muted/65 p-1">
           {(Object.keys(SOURCE_META) as DashboardGeoSource[]).map((candidate) => (
             <button
               key={candidate}
               type="button"
               disabled={!available.includes(candidate)}
-              onClick={() => {
-                onSourceChange(candidate);
-                if (view === 'china' && !hasChinaDataForSource(candidate)) onViewChange('world');
-              }}
+              onClick={() => onSourceChange(candidate)}
               className={cn(
-                'rounded-md px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+                'cursor-pointer rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40',
                 source === candidate
-                  ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
+                  ? 'bg-card text-foreground shadow-sm ring-1 ring-border'
+                  : 'text-muted-foreground hover:bg-card/85 hover:text-foreground'
               )}
             >
               {SOURCE_META[candidate].short}
@@ -193,182 +241,132 @@ export function OperationsMap({
           ))}
         </div>
       </div>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-muted-foreground">区域视图</span>
-        <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-xs">
+
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-3 py-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <MapPinned className="h-3.5 w-3.5 text-primary" />
+          <span>视图范围</span>
+          <span className="font-medium text-foreground">{view === 'china' ? '中国区域' : '全球区域'}</span>
+        </div>
+        <div className="flex rounded-lg border border-border bg-card/75 p-0.5 text-xs">
           <button
             type="button"
             onClick={() => onViewChange('world')}
             className={cn(
-              'rounded-md px-2.5 py-1 transition-colors',
-              view === 'world'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
+              'cursor-pointer rounded-md px-2.5 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              view === 'world' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            世界
+            全球
           </button>
           <button
             type="button"
-            disabled={!hasChinaPoints}
             onClick={() => onViewChange('china')}
-            title={hasChinaPoints ? '查看中国区域聚合' : '当前来源暂无中国区域数据'}
+            title="切换到中国区域视角（暂无数据时仍可查看）"
             className={cn(
-              'rounded-md px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-45',
-              view === 'china'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
+              'cursor-pointer rounded-md px-2.5 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              view === 'china' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            中国
+            中国聚焦
           </button>
         </div>
       </div>
-      {loading ? (
-        <div className="flex h-[245px] items-center justify-center text-sm text-muted-foreground">
-          <Globe2 className="mr-2 h-5 w-5 animate-spin" />
-          正在汇总地理分布…
-        </div>
-      ) : error ? (
-        <div className="flex h-[245px] items-center justify-center text-center text-sm text-muted-foreground">
-          <div>
-            <MapPinned className="mx-auto mb-2 h-7 w-7 text-amber-500" />
-            地理分布暂不可用，其他大屏数据不受影响。
-          </div>
-        </div>
-      ) : !available.includes(source) ? (
-        <div className="flex h-[245px] items-center justify-center text-center text-sm text-muted-foreground">
-          <div>
-            <ShieldCheck className="mx-auto mb-2 h-7 w-7" />
-            当前账号没有查看{sourceTitle(source)}明细的权限。
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(190px,.75fr)]">
-          <div className="relative h-[245px] overflow-hidden rounded-xl border border-border/60 bg-[radial-gradient(circle_at_50%_38%,hsl(var(--primary)/.17),transparent_42%),linear-gradient(145deg,hsl(var(--muted)/.8),hsl(var(--background)/.35))]">
-            <div className="absolute inset-0 opacity-40 [background-image:linear-gradient(hsl(var(--border))_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border))_1px,transparent_1px)] [background-size:28px_28px]" />
-            <svg
-              className="absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] opacity-60"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              {view === 'world' ? (
-                <>
-                  <path
-                    d="M5 30l8-11 12 1 8 10-3 12-13 2-9-5zM34 19l14-5 11 4 6 10-5 8-14-1-8-7zM66 16l17 4 11 11-5 13-16 4-12-10zM36 49l10 4 4 13-8 22-9-8-4-18zM60 48l13 3 9 12-4 20-15 4-7-15zM79 69l10 2 4 9-7 6-9-6z"
-                    fill="hsl(var(--primary) / .20)"
-                    stroke="hsl(var(--primary) / .55)"
-                    strokeWidth="0.45"
-                  />
-                  <path
-                    d="M50 4v92M25 8v84M75 8v84M4 50h92M8 25h84M8 75h84"
-                    stroke="hsl(var(--border))"
-                    strokeWidth=".25"
-                    strokeDasharray="1.5 1.5"
-                  />
-                </>
-              ) : (
-                <>
-                  <path
-                    d="M15 29l13-11 16 5 10-8 14 7 14-2 6 10-8 9 5 11-9 8 1 14-15 7-14-5-14 4-10-10 2-14-10-8zM67 77l6 3-2 4-6-2zM76 66l4 1-1 4-4-1z"
-                    fill="hsl(var(--primary) / .20)"
-                    stroke="hsl(var(--primary) / .55)"
-                    strokeWidth=".6"
-                  />
-                  <path
-                    d="M22 38l56 29M30 23l32 56M18 53l68-19"
-                    stroke="hsl(var(--border))"
-                    strokeWidth=".3"
-                    strokeDasharray="1.2 2.1"
-                  />
-                </>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(220px,.72fr)]">
+        <div className="relative">
+          {view === 'china' ? (
+            <ChinaUsageMap markers={globeMarkers} emptyMessage={globeEmptyMessage} />
+          ) : (
+            <InteractiveGeoGlobe
+              markers={globeMarkers}
+              view={view}
+              tone={meta.globeTone}
+              emptyMessage={globeEmptyMessage}
+            />
+          )}
+          {!hasGeoData && (
+            <div
+              className={cn(
+                'pointer-events-none absolute inset-x-4 bottom-4 rounded-xl border px-3 py-2.5 text-center text-xs leading-5 shadow-sm backdrop-blur',
+                error
+                  ? 'border-amber-500/30 bg-amber-500/10 text-foreground'
+                  : 'border-border bg-card/90 text-muted-foreground'
               )}
-            </svg>
-            <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-primary/35 bg-background/80 px-2.5 py-1 text-[11px] font-semibold shadow-lg backdrop-blur">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
-              {view === 'china' ? '中国区域' : 'OpenVPN'}
+              role={error ? 'alert' : undefined}
+            >
+              {loading ? (
+                <span className="inline-flex items-center gap-2"><Globe2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />正在同步区域态势…</span>
+              ) : error ? (
+                <span className="inline-flex items-center gap-2"><MapPinned className="h-3.5 w-3.5" />区域数据暂不可用；地球仍可交互查看。</span>
+              ) : (
+                <span className="inline-flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5" />当前账号没有查看{sourceTitle(source)}明细的权限。</span>
+              )}
             </div>
-            {mappedPoints.map(({ point, coordinates }, index) => {
-              const size = 8 + Math.min(14, Math.round((point.count / max) * 14));
-              return (
-                <div
-                  key={`${point.country}-${point.province}-${point.city}-${index}`}
-                  className="group absolute"
-                  style={{ left: `${coordinates[0]}%`, top: `${coordinates[1]}%`, transform: 'translate(-50%, -50%)' }}
-                >
-                  <span
-                    className="absolute inset-0 animate-ping rounded-full bg-primary/35"
-                    style={{ width: size, height: size }}
-                  />
-                  <span
-                    className="relative block rounded-full border-2 border-background bg-primary shadow-[0_0_16px_hsl(var(--primary)/.8)]"
-                    style={{ width: size, height: size }}
-                  />
-                  <span className="pointer-events-none absolute left-1/2 top-full z-10 mt-1 hidden min-w-max -translate-x-1/2 rounded-md border border-border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-lg group-hover:block">
-                    {point.label} · {point.count} 个公网 IP
-                  </span>
-                </div>
-              );
-            })}
-            {!displayPoints.length && (
-              <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                <div>
-                  <Globe2 className="mx-auto mb-2 h-7 w-7 opacity-60" />
-                  {view === 'china' ? '当前来源暂无中国区域数据。' : '当前时间范围没有可定位的公网 IP。'}
-                </div>
-              </div>
-            )}
-            <div className="absolute bottom-3 left-3 rounded-lg border border-border/50 bg-background/75 px-2.5 py-1.5 text-[11px] text-muted-foreground backdrop-blur">
-              已定位 <strong className="ml-1 text-foreground">{total}</strong> 个
-              {displayPoints.length < pointsForView.length && <span> · 展示前 {displayPoints.length} 个区域</span>} ·
-              无法定位 <strong className="ml-1 text-foreground">{unknown}</strong> 个
-            </div>
-            {unmappedCount > 0 && (
-              <div className="absolute bottom-3 right-3 rounded-lg border border-amber-500/30 bg-background/80 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
-                {unmappedCount} 个区域未配置示意坐标
-              </div>
-            )}
-          </div>
-          <div className="space-y-2 overflow-hidden rounded-xl border border-border/50 bg-background/25 p-3">
-            <div className="flex items-center gap-2">
-              <span className={cn('rounded-lg p-1.5', meta.tone)}>
-                <Icon className="h-4 w-4" />
-              </span>
-              <div>
-                <p className="text-sm font-medium">区域排行</p>
-                <p className="text-[11px] text-muted-foreground">
-                  去重后的公网 IP{displayPoints.length < pointsForView.length ? '（前 12 个区域）' : ''}
-                </p>
-              </div>
-            </div>
-            <div className="max-h-[163px] space-y-2 overflow-auto pr-1">
-              {displayPoints.map((point, index) => (
-                <div key={`${point.label}-rank-${index}`}>
-                  <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                    <span className="truncate">
-                      {String(index + 1).padStart(2, '0')} · {point.label}
-                    </span>
-                    <strong className="tabular-nums">{point.count}</strong>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-primary to-violet-500"
-                      style={{ width: `${Math.max(5, (point.count / max) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            {source === 'website' && (
-              <p className="border-t border-border/50 pt-2 text-[11px] leading-5 text-muted-foreground">
-                普通 DNS 无目标 IP：{data?.websiteDomainOnly ?? 0}
-              </p>
-            )}
-          </div>
+          )}
         </div>
-      )}
-      <p className="rounded-lg border border-border/50 bg-background/25 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+
+        <aside className="geo-insight-panel flex min-h-[320px] flex-col rounded-[1.35rem] border p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl border border-emerald-500/20 bg-card/75 p-3 shadow-sm">
+              <p className="text-[11px] text-muted-foreground">已定位公网 IP</p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{hasGeoData ? total : '—'}</p>
+              <p className="mt-1 text-[10px] text-emerald-700 dark:text-emerald-300">{hasGeoData ? `${pointsForView.length} 个区域聚合` : '等待区域数据'}</p>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-card/75 p-3 shadow-sm">
+              <p className="text-[11px] text-muted-foreground">无法定位</p>
+              <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{hasGeoData ? unknown : '—'}</p>
+              <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">内网 / IPv6 / 解析失败</p>
+            </div>
+          </div>
+
+          <div className="mt-3 flex min-h-0 flex-1 flex-col rounded-xl border border-border bg-card/75 p-3">
+            <div className="flex items-center gap-2">
+              <span className={cn('rounded-lg border p-1.5', meta.tone)}>
+                <Icon className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">区域活跃排行</p>
+                <p className="text-[11px] text-muted-foreground">去重公网 IP · 前 {Math.min(displayPoints.length, 12)} 个区域</p>
+              </div>
+            </div>
+            {hasGeoData ? (
+              <div className="mt-3 max-h-[188px] space-y-2 overflow-auto pr-1">
+                {displayPoints.map((point, index) => (
+                  <div key={`${point.label}-${index}`} className="group">
+                    <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                      <span className="min-w-0 truncate font-medium text-foreground">
+                        <span className="mr-1.5 text-[10px] tabular-nums text-muted-foreground/70">{String(index + 1).padStart(2, '0')}</span>
+                        {point.label}
+                      </span>
+                      <strong className="shrink-0 tabular-nums text-foreground">{point.count}</strong>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500 ease-out"
+                        style={{ width: `${Math.max(5, (point.count / max) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                {!displayPoints.length && <p className="py-6 text-center text-xs text-muted-foreground">暂无可展示的区域排行</p>}
+              </div>
+            ) : (
+              <div className="flex flex-1 items-center justify-center px-3 text-center text-xs leading-5 text-muted-foreground">
+                {loading ? '正在获取可定位公网 IP。' : error ? '数据接口暂时异常，恢复后会自动刷新区域排行。' : '当前来源尚未授权，无法展示区域排行。'}
+              </div>
+            )}
+            {hasGeoData && (source === 'website' || unmappedRegions > 0) && (
+              <div className="mt-3 space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
+                {source === 'website' && <p>普通 DNS 无目标 IP：{data?.websiteDomainOnly ?? 0}</p>}
+                {unmappedRegions > 0 && <p>{unmappedRegions} 个区域未配置示意坐标，仍保留在总量与排行中。</p>}
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      <p className="mt-4 rounded-xl border border-border bg-muted/50 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
         {meta.description}{' '}
         {source === 'website'
           ? '普通 DNS 域名无法确定用户位置。'
@@ -378,6 +376,6 @@ export function OperationsMap({
           : ''}{' '}
         {data?.notes?.join(' ')}
       </p>
-    </div>
+    </section>
   );
 }

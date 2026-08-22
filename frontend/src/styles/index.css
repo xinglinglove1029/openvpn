@@ -111,6 +111,123 @@
   }
 }
 
+/* Geographic command center: use semantic runtime tokens rather than fixed sky/white/slate colors. */
+.geo-globe-shell {
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  background:
+    radial-gradient(circle at 52% 43%, color-mix(in srgb, var(--primary) 26%, var(--card)) 0%, transparent 37%),
+    radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--accent) 18%, transparent) 0%, transparent 42%),
+    linear-gradient(145deg, color-mix(in srgb, var(--background) 72%, var(--card)), var(--background));
+  box-shadow: 0 24px 60px -35px color-mix(in srgb, var(--primary) 72%, transparent);
+}
+
+.geo-globe-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.geo-globe-control {
+  border-color: color-mix(in srgb, var(--border) 72%, var(--primary));
+  background: color-mix(in srgb, var(--card) 84%, transparent);
+}
+
+.geo-insight-panel {
+  border-color: color-mix(in srgb, var(--border) 78%, var(--primary));
+  background:
+    linear-gradient(155deg, color-mix(in srgb, var(--card) 92%, transparent), color-mix(in srgb, var(--background) 72%, var(--card)));
+}
+
+.screen-page-ambient {
+  background:
+    radial-gradient(ellipse at 50% -10%, color-mix(in srgb, var(--primary) 15%, transparent), transparent 55%),
+    radial-gradient(circle at 8% 20%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 22%),
+    radial-gradient(circle at 92% 35%, color-mix(in srgb, var(--secondary) 10%, transparent), transparent 20%);
+}
+
+.screen-header-veil {
+  background: linear-gradient(115deg, transparent, color-mix(in srgb, var(--accent) 11%, transparent), color-mix(in srgb, var(--secondary) 10%, transparent));
+}
+
+/* China regional view: a real provincial boundary map, derived only from the bundled public GeoJSON asset. */
+.china-usage-map {
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  background:
+    radial-gradient(circle at 52% 45%, color-mix(in srgb, var(--primary) 18%, var(--card)) 0%, transparent 45%),
+    radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 38%),
+    linear-gradient(145deg, color-mix(in srgb, var(--background) 72%, var(--card)), var(--background));
+  box-shadow: 0 24px 60px -35px color-mix(in srgb, var(--primary) 72%, transparent);
+}
+
+.china-map-grid {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--primary) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 10%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.china-map-region {
+  fill: color-mix(in srgb, var(--card) 76%, var(--primary));
+  fill-opacity: 0.54;
+  stroke: color-mix(in srgb, var(--border) 70%, var(--primary));
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  transition: fill .24s ease, fill-opacity .24s ease, stroke .24s ease;
+}
+
+.china-map-region:hover,
+.china-map-region-active {
+  fill: color-mix(in srgb, var(--primary) 34%, var(--card));
+  fill-opacity: 0.88;
+  stroke: color-mix(in srgb, var(--accent) 46%, var(--primary));
+}
+
+.china-map-marker-glow {
+  fill: var(--primary);
+  opacity: .22;
+  filter: url(#china-map-marker-glow);
+  animation: china-map-pulse 2.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.china-map-marker-ring {
+  fill: color-mix(in srgb, var(--primary) 20%, transparent);
+  stroke: var(--primary);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.china-map-marker-core {
+  fill: var(--accent);
+  stroke: var(--primary-foreground);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.china-map-marker:focus-visible {
+  outline: none;
+}
+
+.china-map-marker:focus-visible .china-map-marker-ring {
+  stroke: var(--accent);
+  stroke-width: 4;
+}
+
+.china-map-control {
+  border-color: color-mix(in srgb, var(--border) 72%, var(--primary));
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+}
+
+@keyframes china-map-pulse {
+  0%, 100% { opacity: .18; }
+  50% { opacity: .48; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .china-map-marker-glow { animation: none; }
+}
+
 /* Dialog 模态框：确保内容背景不透明 */
 [data-radix-dialog-content] {
   background: var(--panel-bg);

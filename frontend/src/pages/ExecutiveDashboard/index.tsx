@@ -110,12 +110,11 @@ function StatCard({
   value: string | number;
   caption: string;
   icon: ComponentType<{ className?: string }>;
-  tone?: 'primary' | 'sky' | 'violet' | 'emerald';
+  tone?: 'primary' | 'accent' | 'emerald';
 }) {
   const tones = {
     primary: 'from-primary/18 to-primary/5 text-primary',
-    sky: 'from-sky-500/18 to-sky-500/5 text-sky-500',
-    violet: 'from-violet-500/18 to-violet-500/5 text-violet-500',
+    accent: 'from-accent/18 to-accent/5 text-accent',
     emerald: 'from-emerald-500/18 to-emerald-500/5 text-emerald-500',
   };
   return (
@@ -423,14 +422,6 @@ export default function ExecutiveDashboardPage() {
   }, [appendTrend, canViewOnline, loadSnapshot]);
 
   useEffect(() => {
-    const selectedPoints = (geo?.points ?? []).filter((point) => point.source === geoSource);
-    const hasChinaPoint = selectedPoints.some(
-      (point) => point.country.includes('中国') || point.country.toLowerCase() === 'china'
-    );
-    if (geoView === 'china' && !hasChinaPoint) setGeoView('world');
-  }, [geo, geoSource, geoView]);
-
-  useEffect(() => {
     const onFullscreen = () => setFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', onFullscreen);
     return () => document.removeEventListener('fullscreenchange', onFullscreen);
@@ -459,44 +450,49 @@ export default function ExecutiveDashboardPage() {
   const status = statusText(serviceOk, stats?.serverStatus);
 
   return (
-    <div className="min-h-full space-y-4 pb-3 sm:space-y-5">
-      <header className="relative overflow-hidden rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card/80 to-violet-500/10 p-5 shadow-sm backdrop-blur-xl sm:p-7">
-        <div className="absolute -right-16 -top-24 h-64 w-64 rounded-full bg-primary/15 blur-3xl" />
-        <div className="absolute -bottom-28 left-1/3 h-64 w-64 rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.24em] text-primary">
-              <Monitor className="h-4 w-4" /> Operations Center
+    <div className="relative min-h-full overflow-hidden pb-6">
+      <div className="screen-page-ambient pointer-events-none absolute inset-x-0 top-0 -z-10 h-[680px]" />
+
+      <header className="relative mb-4 overflow-hidden rounded-[1.7rem] border border-primary/15 bg-card/80 px-4 py-4 shadow-lg shadow-primary/10 backdrop-blur-xl sm:px-6 sm:py-5">
+        <div className="screen-header-veil pointer-events-none absolute inset-y-0 right-0 w-[38%]" />
+        <div className="relative flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/15 via-primary/10 to-accent/20 text-primary shadow-inner">
+              <Monitor className="h-5 w-5" />
             </div>
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">OpenVPN 运营大屏</h1>
-            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              实时连接、用户流量、服务健康与风险态势一屏掌握。数据范围遵循当前账号权限。
-            </p>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
+                <span>Secure Operations Command</span>
+                <span className="hidden h-1 w-1 rounded-full bg-primary/50 sm:inline-block" />
+                <span className="normal-case tracking-normal text-muted-foreground">区域级态势 · 实时数据</span>
+              </div>
+              <h1 className="mt-1 text-xl font-semibold tracking-tight text-foreground sm:text-2xl">OpenVPN 安全运营指挥中心</h1>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+                以连接、流量、服务与区域态势为主线组织信息；地图可旋转、缩放并聚焦区域节点。
+              </p>
+            </div>
           </div>
+
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={wsConnected ? 'default' : 'secondary'} className="gap-1.5 px-3 py-1.5">
-              <span
-                className={cn('h-1.5 w-1.5 rounded-full', wsConnected ? 'bg-emerald-400' : 'bg-muted-foreground')}
-              />
-              {wsConnected ? '实时连接' : '实时连接中'}
+            <Badge variant={wsConnected ? 'default' : 'secondary'} className="gap-1.5 border border-emerald-500/15 bg-emerald-500/10 px-2.5 py-1.5 text-emerald-700 dark:text-emerald-300">
+              <span className={cn('relative flex h-1.5 w-1.5 rounded-full', wsConnected ? 'bg-emerald-500' : 'bg-muted-foreground')}>
+                {wsConnected && <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400 motion-reduce:hidden" />}
+              </span>
+              {wsConnected ? '实时通道已连接' : '实时通道连接中'}
             </Badge>
             {lastUpdated && (
-              <span className="text-xs text-muted-foreground">
-                更新于{' '}
-                {new Date(lastUpdated).toLocaleTimeString('zh-CN', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })}
+              <span className="rounded-lg border border-border/50 bg-background/45 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                最近同步 {new Date(lastUpdated).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             )}
-            <Button variant="outline" size="sm" onClick={() => navigate('/overview')}>
+            <Button variant="outline" size="sm" className="bg-background/60" onClick={() => navigate('/overview')}>
               <ArrowLeft className="mr-1.5 h-4 w-4" />
               返回概览
             </Button>
             <Button
               variant="outline"
               size="sm"
+              className="bg-background/60"
               disabled={!fullscreenSupported}
               title={fullscreenSupported ? '切换浏览器全屏' : '当前浏览器环境不支持全屏'}
               onClick={() => void toggleFullscreen()}
@@ -508,58 +504,77 @@ export default function ExecutiveDashboardPage() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="在线连接"
-          value={stats?.onlineClients ?? online.length}
-          caption={serviceOk ? 'management 实时状态' : 'management 暂不可用'}
-          icon={Activity}
-          tone="primary"
-        />
-        <StatCard
-          label="账号总数"
-          value={stats?.totalUsers ?? 0}
-          caption={`${stats?.enabledUsers ?? 0} 个启用账号`}
-          icon={Users}
-          tone="sky"
-        />
-        <StatCard
-          label="24 小时总流量"
-          value={formatBytes(totalTraffic)}
-          caption={`下载占比 ${receivedPercent}%`}
-          icon={Gauge}
-          tone="violet"
-        />
-        <StatCard
-          label="今日上线"
-          value={stats?.todayConnections ?? 0}
-          caption={`${stats?.clientConfigs ?? 0} 个客户端配置`}
-          icon={Activity}
-          tone="emerald"
-        />
-      </div>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(220px,.72fr)_minmax(0,1.72fr)_minmax(240px,.78fr)]">
+        <aside className="space-y-4">
+          <section className="relative overflow-hidden rounded-[1.45rem] border border-primary/15 bg-card/80 p-4 shadow-lg shadow-primary/10 backdrop-blur-xl">
+            <div className="absolute -right-9 -top-10 h-32 w-32 rounded-full bg-primary/10 blur-2xl" />
+            <div className="relative">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium text-muted-foreground">服务运行态势</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">核心指标</p>
+                </div>
+                <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium', serviceOk ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-destructive/25 bg-destructive/10 text-destructive')}>
+                  <span className={cn('h-1.5 w-1.5 rounded-full', serviceOk ? 'bg-emerald-500' : 'bg-destructive')} />
+                  {serviceOk ? '运行正常' : '需要关注'}
+                </span>
+              </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <Panel
-          title="连接拓扑"
-          subtitle="VPN 服务与在线客户端关系（非地理位置）"
-          icon={Share2Icon}
-          className="xl:col-span-7"
-        >
-          <Topology online={online} state={onlineState} />
-        </Panel>
-        <Panel title="在线连接趋势" subtitle="dashboard:stats 实时采样" icon={Activity} className="xl:col-span-5">
-          <TrendChart points={trend} />
-        </Panel>
-      </div>
+              <div className="mt-5 rounded-2xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--primary)_11%,transparent),transparent)] p-4">
+                <p className="text-[11px] text-muted-foreground">当前在线连接</p>
+                <div className="mt-1 flex items-end justify-between gap-3">
+                  <strong className="text-4xl font-semibold tracking-tight tabular-nums text-foreground">{stats?.onlineClients ?? online.length}</strong>
+                  <span className="mb-1 text-[11px] text-emerald-700 dark:text-emerald-300">management 实时状态</span>
+                </div>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-primary/10">
+                  <div className="h-full rounded-full bg-gradient-to-r from-primary via-primary to-accent" style={{ width: `${Math.min(100, Math.max(8, ((stats?.onlineClients ?? online.length) / Math.max(1, stats?.enabledUsers ?? 1)) * 100))}%` }} />
+                </div>
+              </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <Panel
-          title="地理态势"
-          subtitle="客户端来源、管理操作与网站目标服务分层展示"
-          icon={Monitor}
-          className="xl:col-span-7"
-        >
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <StatCard label="启用账号" value={stats?.enabledUsers ?? 0} caption={`共 ${stats?.totalUsers ?? 0} 个账号`} icon={Users} tone="primary" />
+                <StatCard label="24 小时流量" value={formatBytes(totalTraffic)} caption={`下载 ${receivedPercent}%`} icon={Gauge} tone="accent" />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/5 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground">今日上线</p>
+                  <p className="mt-1 font-semibold tabular-nums text-foreground">{stats?.todayConnections ?? 0}</p>
+                </div>
+                <div className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground">客户端配置</p>
+                  <p className="mt-1 font-semibold tabular-nums text-foreground">{stats?.clientConfigs ?? 0}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <Panel title="用户流量排行" subtitle="最近 24 小时 · 按用户汇总" icon={ArrowDownToLine}>
+            {trafficState === 'loading' ? (
+              <div className="flex h-44 items-center justify-center text-sm text-muted-foreground"><RefreshCw className="mr-2 h-4 w-4 animate-spin" />正在加载流量统计…</div>
+            ) : trafficState === 'error' ? (
+              <EmptyState title="流量数据暂不可用" description="时间段流量接口返回异常。" compact />
+            ) : topUsers.length ? (
+              <div className="space-y-2.5">
+                {topUsers.slice(0, 6).map((user, index) => {
+                  const percent = user.total > 0 ? Math.round((user.total / Math.max(1, topUsers[0].total)) * 100) : 0;
+                  return (
+                    <div key={`${user.username}-${index}`} className="grid grid-cols-[20px_minmax(60px,1fr)_minmax(58px,.68fr)] items-center gap-2 text-[11px]">
+                      <span className="font-semibold tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
+                      <div className="min-w-0"><p className="truncate font-medium text-foreground">{user.username}</p><div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-gradient-to-r from-primary to-accent" style={{ width: `${Math.max(5, percent)}%` }} /></div></div>
+                      <span className="text-right font-semibold tabular-nums text-foreground">{formatBytes(user.total)}</span>
+                    </div>
+                  );
+                })}
+                <div className="grid grid-cols-2 gap-2 border-t border-border/50 pt-3">
+                  <div className="rounded-lg bg-primary/8 p-2"><p className="flex items-center gap-1 text-[10px] text-primary"><ArrowDownToLine className="h-3 w-3" />下载</p><p className="mt-1 text-xs font-semibold tabular-nums">{formatBytes(received)}</p></div>
+                  <div className="rounded-lg bg-accent/12 p-2"><p className="flex items-center gap-1 text-[10px] text-accent"><ArrowUpFromLine className="h-3 w-3" />上传</p><p className="mt-1 text-xs font-semibold tabular-nums">{formatBytes(sent)}</p></div>
+                </div>
+              </div>
+            ) : <EmptyState title="暂无时间段流量" description="等待连接历史采样数据产生" compact />}
+          </Panel>
+        </aside>
+
+        <main className="min-w-0">
           <OperationsMap
             data={geo}
             source={geoSource}
@@ -569,120 +584,45 @@ export default function ExecutiveDashboardPage() {
             loading={geoState === 'loading'}
             error={geoState === 'error'}
           />
-        </Panel>
-        <Panel title="服务健康" subtitle="运行状态与管理通道" icon={Server} className="xl:col-span-5">
-          <div className="space-y-3">
-            <HealthRow
-              icon={serviceOk ? CheckCircle2 : XCircle}
-              label="OpenVPN management"
-              value={status}
-              ok={serviceOk}
-            />
-            <HealthRow
-              icon={server?.RunDate ? CheckCircle2 : WifiOff}
-              label="运行信息"
-              value={server?.RunDate || '暂无信息'}
-              ok={Boolean(server?.RunDate)}
-            />
-            <HealthRow
-              icon={server?.Address ? CheckCircle2 : WifiOff}
-              label="监听地址"
-              value={server?.Address || '暂无信息'}
-              ok={Boolean(server?.Address)}
-            />
-            <HealthRow
-              icon={Wifi}
-              label="WebSocket 实时通道"
-              value={wsConnected ? '已连接' : '连接中'}
-              ok={wsConnected}
-            />
-            {!serviceOk && (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs leading-5 text-destructive">
-                <strong>管理通道异常：</strong>在线客户端可能暂时无法读取，账号统计和页面布局仍可正常展示。
-              </div>
-            )}
+          <div className="mt-4">
+            <Panel title="实时连接拓扑" subtitle="OpenVPN Server 与在线客户端关系 · 不代表地理位置" icon={Share2Icon}>
+              <Topology online={online} state={onlineState} />
+            </Panel>
           </div>
-        </Panel>
+        </main>
+
+        <aside className="space-y-4">
+          <Panel title="服务健康" subtitle="运行状态与管理通道" icon={Server}>
+            <div className="space-y-2.5">
+              <HealthRow icon={serviceOk ? CheckCircle2 : XCircle} label="OpenVPN management" value={status} ok={serviceOk} />
+              <HealthRow icon={server?.RunDate ? CheckCircle2 : WifiOff} label="运行信息" value={server?.RunDate || '暂无信息'} ok={Boolean(server?.RunDate)} />
+              <HealthRow icon={server?.Address ? CheckCircle2 : WifiOff} label="监听地址" value={server?.Address || '暂无信息'} ok={Boolean(server?.Address)} />
+              <HealthRow icon={Wifi} label="WebSocket 实时通道" value={wsConnected ? '已连接' : '连接中'} ok={wsConnected} />
+            </div>
+            {!serviceOk && <div className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs leading-5 text-destructive"><strong>管理通道异常：</strong>在线客户端数据可能暂不可用，请优先检查 OpenVPN 服务。</div>}
+          </Panel>
+
+          <Panel title="在线连接趋势" subtitle="持续采样 · 最近 18 个节点" icon={Activity}>
+            <TrendChart points={trend} />
+          </Panel>
+
+          <Panel title="风险与运维提示" subtitle="仅展示，不提供危险操作" icon={ShieldAlert}>
+            {risks.length ? (
+              <div className="space-y-2">{risks.slice(0, 3).map((risk, index) => <RiskCard key={`${risk.title}-${index}`} risk={risk} />)}</div>
+            ) : <EmptyState title="当前没有待处理风险" description="未发现账号、证书、防火墙或服务异常。" compact />}
+          </Panel>
+        </aside>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <Panel
-          title="用户流量排行"
-          subtitle="最近 24 小时，按用户汇总"
-          icon={ArrowDownToLine}
-          className="xl:col-span-7"
-        >
-          {trafficState === 'loading' ? (
-            <div className="flex h-60 items-center justify-center text-sm text-muted-foreground">
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              正在加载流量统计…
-            </div>
-          ) : trafficState === 'error' ? (
-            <EmptyState
-              title="流量数据暂不可用"
-              description="时间段流量接口返回异常，已避免使用在线会话累计值冒充统计结果。"
-            />
-          ) : topUsers.length ? (
-            <div className="space-y-3">
-              {topUsers.map((user, index) => {
-                const percent = user.total > 0 ? Math.round((user.total / Math.max(1, topUsers[0].total)) * 100) : 0;
-                return (
-                  <div
-                    key={`${user.username}-${index}`}
-                    className="grid grid-cols-[24px_minmax(90px,1fr)_minmax(100px,1.8fr)_auto] items-center gap-2 text-xs sm:gap-3"
-                  >
-                    <span className="text-center font-semibold text-muted-foreground">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="truncate font-medium">{user.username}</span>
-                    <div className="h-2 overflow-hidden rounded-full bg-muted/70">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-violet-500 transition-all"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </div>
-                    <span className="text-right font-semibold tabular-nums">{formatBytes(user.total)}</span>
-                  </div>
-                );
-              })}
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="rounded-xl bg-sky-500/10 p-3">
-                  <div className="flex items-center gap-1.5 text-xs text-sky-500">
-                    <ArrowDownToLine className="h-3.5 w-3.5" />
-                    下载
-                  </div>
-                  <p className="mt-1 text-lg font-semibold tabular-nums">{formatBytes(received)}</p>
-                </div>
-                <div className="rounded-xl bg-violet-500/10 p-3">
-                  <div className="flex items-center gap-1.5 text-xs text-violet-500">
-                    <ArrowUpFromLine className="h-3.5 w-3.5" />
-                    上传
-                  </div>
-                  <p className="mt-1 text-lg font-semibold tabular-nums">{formatBytes(sent)}</p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <EmptyState title="暂无时间段流量" description="等待连接历史采样数据产生" />
-          )}
-        </Panel>
-      </div>
-
-      <Panel title="风险与运维提示" subtitle="沿用概览页风险计算，不提供危险操作" icon={ShieldAlert}>
-        {risks.length ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {risks.map((risk, index) => (
-              <RiskCard key={`${risk.title}-${index}`} risk={risk} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="当前没有待处理风险" description="系统未发现账号、证书、防火墙或服务状态异常。" compact />
-        )}
-      </Panel>
+      <section className="mt-4 grid gap-3 rounded-[1.45rem] border border-border/60 bg-card/70 p-3 shadow-sm backdrop-blur-xl sm:grid-cols-3 sm:p-4">
+        <div className="flex items-center gap-3 rounded-xl border border-primary/10 bg-primary/5 px-3 py-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary"><Activity className="h-4 w-4" /></span><div><p className="text-[11px] text-muted-foreground">连接数据</p><p className="mt-0.5 text-sm font-semibold">{onlineState === 'forbidden' ? '已按权限隐藏明细' : `${online.length} 个实时会话`}</p></div></div>
+        <div className="flex items-center gap-3 rounded-xl border border-primary/10 bg-primary/5 px-3 py-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary"><ArrowDownToLine className="h-4 w-4" /></span><div><p className="text-[11px] text-muted-foreground">时间段流量</p><p className="mt-0.5 text-sm font-semibold tabular-nums">{trafficTotals.activeUsers} 位活跃用户 · {formatBytes(totalTraffic)}</p></div></div>
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-500/10 bg-emerald-500/5 px-3 py-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"><ShieldAlert className="h-4 w-4" /></span><div><p className="text-[11px] text-muted-foreground">安全态势</p><p className="mt-0.5 text-sm font-semibold">{risks.length ? `${risks.length} 项待处理提醒` : '当前未发现待处理风险'}</p></div></div>
+      </section>
 
       {(summaryState === 'error' || (summaryState === 'ready' && !summary)) && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-          概览统计暂时不可用，大屏仍保留可用的实时连接和流量数据。
+        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+          概览统计暂时不可用；大屏仍保留当前可用的实时连接、流量与地理态势数据。
         </div>
       )}
     </div>
@@ -722,14 +662,14 @@ function RiskCard({ risk }: { risk: DashboardSummary['risks'][number] }) {
           ? 'border-destructive/30 bg-destructive/10'
           : warning
             ? 'border-amber-500/30 bg-amber-500/10'
-            : 'border-sky-500/30 bg-sky-500/10'
+            : 'border-primary/30 bg-primary/10'
       )}
     >
       <div className="flex items-start gap-2">
         <AlertTriangle
           className={cn(
             'mt-0.5 h-4 w-4 shrink-0',
-            danger ? 'text-destructive' : warning ? 'text-amber-500' : 'text-sky-500'
+            danger ? 'text-destructive' : warning ? 'text-amber-500' : 'text-primary'
           )}
         />
         <div className="min-w-0">

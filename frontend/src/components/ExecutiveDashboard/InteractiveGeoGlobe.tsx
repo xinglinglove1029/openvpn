@@ -1,0 +1,657 @@
+import { Focus, Minus, MousePointer2, Pause, Play, Plus, RotateCcw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { DashboardGeoPoint } from '@/types';
+import { cn } from '@/lib/utils';
+import { useTheme, type ThemeKey } from '@/store/theme';
+
+export type GeoGlobeView = 'world' | 'china';
+
+export type GeoGlobeMarker = {
+  id: string;
+  label: string;
+  count: number;
+  longitude: number;
+  latitude: number;
+  point: DashboardGeoPoint;
+};
+
+type GlobeCommand = 'zoom-in' | 'zoom-out' | 'reset';
+
+type InteractiveGeoGlobeProps = {
+  markers: GeoGlobeMarker[];
+  view: GeoGlobeView;
+  tone?: 'emerald' | 'sky' | 'violet';
+  className?: string;
+  emptyMessage?: string;
+};
+
+const TONE_COLORS = {
+  emerald: '#20c997',
+  sky: '#2096f3',
+  violet: '#8067ff',
+};
+
+// Source tones distinguish the kind of data being displayed; the sphere itself
+// follows the selected console theme so it never remains blue in aurora,
+// emerald, amber or daylight mode.
+const THEME_GLOBE_COLORS: Record<ThemeKey, { surface: string; land: string; orbit: string; stars: string; light: string }> = {
+  midnight: { surface: '#173b78', land: '#dbeafe', orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
+  aurora: { surface: '#4b236d', land: '#f5d0fe', orbit: '#c4b5fd', stars: '#e9d5ff', light: '#f5d0fe' },
+  emerald: { surface: '#0f5944', land: '#bbf7d0', orbit: '#86efac', stars: '#d1fae5', light: '#d1fae5' },
+  daylight: { surface: '#1d4ed8', land: '#dbeafe', orbit: '#60a5fa', stars: '#bfdbfe', light: '#dbeafe' },
+  'amber-glass': { surface: '#6b3d10', land: '#fde68a', orbit: '#fcd34d', stars: '#fef3c7', light: '#fde68a' },
+  'deep-blue': { surface: '#1e3a8a', land: '#dbeafe', orbit: '#93c5fd', stars: '#bfdbfe', light: '#dbeafe' },
+};
+
+type CountryLabel = { name: string; longitude: number; latitude: number };
+
+// Country labels are intentionally limited to large and commonly recognised
+// countries/regions. Showing every sovereign state at this globe size would
+// overlap heavily and make the geographic view harder to read.
+const WORLD_COUNTRY_LABELS: CountryLabel[] = [
+  { name: '加拿大', longitude: -106.35, latitude: 56.13 },
+  { name: '美国', longitude: -98.58, latitude: 39.83 },
+  { name: '墨西哥', longitude: -102.55, latitude: 23.63 },
+  { name: '巴西', longitude: -51.93, latitude: -14.24 },
+  { name: '阿根廷', longitude: -63.62, latitude: -38.42 },
+  { name: '英国', longitude: -3.44, latitude: 55.38 },
+  { name: '法国', longitude: 2.21, latitude: 46.23 },
+  { name: '德国', longitude: 10.45, latitude: 51.17 },
+  { name: '西班牙', longitude: -3.75, latitude: 40.46 },
+  { name: '意大利', longitude: 12.57, latitude: 41.87 },
+  { name: '俄罗斯', longitude: 105.32, latitude: 61.52 },
+  { name: '土耳其', longitude: 35.24, latitude: 38.96 },
+  { name: '埃及', longitude: 30.8, latitude: 26.82 },
+  { name: '南非', longitude: 22.94, latitude: -30.56 },
+  { name: '沙特', longitude: 45.08, latitude: 23.89 },
+  { name: '印度', longitude: 78.96, latitude: 20.59 },
+  { name: '中国', longitude: 104.2, latitude: 35.86 },
+  { name: '日本', longitude: 138.25, latitude: 36.2 },
+  { name: '韩国', longitude: 127.77, latitude: 36.5 },
+  { name: '印度尼西亚', longitude: 113.92, latitude: -0.79 },
+  { name: '澳大利亚', longitude: 133.78, latitude: -25.27 },
+];
+
+function globeVector(THREE: typeof import('three'), longitude: number, latitude: number, radius: number) {
+  const lng = (longitude * Math.PI) / 180;
+  const lat = (latitude * Math.PI) / 180;
+  return new THREE.Vector3(
+    radius * Math.cos(lat) * Math.sin(lng),
+    radius * Math.sin(lat),
+    radius * Math.cos(lat) * Math.cos(lng)
+  );
+}
+
+function createCountryLabelSprite(THREE: typeof import('three'), label: string, color: string) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context is unavailable for country labels.');
+
+  const fontSize = 34;
+  context.font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  const paddingX = 18;
+  const paddingY = 10;
+  const textWidth = Math.ceil(context.measureText(label).width);
+  canvas.width = textWidth + paddingX * 2;
+  canvas.height = fontSize + paddingY * 2;
+
+  context.font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineJoin = 'round';
+  context.shadowColor = 'rgba(2, 6, 23, 0.88)';
+  context.shadowBlur = 11;
+  context.lineWidth = 7;
+  context.strokeStyle = 'rgba(2, 6, 23, 0.72)';
+  context.strokeText(label, canvas.width / 2, canvas.height / 2 + 1);
+  context.shadowBlur = 0;
+  context.fillStyle = color;
+  context.fillText(label, canvas.width / 2, canvas.height / 2 + 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false, opacity: 0.85 });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set((canvas.width / canvas.height) * 0.27, 0.27, 1);
+  sprite.renderOrder = 5;
+  return { sprite, texture };
+}
+
+// A restrained dot field gives the sphere a geographic silhouette without
+// requesting map tiles or sending audit data to a third party.
+function isApproximateLand(latitude: number, longitude: number) {
+  const ellipse = (lng: number, lat: number, centerLng: number, centerLat: number, width: number, height: number) =>
+    ((lng - centerLng) / width) ** 2 + ((lat - centerLat) / height) ** 2 < 1;
+  return [
+    [-104, 48, 58, 28],
+    [-76, 5, 24, 40],
+    [15, 49, 30, 26],
+    [25, 5, 30, 38],
+    [87, 48, 90, 29],
+    [135, -25, 28, 18],
+    [48, 24, 24, 15],
+    [-40, 72, 18, 12],
+  ].some(([lng, lat, width, height]) => ellipse(longitude, latitude, lng, lat, width, height));
+}
+
+export function InteractiveGeoGlobe({
+  markers,
+  view,
+  tone = 'sky',
+  className,
+  emptyMessage = '当前范围没有可定位的区域数据。',
+}: InteractiveGeoGlobeProps) {
+  const { theme } = useTheme();
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const controlsRef = useRef<((command: GlobeCommand) => void) | null>(null);
+  const motionPausedRef = useRef(false);
+  const [motionPaused, setMotionPaused] = useState(false);
+  const [selected, setSelected] = useState<GeoGlobeMarker | null>(null);
+  const [renderError, setRenderError] = useState(false);
+  const markerSignature = useMemo(
+    () => markers.map((marker) => `${marker.id}:${marker.count}:${marker.longitude}:${marker.latitude}`).join('|'),
+    [markers]
+  );
+
+  useEffect(() => {
+    setSelected(null);
+  }, [markerSignature, view]);
+
+  useEffect(() => {
+    motionPausedRef.current = motionPaused;
+  }, [motionPaused]);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    setRenderError(false);
+
+    import('three')
+      .then((THREE) => {
+        if (disposed || mountRef.current !== mount) return;
+
+        try {
+          const scene = new THREE.Scene();
+          const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+          const defaultZoom = view === 'china' ? 4.25 : 4.7;
+          camera.position.set(0, 0.05, defaultZoom);
+
+          const renderer = new THREE.WebGLRenderer({
+            alpha: true,
+            antialias: true,
+            powerPreference: 'high-performance',
+          });
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          renderer.outputColorSpace = THREE.SRGBColorSpace;
+          renderer.setClearColor(0x000000, 0);
+          mount.appendChild(renderer.domElement);
+
+          const palette = THEME_GLOBE_COLORS[theme];
+          const accent = new THREE.Color(TONE_COLORS[tone]);
+          const accentLight = accent.clone().lerp(new THREE.Color(palette.orbit), 0.5);
+          const globe = new THREE.Group();
+          scene.add(globe);
+
+          const surface = new THREE.Mesh(
+            new THREE.SphereGeometry(1.42, 96, 96),
+            new THREE.MeshPhysicalMaterial({
+              color: palette.surface,
+              roughness: 0.44,
+              metalness: 0.08,
+              transmission: 0.13,
+              thickness: 0.55,
+              transparent: true,
+              opacity: 0.88,
+              clearcoat: 0.55,
+              clearcoatRoughness: 0.24,
+            })
+          );
+          globe.add(surface);
+
+          const grid = new THREE.Mesh(
+            new THREE.SphereGeometry(1.435, 38, 24),
+            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.24, wireframe: true })
+          );
+          globe.add(grid);
+
+          const landPositions: number[] = [];
+          for (let latitude = -56; latitude <= 78; latitude += 3.25) {
+            for (let longitude = -178; longitude <= 178; longitude += 3.25) {
+              if (!isApproximateLand(latitude, longitude)) continue;
+              const point = globeVector(THREE, longitude + (latitude % 2 ? 1.1 : 0), latitude, 1.458);
+              landPositions.push(point.x, point.y, point.z);
+            }
+          }
+          const landGeometry = new THREE.BufferGeometry();
+          landGeometry.setAttribute('position', new THREE.Float32BufferAttribute(landPositions, 3));
+          const land = new THREE.Points(
+            landGeometry,
+            new THREE.PointsMaterial({
+              color: palette.land,
+              size: 0.026,
+              transparent: true,
+              opacity: 0.82,
+              depthWrite: false,
+            })
+          );
+          globe.add(land);
+
+          const atmosphere = new THREE.Mesh(
+            new THREE.SphereGeometry(1.52, 72, 72),
+            new THREE.MeshBasicMaterial({
+              color: accent,
+              transparent: true,
+              opacity: 0.13,
+              blending: THREE.AdditiveBlending,
+            })
+          );
+          globe.add(atmosphere);
+
+          const orbitGroup = new THREE.Group();
+          const orbitOne = new THREE.Mesh(
+            new THREE.TorusGeometry(1.92, 0.008, 10, 180),
+            new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.45 })
+          );
+          orbitOne.rotation.x = Math.PI / 2.25;
+          orbitGroup.add(orbitOne);
+          const orbitTwo = new THREE.Mesh(
+            new THREE.TorusGeometry(2.26, 0.006, 10, 180),
+            new THREE.MeshBasicMaterial({ color: palette.orbit, transparent: true, opacity: 0.22 })
+          );
+          orbitTwo.rotation.x = Math.PI / 2.8;
+          orbitTwo.rotation.z = 0.55;
+          orbitGroup.add(orbitTwo);
+          scene.add(orbitGroup);
+
+          const stars = new Float32Array(180 * 3);
+          for (let index = 0; index < 180; index += 1) {
+            const radius = 2.6 + Math.random() * 1.15;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const theta = Math.random() * Math.PI * 2;
+            stars[index * 3] = radius * Math.sin(phi) * Math.cos(theta);
+            stars[index * 3 + 1] = radius * Math.cos(phi);
+            stars[index * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
+          }
+          const starGeometry = new THREE.BufferGeometry();
+          starGeometry.setAttribute('position', new THREE.BufferAttribute(stars, 3));
+          const starField = new THREE.Points(
+            starGeometry,
+            new THREE.PointsMaterial({
+              color: palette.stars,
+              size: 0.018,
+              transparent: true,
+              opacity: 0.62,
+              depthWrite: false,
+            })
+          );
+          scene.add(starField);
+
+          const countryLabelSprites: import('three').Sprite[] = [];
+          const countryLabelTextures: import('three').Texture[] = [];
+          if (view === 'world') {
+            WORLD_COUNTRY_LABELS.forEach(({ name, longitude, latitude }) => {
+              const { sprite, texture } = createCountryLabelSprite(THREE, name, palette.land);
+              sprite.position.copy(globeVector(THREE, longitude, latitude, 1.57));
+              globe.add(sprite);
+              countryLabelSprites.push(sprite);
+              countryLabelTextures.push(texture);
+            });
+          }
+          const globeWorldPosition = new THREE.Vector3();
+          const labelWorldPosition = new THREE.Vector3();
+          const labelNormal = new THREE.Vector3();
+          const cameraDirection = new THREE.Vector3();
+
+          scene.add(new THREE.AmbientLight(palette.light, 1.15));
+          const keyLight = new THREE.PointLight('#ffffff', 3.8, 10);
+          keyLight.position.set(-2.8, 2.8, 4.3);
+          scene.add(keyLight);
+          const rimLight = new THREE.PointLight(accent, 3.3, 8);
+          rimLight.position.set(2.8, -1.4, 2.6);
+          scene.add(rimLight);
+
+          const markerRoots: Array<{
+            root: import('three').Group;
+            marker: GeoGlobeMarker;
+            halo: import('three').Mesh;
+          }> = [];
+          const clickTargets: import('three').Object3D[] = [];
+          const maxCount = Math.max(...markers.map((marker) => marker.count), 1);
+
+          markers.forEach((marker) => {
+            const size = 0.052 + Math.min(0.07, (marker.count / maxCount) * 0.07);
+            const root = new THREE.Group();
+            const anchor = globeVector(THREE, marker.longitude, marker.latitude, 1.472);
+            const outward = anchor.clone().normalize();
+            root.position.copy(anchor);
+            root.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), outward);
+
+            const column = new THREE.Line(
+              new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, -0.008),
+                new THREE.Vector3(0, 0, 0.15 + size),
+              ]),
+              new THREE.LineBasicMaterial({ color: accent, transparent: true, opacity: 0.76 })
+            );
+            const halo = new THREE.Mesh(
+              new THREE.RingGeometry(size * 0.95, size * 1.42, 28),
+              new THREE.MeshBasicMaterial({
+                color: accent,
+                transparent: true,
+                opacity: 0.34,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+              })
+            );
+            halo.position.z = 0.012;
+            const core = new THREE.Mesh(
+              new THREE.SphereGeometry(size * 0.55, 18, 18),
+              new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.98 })
+            );
+            core.position.z = 0.15 + size;
+            const beacon = new THREE.Mesh(
+              new THREE.SphereGeometry(size * 0.24, 16, 16),
+              new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.98 })
+            );
+            beacon.position.z = 0.15 + size;
+            const hitArea = new THREE.Mesh(
+              new THREE.SphereGeometry(Math.max(0.09, size * 1.3), 12, 12),
+              new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+            );
+            hitArea.position.z = 0.15 + size;
+            hitArea.userData.marker = marker;
+            root.add(column, halo, core, beacon, hitArea);
+            globe.add(root);
+            clickTargets.push(hitArea);
+            markerRoots.push({ root, marker, halo });
+          });
+
+          const raycaster = new THREE.Raycaster();
+          const pointer = new THREE.Vector2();
+          let animationFrame = 0;
+          let dragging = false;
+          let pointerStart = { x: 0, y: 0 };
+          let lastPointer = { x: 0, y: 0 };
+          let targetX = view === 'china' ? 0.11 : 0.04;
+          let targetY = view === 'china' ? (-104 * Math.PI) / 180 : -0.55;
+          let currentZoom = defaultZoom;
+          let targetZoom = defaultZoom;
+          let pauseUntil = performance.now() + 1350;
+          let selectedId = '';
+          const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+          const focusMarker = (marker: GeoGlobeMarker) => {
+            targetY = (-marker.longitude * Math.PI) / 180;
+            targetX = Math.max(-0.42, Math.min(0.42, ((marker.latitude * Math.PI) / 180) * 0.34));
+            targetZoom = view === 'china' ? 3.72 : 3.92;
+            selectedId = marker.id;
+            pauseUntil = performance.now() + 4000;
+            setSelected(marker);
+          };
+
+          const reset = () => {
+            targetX = view === 'china' ? 0.11 : 0.04;
+            targetY = view === 'china' ? (-104 * Math.PI) / 180 : -0.55;
+            targetZoom = defaultZoom;
+            selectedId = '';
+            setSelected(null);
+            pauseUntil = performance.now() + 800;
+          };
+
+          controlsRef.current = (command) => {
+            if (command === 'zoom-in') targetZoom = Math.max(3.05, targetZoom - 0.42);
+            if (command === 'zoom-out') targetZoom = Math.min(6.3, targetZoom + 0.42);
+            if (command === 'reset') reset();
+            pauseUntil = performance.now() + 1600;
+          };
+
+          const resize = () => {
+            const width = mount.clientWidth || 420;
+            const height = mount.clientHeight || 330;
+            renderer.setSize(width, height, false);
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+          };
+
+          const setRayPointer = (event: PointerEvent) => {
+            const rect = mount.getBoundingClientRect();
+            pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+          };
+
+          const handlePointerDown = (event: PointerEvent) => {
+            dragging = true;
+            pointerStart = { x: event.clientX, y: event.clientY };
+            lastPointer = { ...pointerStart };
+            pauseUntil = performance.now() + 2600;
+            mount.setPointerCapture?.(event.pointerId);
+          };
+          const handlePointerMove = (event: PointerEvent) => {
+            if (!dragging) return;
+            const dx = event.clientX - lastPointer.x;
+            const dy = event.clientY - lastPointer.y;
+            targetY += dx * 0.009;
+            targetX = Math.max(-0.56, Math.min(0.56, targetX + dy * 0.006));
+            lastPointer = { x: event.clientX, y: event.clientY };
+            pauseUntil = performance.now() + 2600;
+          };
+          const handlePointerUp = (event: PointerEvent) => {
+            const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+            dragging = false;
+            mount.releasePointerCapture?.(event.pointerId);
+            if (moved > 7) return;
+            setRayPointer(event);
+            raycaster.setFromCamera(pointer, camera);
+            const match = raycaster.intersectObjects(clickTargets, false)[0];
+            const marker = match?.object.userData.marker as GeoGlobeMarker | undefined;
+            if (marker) focusMarker(marker);
+          };
+          const handleWheel = (event: WheelEvent) => {
+            event.preventDefault();
+            targetZoom = Math.max(3.05, Math.min(6.3, targetZoom + event.deltaY * 0.004));
+            pauseUntil = performance.now() + 1800;
+          };
+          const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'ArrowLeft') targetY -= 0.18;
+            else if (event.key === 'ArrowRight') targetY += 0.18;
+            else if (event.key === 'ArrowUp' || event.key === '+') targetZoom = Math.max(3.05, targetZoom - 0.28);
+            else if (event.key === 'ArrowDown' || event.key === '-') targetZoom = Math.min(6.3, targetZoom + 0.28);
+            else if (event.key === 'Home') reset();
+            else return;
+            event.preventDefault();
+            pauseUntil = performance.now() + 1600;
+          };
+
+          const observer = new ResizeObserver(resize);
+          observer.observe(mount);
+          mount.addEventListener('pointerdown', handlePointerDown);
+          mount.addEventListener('pointermove', handlePointerMove);
+          mount.addEventListener('pointerup', handlePointerUp);
+          mount.addEventListener('pointercancel', handlePointerUp);
+          mount.addEventListener('wheel', handleWheel, { passive: false });
+          mount.addEventListener('keydown', handleKeyDown);
+          resize();
+
+          const animate = () => {
+            animationFrame = window.requestAnimationFrame(animate);
+            const now = performance.now();
+            const elapsed = now * 0.001;
+            if (!dragging && !motionPausedRef.current && !reducedMotion && now > pauseUntil) targetY += 0.0019;
+            globe.rotation.x += (targetX - globe.rotation.x) * 0.08;
+            globe.rotation.y += (targetY - globe.rotation.y) * 0.08;
+            currentZoom += (targetZoom - currentZoom) * 0.1;
+            camera.position.z = currentZoom;
+            camera.lookAt(0, 0, 0);
+            orbitGroup.rotation.z = elapsed * 0.12;
+            orbitGroup.rotation.y = elapsed * 0.05;
+            atmosphere.scale.setScalar(1 + Math.sin(elapsed * 1.4) * 0.006);
+            starField.rotation.y = -elapsed * 0.018;
+            globe.getWorldPosition(globeWorldPosition);
+            countryLabelSprites.forEach((sprite) => {
+              sprite.getWorldPosition(labelWorldPosition);
+              const facing = labelNormal
+                .copy(labelWorldPosition)
+                .sub(globeWorldPosition)
+                .normalize()
+                .dot(cameraDirection.copy(camera.position).sub(labelWorldPosition).normalize());
+              sprite.visible = facing > 0.11;
+              if (sprite.visible) {
+                (sprite.material as import('three').SpriteMaterial).opacity = Math.min(0.94, 0.34 + facing * 0.7);
+              }
+            });
+            markerRoots.forEach(({ marker, halo }) => {
+              const pulse = 1 + Math.sin(elapsed * 2.6 + marker.count) * 0.16;
+              halo.scale.setScalar(marker.id === selectedId ? pulse * 1.42 : pulse);
+              (halo.material as import('three').MeshBasicMaterial).opacity = marker.id === selectedId ? 0.7 : 0.34;
+            });
+            renderer.render(scene, camera);
+          };
+          animate();
+
+          cleanup = () => {
+            window.cancelAnimationFrame(animationFrame);
+            observer.disconnect();
+            mount.removeEventListener('pointerdown', handlePointerDown);
+            mount.removeEventListener('pointermove', handlePointerMove);
+            mount.removeEventListener('pointerup', handlePointerUp);
+            mount.removeEventListener('pointercancel', handlePointerUp);
+            mount.removeEventListener('wheel', handleWheel);
+            mount.removeEventListener('keydown', handleKeyDown);
+            controlsRef.current = null;
+            scene.traverse((object) => {
+              const mesh = object as import('three').Mesh;
+              mesh.geometry?.dispose?.();
+              const material = mesh.material;
+              if (Array.isArray(material)) material.forEach((item) => item.dispose());
+              else material?.dispose?.();
+            });
+            countryLabelTextures.forEach((texture) => texture.dispose());
+            renderer.dispose();
+            renderer.domElement.remove();
+          };
+        } catch (error) {
+          if (!disposed) {
+            console.error('Unable to initialise the geographic WebGL globe.', error);
+            setRenderError(true);
+          }
+        }
+      })
+      .catch((error) => {
+        if (!disposed) {
+          console.error('Unable to load the geographic WebGL globe.', error);
+          setRenderError(true);
+        }
+      });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [markerSignature, theme, tone, view]);
+
+  const sendControl = (command: GlobeCommand) => controlsRef.current?.(command);
+
+  return (
+    <div
+      className={cn(
+        'geo-globe-shell relative isolate h-[320px] overflow-hidden rounded-[1.35rem] border',
+        className
+      )}
+    >
+      <div className="geo-globe-grid pointer-events-none absolute inset-0 opacity-50" />
+      <div
+        ref={mountRef}
+        tabIndex={0}
+        aria-label="可交互的地理态势地球。拖拽旋转，滚轮缩放，点击数据点聚焦。"
+        className={cn(
+          'absolute inset-0 cursor-grab touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset active:cursor-grabbing',
+          renderError && 'pointer-events-none cursor-default'
+        )}
+      />
+
+      {renderError ? (
+        <div className="absolute inset-0 z-10 grid place-items-center px-8 text-center" role="alert">
+          <div className="max-w-sm rounded-xl border border-amber-500/35 bg-card/95 px-4 py-3 text-sm leading-6 text-foreground shadow-lg backdrop-blur">
+            当前浏览器无法初始化 WebGL 地球。请开启浏览器硬件加速或更新图形驱动后重试。
+          </div>
+        </div>
+      ) : null}
+
+      <div className="geo-globe-control pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-[11px] font-medium text-foreground shadow-sm backdrop-blur">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+        </span>
+        {view === 'china' ? '中国区域聚焦' : '全球地理态势'}
+      </div>
+
+      <div className="geo-globe-control absolute right-3 top-3 flex overflow-hidden rounded-lg border shadow-sm backdrop-blur">
+        <button
+          type="button"
+          aria-label="放大地球"
+          onClick={() => sendControl('zoom-in')}
+          className="grid h-8 w-8 place-items-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="缩小地球"
+          onClick={() => sendControl('zoom-out')}
+          className="grid h-8 w-8 place-items-center border-x border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="复位地球视角"
+          onClick={() => sendControl('reset')}
+          className="grid h-8 w-8 place-items-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setMotionPaused((value) => !value)}
+        className="geo-globe-control absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] font-medium text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        {motionPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+        {motionPaused ? '继续旋转' : '暂停旋转'}
+      </button>
+
+      {selected ? (
+        <div className="geo-globe-control pointer-events-none absolute bottom-3 left-3 max-w-[min(72%,280px)] rounded-xl border px-3 py-2 shadow-lg backdrop-blur">
+          <div className="flex items-center gap-2">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+              <Focus className="h-3.5 w-3.5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-semibold text-foreground">{selected.label}</p>
+              <p className="text-[11px] text-muted-foreground">已聚焦 · {selected.count} 个去重公网 IP</p>
+            </div>
+          </div>
+        </div>
+      ) : markers.length ? (
+        <div className="geo-globe-control pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+          <MousePointer2 className="h-3.5 w-3.5 text-primary" />
+          拖拽旋转 · 滚轮缩放 · 点击点位聚焦
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center">
+          <div className="geo-globe-control rounded-xl border px-4 py-3 text-sm text-muted-foreground shadow-sm backdrop-blur">
+            {emptyMessage}
+          </div>
+        </div>
+      )}
+      <span className="sr-only" aria-live="polite">
+        {selected ? `已聚焦 ${selected.label}，${selected.count} 个去重公网 IP。` : ''}
+      </span>
+    </div>
+  );
+}
