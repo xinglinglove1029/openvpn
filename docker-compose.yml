@@ -1,6 +1,7 @@
 services:
   openvpn:
     image: xinglinglove1029/openvpn:latest
+    network_mode: host
     build:
       context: .
       dockerfile: build/Dockerfile
