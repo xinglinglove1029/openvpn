@@ -94,8 +94,32 @@ func displayUsername(event NotifyEvent) string {
 	return u
 }
 
-// 旧 API 兼容：直接派发到所有启用的渠道（取代原 NotifyClientEvent 单渠道逻辑）
-// 无论是否配置了渠道，都会走 dispatchNotification；后者会保证站内信至少有一条记录
+// Lifecycle notifications must never delay OpenVPN hooks. Dispatch can include
+// SMTP/webhook I/O, so it is handled by one bounded background worker. History
+// records and firewall updates remain synchronous at their own API layer; only
+// the optional notification fan-out is lossy under sustained overload.
+const lifecycleNotificationQueueSize = 128
+
+var lifecycleNotificationQueue = make(chan NotifyEvent, lifecycleNotificationQueueSize)
+
+func init() {
+	go func() {
+		for event := range lifecycleNotificationQueue {
+			LogNotifyError(event, NotifyClientEvent(event))
+		}
+	}()
+}
+
+func enqueueLifecycleNotification(event NotifyEvent) {
+	select {
+	case lifecycleNotificationQueue <- event:
+	default:
+		logger.Warn(context.Background(), "lifecycle notification queue full; dropping %s event for %s", event.Event, displayUsername(event))
+	}
+}
+
+// NotifyClientEvent is kept synchronous for explicit administrative actions
+// such as channel tests. OpenVPN lifecycle routes use enqueueLifecycleNotification.
 func NotifyClientEvent(event NotifyEvent) error {
 	title := notifyTitle(event.Event)
 	content := buildNotifyMarkdown(title, event)

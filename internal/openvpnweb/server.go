@@ -3153,7 +3153,9 @@ func Run(info BuildInfo) {
 				TimeUnix:      h.TimeUnix,
 				TimeDuration:  h.TimeDuration,
 			}
-			LogNotifyError(event, NotifyClientEvent(event))
+			// A disconnect must be recorded before returning, but delivery to SMTP
+			// or webhooks is best-effort and must not hold OpenVPN's lifecycle hook.
+			enqueueLifecycleNotification(event)
 
 			c.JSON(http.StatusOK, gin.H{"message": "添加记录成功"})
 		})
@@ -3281,13 +3283,12 @@ func Run(info BuildInfo) {
 				event.TimeUnix = time.Now().Unix()
 			}
 
-			if err := NotifyClientEvent(event); err != nil {
-				logger.Error(context.Background(), err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
+			// This endpoint is invoked by the OpenVPN client-connect hook. Queue the
+			// potentially slow fan-out instead of blocking TLS handshakes on SMTP or
+			// webhook latency.
+			enqueueLifecycleNotification(event)
 
-			c.JSON(http.StatusOK, gin.H{"message": "notify sent"})
+			c.JSON(http.StatusAccepted, gin.H{"message": "notify queued"})
 		})
 
 		ovpn.GET("/history/export", RequirePermission("history:view"), func(c *gin.Context) {

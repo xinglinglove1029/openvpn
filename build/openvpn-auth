@@ -15,7 +15,7 @@ if [ -n "$mfa_code" ]; then
 	echo "$log_prefix [$username] 检测到 MFA 验证码"
 fi
 
-if ! resp=$(curl -w "\n%{http_code}" --connect-timeout 5 -s -X POST "$ovpn_auth_api" --data-urlencode "username=$username" --data-urlencode "password=$real_password" --data-urlencode "passcode=$mfa_code" --data-urlencode "common_name=$common_name" -H "O-Token: $token"); then
+if ! resp=$(curl -w "\n%{http_code}" --connect-timeout 2 --max-time 10 -s -X POST "$ovpn_auth_api" --data-urlencode "username=$username" --data-urlencode "password=$real_password" --data-urlencode "passcode=$mfa_code" --data-urlencode "common_name=$common_name" -H "O-Token: $token"); then
 	echo "$log_prefix [$username] 请求登录接口失败"
 	exit 1
 fi

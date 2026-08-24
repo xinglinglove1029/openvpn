@@ -334,7 +334,7 @@ add_history() {
 	set +e
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&connection_id=$connection_id&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
-	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $ovpn_history_api -H "O-Token: $TOKEN")
+	status=$(curl -w "%{http_code}" --connect-timeout 2 --max-time 10 -s -X POST -o /dev/null -d "$data" "$ovpn_history_api" -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
 		echo "[CLIENT-DISCONNECT] $0:$LINENO 保存历史记录出错，请检查！"
 	fi
@@ -347,8 +347,8 @@ send_notify() {
 	event="$1"
 	api="${ovpn_notify_api:-http://127.0.0.1:$(jq -r '.system.base.web_port // "8888"' $ovpn_data/config.json)/ovpn/notify}"
 	data="event=$event&vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&rip=$trusted_ip&rip6=$trusted_ip6&common_name=$common_name&connection_id=$connection_id&username=$username&bytes_received=$bytes_received&bytes_sent=$bytes_sent&time_unix=$time_unix&time_duration=$time_duration"
-	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $api -H "O-Token: $TOKEN")
-	if [[ $? -ne 0 || $status -ne 200 ]]; then
+	status=$(curl -w "%{http_code}" --connect-timeout 2 --max-time 10 -s -X POST -o /dev/null -d "$data" "$api" -H "O-Token: $TOKEN")
+	if [[ $? -ne 0 || ( $status -ne 200 && $status -ne 202 ) ]]; then
 		echo "[CLIENT-$event] $0:$LINENO send notify failed"
 	fi
 	set -e
@@ -420,7 +420,7 @@ set_firewall() {
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=add_ovips"
 	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"
-	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $ovpn_firewall_api -H "O-Token: $TOKEN")
+	status=$(curl -w "%{http_code}" --connect-timeout 2 --max-time 5 -s -X POST -o /dev/null -d "$data" "$ovpn_firewall_api" -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
 		echo "[CLIENT-CONNECT] $0:$LINENO 设置防火墙出错，请检查！"
 	fi
@@ -433,7 +433,7 @@ delete_firewall() {
 	TOKEN=$(jq -r '.system.base.token // ""' $ovpn_data/config.json)
 	ovpn_firewall_api="http://127.0.0.1:$WEB_PORT/ovpn/firewall?a=delete_ovips"
 	data="vip=$ifconfig_pool_remote_ip&vip6=$ifconfig_pool_remote_ip6&username=$username"
-	status=$(curl -w "%{http_code}" --connect-timeout 5 -s -X POST -o /dev/null -d $data $ovpn_firewall_api -H "O-Token: $TOKEN")
+	status=$(curl -w "%{http_code}" --connect-timeout 2 --max-time 5 -s -X POST -o /dev/null -d "$data" "$ovpn_firewall_api" -H "O-Token: $TOKEN")
 	if [[ $? -ne 0 || $status -ne 200 ]]; then
 		echo "[CLIENT-DISCONNECT] $0:$LINENO 移除防火墙策略出错，请检查！"
 	fi
@@ -460,17 +460,48 @@ sync_web_audit_client_map() {
 	set -e
 }
 
+# OpenVPN waits for a lifecycle script to exit. Never make its packet/handshake
+# path depend on SQLite, nft persistence, SMTP, or a webhook. The local CCD
+# preparation remains synchronous; all web side effects are launched detached
+# with finite curl timeouts below. Redirecting stdio is essential: a detached
+# child retaining OpenVPN's script pipes would still make OpenVPN wait for EOF.
+run_lifecycle_hook_async() {
+	local hook_name="$1"
+	shift
+	local hook_log="${ovpn_data:-${OVPN_DATA:-/data}}/openvpn-lifecycle-hooks.log"
+	(
+		set +e
+		"$@"
+	) >>"$hook_log" 2>&1 </dev/null &
+	local pid=$!
+	echo "[OPENVPN-HOOK] queued ${hook_name} side effects (pid=${pid})" >&2
+}
+
 client_disconnect() {
 	sync_web_audit_client_map delete
 	delete_firewall
 	add_history
 }
 
+# These two operations only touch the local client-config-dir and must finish
+# before OpenVPN completes the client-connect hook.
 client_connect() {
 	set_ovip "$1"
 	set_ovconfig "$1"
+}
+
+client_connect_side_effects() {
 	sync_web_audit_client_map upsert
 	send_notify connect
+}
+
+learn_address_add_side_effects() {
+	set_firewall
+	sync_web_audit_client_map upsert
+}
+
+learn_address_delete_side_effects() {
+	sync_web_audit_client_map delete
 }
 
 ################################################################################################
@@ -526,21 +557,23 @@ esac
 
 case "$script_type" in
 client-connect)
+	# Only local CCD preparation is on OpenVPN's critical path. API calls and
+	# notifications run detached so a slow web backend cannot stall all clients.
 	client_connect "$@"
+	run_lifecycle_hook_async client-connect client_connect_side_effects
 	exit 0
 	;;
 client-disconnect)
-	client_disconnect "$@"
+	run_lifecycle_hook_async client-disconnect client_disconnect
 	exit 0
 	;;
 learn-address)
 	case "$1" in
 	add|update)
-		set_firewall "$@"
-		sync_web_audit_client_map upsert
+		run_lifecycle_hook_async "learn-address:$1" learn_address_add_side_effects
 		;;
 	delete)
-		sync_web_audit_client_map delete
+		run_lifecycle_hook_async learn-address:delete learn_address_delete_side_effects
 		;;
 	esac
 	exit 0
