@@ -1403,12 +1403,12 @@ func auditIPTablesCandidates(ipv6 bool) []string {
 // installed into the preferred backend, but cleanup must inspect all backends:
 // an upgrade can leave an old rule in iptables-legacy while iptables-nft is now
 // selected (or the other way around).
-func availableAuditIPTables(ipv6 bool) []string {
+func availableAuditIPTables(ipv6 bool, table string) []string {
 	available := make([]string, 0, 3)
 	seen := make(map[string]struct{}, 3)
 	for _, candidate := range auditIPTablesCandidates(ipv6) {
 		binary, err := exec.LookPath(candidate)
-		if err != nil || exec.Command(binary, "-L", "-n", "-t", "nat").Run() != nil {
+		if err != nil || exec.Command(binary, "-L", "-n", "-t", table).Run() != nil {
 			continue
 		}
 		// The generic binary can be an alternatives symlink to a backend already
@@ -1426,8 +1426,8 @@ func availableAuditIPTables(ipv6 bool) []string {
 	return available
 }
 
-func preferredAuditIPTables(ipv6 bool) (string, error) {
-	available := availableAuditIPTables(ipv6)
+func preferredAuditIPTables(ipv6 bool, table string) (string, error) {
+	available := availableAuditIPTables(ipv6, table)
 	if len(available) > 0 {
 		return available[0], nil
 	}
@@ -1435,7 +1435,7 @@ func preferredAuditIPTables(ipv6 bool) (string, error) {
 	if ipv6 {
 		base = "ip6tables"
 	}
-	return "", fmt.Errorf("未找到可用的 %s，DNS 审计不会截获该协议族流量", base)
+	return "", fmt.Errorf("未找到可用的 %s %s 表，网站审计不会操作该协议族规则", base, table)
 }
 
 const (
@@ -1592,10 +1592,22 @@ func runAuditRuleCommand(ipt, table, operation string, rule []string) error {
 	return fmt.Errorf("%w: %s", err, message)
 }
 
+// auditRuleReconciliationPlan preserves the chain from a stable rule template
+// before disabled policies erase their desired state. FORWARD policies such as
+// DoT/QUIC must never fall back to PREROUTING during cleanup.
+func auditRuleReconciliationPlan(enable bool, desired [][]string) (chain string, desiredRules [][]string) {
+	chain = desiredChain(desired)
+	if !enable {
+		return chain, nil
+	}
+	return chain, desired
+}
+
 func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
+	chain, desired := auditRuleReconciliationPlan(enable, desired)
 	var iptables []string
 	if enable {
-		ipt, err := preferredAuditIPTables(ipv6)
+		ipt, err := preferredAuditIPTables(ipv6, table)
 		if err != nil {
 			return err
 		}
@@ -1606,12 +1618,11 @@ func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table stri
 		// Disabled and retired policies must be removed from legacy, nft and the
 		// generic alternatives target; choosing only the preferred command leaves
 		// stale rules active after a backend migration.
-		iptables = availableAuditIPTables(ipv6)
-		desired = nil
+		iptables = availableAuditIPTables(ipv6, table)
 	}
 
 	for _, ipt := range iptables {
-		current := discoverAuditRules(ipt, table, desiredChain(desired), parse)
+		current := discoverAuditRules(ipt, table, chain, parse)
 		remove, add := reconcileAuditRules(current, desired)
 		for _, rule := range remove {
 			_ = runAuditRuleCommand(ipt, table, "-D", rule)

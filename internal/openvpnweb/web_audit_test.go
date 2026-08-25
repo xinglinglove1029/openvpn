@@ -933,6 +933,22 @@ func TestAuditIPTablesCandidatesCoverLegacyNftAndDefault(t *testing.T) {
 	}
 }
 
+func TestAuditRuleReconciliationPlanKeepsForwardChainWhenDisabling(t *testing.T) {
+	dotRules := auditEgressBlockRules(webAuditDoTBlockComment)
+	chain, desired := auditRuleReconciliationPlan(false, dotRules)
+	if chain != "FORWARD" {
+		t.Fatalf("disabled DoT cleanup chain=%q, want FORWARD", chain)
+	}
+	if desired != nil {
+		t.Fatalf("disabled cleanup desired rules=%v, want nil", desired)
+	}
+
+	chain, desired = auditRuleReconciliationPlan(false, auditRedirectRules(false, []string{"8.8.8.8"}, false))
+	if chain != "PREROUTING" || desired != nil {
+		t.Fatalf("disabled DNS redirect cleanup plan=(%q, %v), want (PREROUTING, nil)", chain, desired)
+	}
+}
+
 func TestAuditRuleConvergenceRemovesStrictAndDisabledRules(t *testing.T) {
 	strict := auditRedirectRules(false, nil, true)
 	normal := auditRedirectRules(false, []string{"1.1.1.1"}, false)
