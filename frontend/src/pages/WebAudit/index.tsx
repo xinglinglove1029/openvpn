@@ -162,7 +162,7 @@ export default function WebAuditPage() {
             <StatusRow label="IPv4 DNS 截获" value={status?.ipv4RedirectInstalled ? (status.strictDnsCaptureEnabled ? '严格：tun0 全部 UDP/TCP 53 → 5353' : '下发 DNS → 5353') : '未安装'} ready={Boolean(status?.ipv4RedirectInstalled)} />
             <StatusRow label="IPv6 DNS 截获" value={status?.ipv6RedirectInstalled ? (status.strictDnsCaptureEnabled ? '严格 DNS 已就绪' : '下发 DNS 已就绪') : '未就绪，IPv6 DNS 不审计'} ready={Boolean(status?.ipv6RedirectInstalled)} />
             <StatusRow label="DoT 阻断" value={status?.dotBlockEnabled ? (status.ipv4DotBlockInstalled ? 'tun0 TCP/853 已阻断' : '已请求但 IPv4 规则未就绪') : '未启用（可经 DoT 绕过）'} ready={Boolean(status?.dotBlockEnabled && status?.ipv4DotBlockInstalled)} />
-            <StatusRow label="HTTP/3 回退策略" value={status?.udp443BlockEnabled ? (status.ipv4Udp443BlockInstalled ? 'tun0 UDP/443 已阻断，浏览器通常回退 TCP' : '已请求但 IPv4 规则未就绪') : '未启用（QUIC/DoH/缓存仍可能漏记）'} ready={Boolean(status?.udp443BlockEnabled && status?.ipv4Udp443BlockInstalled)} />
+            <StatusRow label="HTTP/3 / QUIC" value="UDP/443 始终放行，保障 Google、YouTube 等网站正常访问；QUIC 流量可能无法记录域名" ready />
             <StatusRow label="上游 DNS" value={status?.upstreamDns?.join(' · ') || '未配置'} ready={Boolean(status?.upstreamDns?.length)} />
             {Boolean(status?.droppedAuditEvents || status?.droppedDnsRequests) && <StatusRow label="丢弃事件 / 请求" value={`${formatCount(status?.droppedAuditEvents)} / ${formatCount(status?.droppedDnsRequests)}`} ready={false} />}
           </CardContent>

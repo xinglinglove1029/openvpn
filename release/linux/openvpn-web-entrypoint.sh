@@ -156,15 +156,52 @@ EOF
 }
 
 
-# DNS audit REDIRECT rules are owned by the Go web process. It binds the proxy
-# before installing destination-specific rules and removes them on any listener or
-# upstream failure. Keep lifecycle hooks free of duplicate broad port-53 rules.
+# Website-audit firewall rules used to be managed by this entrypoint. Older
+# releases may therefore have rules in either xtables backend (legacy or nft),
+# while the current Go service owns only its comment-tagged rules. Do not select
+# only the active backend here: mixed upgrades leave the inactive table intact.
 cleanup_legacy_dns_audit_redirect() {
-	local ipt="$1" proto
-	for proto in udp tcp; do
-		"$ipt" -t nat -C PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 >/dev/null 2>&1 && \
-			"$ipt" -t nat -D PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 || true
+	local ipt proto
+	for ipt in iptables-legacy iptables-nft iptables; do
+		command -v "$ipt" >/dev/null 2>&1 || continue
+		for proto in udp tcp; do
+			# The old entrypoint installed this exact broad redirect without an
+			# owner comment. Remove every duplicate so disabled web audit cannot
+			# black-hole VPN DNS at the unbound local 5353 port.
+			while "$ipt" -t nat -C PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 >/dev/null 2>&1; do
+				"$ipt" -t nat -D PREROUTING -i tun0 -p "$proto" --dport 53 -j REDIRECT --to-ports 5353 >/dev/null 2>&1 || break
+				echo "[OPENVPN-WEB] removed legacy DNS audit redirect (${ipt}, ${proto}/53)" >&2
+			done
+		done
 	done
+}
+
+# UDP/443 blocking was retired because it breaks QUIC-first services such as
+# Google and YouTube. It may still exist in a backend the Go process did not
+# select, so purge only the old comment-owned rule from every available table.
+cleanup_retired_web_audit_quic_block() {
+	local ipt reject
+	for ipt in iptables-legacy iptables-nft iptables; do
+		command -v "$ipt" >/dev/null 2>&1 || continue
+		reject="icmp-port-unreachable"
+		while "$ipt" -t filter -C FORWARD -i tun0 -p udp -m comment --comment "openvpn-web:web-audit:quic-block" --dport 443 -j REJECT --reject-with "$reject" >/dev/null 2>&1; do
+			"$ipt" -t filter -D FORWARD -i tun0 -p udp -m comment --comment "openvpn-web:web-audit:quic-block" --dport 443 -j REJECT --reject-with "$reject" >/dev/null 2>&1 || break
+			echo "[OPENVPN-WEB] removed retired QUIC block (${ipt}, udp/443)" >&2
+		done
+	done
+	for ipt in ip6tables-legacy ip6tables-nft ip6tables; do
+		command -v "$ipt" >/dev/null 2>&1 || continue
+		reject="icmp6-port-unreachable"
+		while "$ipt" -t filter -C FORWARD -i tun0 -p udp -m comment --comment "openvpn-web:web-audit:quic-block" --dport 443 -j REJECT --reject-with "$reject" >/dev/null 2>&1; do
+			"$ipt" -t filter -D FORWARD -i tun0 -p udp -m comment --comment "openvpn-web:web-audit:quic-block" --dport 443 -j REJECT --reject-with "$reject" >/dev/null 2>&1 || break
+			echo "[OPENVPN-WEB] removed retired IPv6 QUIC block (${ipt}, udp/443)" >&2
+		done
+	done
+}
+
+cleanup_retired_web_audit_rules() {
+	cleanup_legacy_dns_audit_redirect
+	cleanup_retired_web_audit_quic_block
 }
 
 run_server() {
@@ -192,9 +229,10 @@ run_server() {
 		}
 	fi
 
-	# Remove broad redirect rules left by versions before the Go audit proxy owned
-	# the lifecycle. The current proxy adds only configured DNS destinations.
-	cleanup_legacy_dns_audit_redirect "$ipt"
+	# Clear retired website-audit rules from every xtables backend before OpenVPN
+	# starts. This covers legacy/nft mixed upgrades even if the selected backend
+	# below remains responsible only for current NAT rules.
+	cleanup_retired_web_audit_rules
 
 	$OPENVPN_BIN $OVPN_DATA/server.conf
 }

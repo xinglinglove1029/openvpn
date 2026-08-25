@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -225,18 +226,18 @@ func (s *webAuditDNSService) updateCoverageLocked() {
 		gaps = append(gaps, "TCP/853 的加密 DNS（DoT）未阻断，客户端可通过 DoT 绕过普通 DNS 审计。")
 		actions = append(actions, "如需减少 DoT 绕过，可启用“阻断 DoT (TCP/853)”；规则只作用于 tun0。")
 	}
-	if s.status.Enabled && !s.status.UDP443BlockEnabled {
-		gaps = append(gaps, "HTTP/3/QUIC（UDP/443）可能绕过域名审计。")
-		actions = append(actions, "可选启用“阻断 UDP/443 以回退 TCP/TLS”，但会影响 HTTP/3 性能。")
+	if s.status.Enabled {
+		// UDP/443 is deliberately kept open. Blocking QUIC to improve DNS
+		// coverage breaks or degrades QUIC-first services such as Google and
+		// YouTube, so it is not an available audit policy.
+		gaps = append(gaps, "HTTP/3/QUIC（UDP/443）保持放行以保障 Google、YouTube 等网站兼容性，因此其域名可能绕过 DNS 审计。")
+		actions = append(actions, "UDP/443（QUIC/HTTP/3）始终放行，不应为了审计而阻断；普通 DNS、DoT 状态和审计覆盖范围可在本页查看。")
 	}
 	if s.status.Enabled {
 		gaps = append(gaps, "DoH（TCP/443）、浏览器 DNS 缓存和应用内解析仍可能导致域名漏记；DoH 不能按 TCP/443 一律阻断。")
 	}
 	if s.status.Enabled && s.status.DoTBlockEnabled && !s.status.IPv4DoTBlockInstalled {
 		gaps = append(gaps, "已请求阻断 DoT，但 IPv4 阻断规则未就绪；服务不会为审计阻断 VPN 基本流量。")
-	}
-	if s.status.Enabled && s.status.UDP443BlockEnabled && !s.status.IPv4UDP443BlockInstalled {
-		gaps = append(gaps, "已请求 UDP/443 回退，但 IPv4 阻断规则未就绪；服务已保持故障开放。")
 	}
 	if s.status.DroppedAuditEvents > 0 || s.status.DroppedDNSRequests > 0 {
 		gaps = append(gaps, "审计队列或存储限流曾发生丢弃，DNS 转发不会因此被阻塞，但部分域名事件可能缺失。")
@@ -256,10 +257,15 @@ func (s *webAuditDNSService) updateCoverageLocked() {
 	s.status.CoverageNote = privacyBoundary + " " + strings.Join(gaps, " ")
 }
 
-func webAuditEnabled() bool     { return viper.GetBool("system.base.web_audit_enabled") }
-func webAuditStrictDNS() bool   { return viper.GetBool("system.base.web_audit_strict_dns") }
-func webAuditBlockDoT() bool    { return viper.GetBool("system.base.web_audit_block_dot") }
-func webAuditBlockUDP443() bool { return viper.GetBool("system.base.web_audit_block_udp_443") }
+func webAuditEnabled() bool   { return viper.GetBool("system.base.web_audit_enabled") }
+func webAuditStrictDNS() bool { return viper.GetBool("system.base.web_audit_strict_dns") }
+func webAuditBlockDoT() bool  { return viper.GetBool("system.base.web_audit_block_dot") }
+
+// webAuditBlockUDP443 intentionally remains false. The old force-TCP policy
+// blocked all VPN client UDP/443 traffic and caused real-world failures for
+// QUIC-first services. Keep this helper so lifecycle state from older clients
+// converges to the safe value rather than reintroducing the firewall rule.
+func webAuditBlockUDP443() bool { return false }
 
 func configuredDNSUpstreams() []string {
 	values := []string{strings.TrimSpace(viper.GetString("openvpn.ovpn_push_dns1")), strings.TrimSpace(viper.GetString("openvpn.ovpn_push_dns2"))}
@@ -487,8 +493,9 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		webAuditDNS.scheduleRedirectRecovery(run)
 		return
 	}
-	// Optional DoT/QUIC policies are installed only after the DNS listener and
-	// ingress guard are ready. A failure rolls back that policy and keeps VPN
+	// Optional DoT policy is installed only after the DNS listener and ingress
+	// guard are ready. Legacy QUIC rules are only removed, never installed. A
+	// failure rolls back the policy and keeps VPN
 	// traffic fail-open; it never blocks the OpenVPN service itself.
 	if err := webAuditDNS.ensureEgressBlocks(true); err != nil {
 		webAuditDNS.setError(err)
@@ -1384,19 +1391,49 @@ func findWebAuditClientByIP(clients []ClientData, vpnIP string) (ClientData, boo
 	return ClientData{}, false
 }
 
-func preferredAuditIPTables(ipv6 bool) (string, error) {
+func auditIPTablesCandidates(ipv6 bool) []string {
 	base := "iptables"
 	if ipv6 {
 		base = "ip6tables"
 	}
-	if legacy, err := exec.LookPath(base + "-legacy"); err == nil && exec.Command(legacy, "-L", "-n", "-t", "nat").Run() == nil {
-		return legacy, nil
+	return []string{base + "-legacy", base + "-nft", base}
+}
+
+// availableAuditIPTables returns every usable xtables backend. Rules are only
+// installed into the preferred backend, but cleanup must inspect all backends:
+// an upgrade can leave an old rule in iptables-legacy while iptables-nft is now
+// selected (or the other way around).
+func availableAuditIPTables(ipv6 bool) []string {
+	available := make([]string, 0, 3)
+	seen := make(map[string]struct{}, 3)
+	for _, candidate := range auditIPTablesCandidates(ipv6) {
+		binary, err := exec.LookPath(candidate)
+		if err != nil || exec.Command(binary, "-L", "-n", "-t", "nat").Run() != nil {
+			continue
+		}
+		// The generic binary can be an alternatives symlink to a backend already
+		// checked above. Avoid duplicate rule operations in that common case.
+		key := binary
+		if resolved, err := filepath.EvalSymlinks(binary); err == nil {
+			key = resolved
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		available = append(available, binary)
 	}
-	if nft, err := exec.LookPath(base + "-nft"); err == nil && exec.Command(nft, "-L", "-n", "-t", "nat").Run() == nil {
-		return nft, nil
+	return available
+}
+
+func preferredAuditIPTables(ipv6 bool) (string, error) {
+	available := availableAuditIPTables(ipv6)
+	if len(available) > 0 {
+		return available[0], nil
 	}
-	if binary, err := exec.LookPath(base); err == nil && exec.Command(binary, "-L", "-n", "-t", "nat").Run() == nil {
-		return binary, nil
+	base := "iptables"
+	if ipv6 {
+		base = "ip6tables"
 	}
 	return "", fmt.Errorf("未找到可用的 %s，DNS 审计不会截获该协议族流量", base)
 }
@@ -1436,8 +1473,9 @@ func auditEgressBlockRules(kind string) [][]string {
 	case webAuditDoTBlockComment:
 		return [][]string{{"FORWARD", "-i", "tun0", "-p", "tcp", "-m", "comment", "--comment", webAuditDoTBlockComment, "--dport", "853", "-j", "REJECT", "--reject-with", "tcp-reset"}}
 	case webAuditQUICBlockComment:
-		// REJECT is intentional: browsers can immediately fall back to TCP/TLS.
-		// The rule remains tun0-only and is never enabled by default.
+		// Legacy cleanup template only. New versions never install this rule,
+		// but keep an exact template so upgrades remove the comment-owned rule
+		// left behind by older releases.
 		return [][]string{{"FORWARD", "-i", "tun0", "-p", "udp", "-m", "comment", "--comment", webAuditQUICBlockComment, "--dport", "443", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"}}
 	default:
 		return nil
@@ -1522,6 +1560,12 @@ func reconcileAuditRules(current, desired [][]string) (remove, add [][]string) {
 	currentByKey := make(map[string]struct{}, len(current))
 	for _, rule := range current {
 		key := ruleKey(rule)
+		if _, duplicate := currentByKey[key]; duplicate {
+			// A retry or backend migration can leave duplicate owned rules. One
+			// copy is enough; remove the extras during every reconciliation.
+			remove = append(remove, rule)
+			continue
+		}
 		currentByKey[key] = struct{}{}
 		if _, ok := desiredByKey[key]; !ok {
 			remove = append(remove, rule)
@@ -1549,39 +1593,45 @@ func runAuditRuleCommand(ipt, table, operation string, rule []string) error {
 }
 
 func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
-	ipt, err := preferredAuditIPTables(ipv6)
-	if err != nil {
-		if !enable {
-			return nil
+	var iptables []string
+	if enable {
+		ipt, err := preferredAuditIPTables(ipv6)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	current := discoverAuditRules(ipt, table, desiredChain(desired), parse)
-	if !enable {
+		// New rules belong to one deterministic backend. Installing them in both
+		// backends could apply NAT/policy twice when a host exposes both tools.
+		iptables = []string{ipt}
+	} else {
+		// Disabled and retired policies must be removed from legacy, nft and the
+		// generic alternatives target; choosing only the preferred command leaves
+		// stale rules active after a backend migration.
+		iptables = availableAuditIPTables(ipv6)
 		desired = nil
 	}
-	remove, add := reconcileAuditRules(current, desired)
-	seen := make(map[string]struct{}, len(remove)+len(add))
-	for _, rule := range remove {
-		key := ruleKey(rule)
-		if _, duplicate := seen[key]; duplicate {
+
+	for _, ipt := range iptables {
+		current := discoverAuditRules(ipt, table, desiredChain(desired), parse)
+		remove, add := reconcileAuditRules(current, desired)
+		for _, rule := range remove {
+			_ = runAuditRuleCommand(ipt, table, "-D", rule)
+		}
+		if !enable {
 			continue
 		}
-		seen[key] = struct{}{}
-		_ = runAuditRuleCommand(ipt, table, "-D", rule)
-	}
-	added := make([][]string, 0, len(add))
-	for _, rule := range add {
-		if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
-			continue
-		}
-		if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
-			for _, installed := range added {
-				_ = runAuditRuleCommand(ipt, table, "-D", installed)
+		added := make([][]string, 0, len(add))
+		for _, rule := range add {
+			if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
+				continue
 			}
-			return fmt.Errorf("安装 %s 网站审计规则失败: %w", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], err)
+			if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
+				for _, installed := range added {
+					_ = runAuditRuleCommand(ipt, table, "-D", installed)
+				}
+				return fmt.Errorf("安装 %s 网站审计规则失败: %w", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], err)
+			}
+			added = append(added, rule)
 		}
-		added = append(added, rule)
 	}
 	return nil
 }
@@ -1635,6 +1685,12 @@ func (s *webAuditDNSService) ensureRedirect(enable bool) error {
 }
 
 func (s *webAuditDNSService) ensureEgressBlockFamily(enable, ipv6 bool, comment string) error {
+	// UDP/443 was a legacy force-TCP mechanism. Never allow any caller, config
+	// file or future retry path to add it again; this call only removes old
+	// comment-owned rules during reconciliation.
+	if comment == webAuditQUICBlockComment {
+		enable = false
+	}
 	desired := auditEgressBlockRules(comment)
 	if ipv6 && comment == webAuditQUICBlockComment {
 		// ip6tables uses a distinct ICMP reject name.
@@ -1654,7 +1710,9 @@ func (s *webAuditDNSService) ensureEgressBlocks(enable bool) error {
 	v6Ready := s.status.IPv6ListenerReady
 	s.mu.RUnlock()
 	dotEnabled := enable && webAuditEnabled() && webAuditBlockDoT()
-	quicEnabled := enable && webAuditEnabled() && webAuditBlockUDP443()
+	// Legacy QUIC rules are always reconciled to absent. See
+	// ensureEgressBlockFamily for the hard safety guard.
+	quicEnabled := false
 	v4DoTErr := s.ensureEgressBlockFamily(dotEnabled, false, webAuditDoTBlockComment)
 	v6DoTErr := s.ensureEgressBlockFamily(dotEnabled && v6Ready, true, webAuditDoTBlockComment)
 	v4QUICErr := s.ensureEgressBlockFamily(quicEnabled, false, webAuditQUICBlockComment)

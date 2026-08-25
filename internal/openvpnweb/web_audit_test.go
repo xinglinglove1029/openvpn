@@ -854,6 +854,24 @@ func TestAuditRedirectRuleArgsRecognizesOnlyCommentOwnedRules(t *testing.T) {
 	}
 }
 
+func TestLegacyQUICBlockIsRetiredAndCannotBeEnabled(t *testing.T) {
+	const key = "system.base.web_audit_block_udp_443"
+	previous := viper.GetBool(key)
+	t.Cleanup(func() { viper.Set(key, previous) })
+
+	viper.Set(key, true)
+	if !retireWebAuditQUICBlock() {
+		t.Fatal("legacy enabled QUIC setting must be migrated")
+	}
+	if viper.GetBool(key) {
+		t.Fatal("legacy QUIC setting remained enabled after migration")
+	}
+	viper.Set(key, true)
+	if webAuditBlockUDP443() {
+		t.Fatal("runtime must never re-enable the retired QUIC block")
+	}
+}
+
 func TestHighCoverageAuditFirewallRulesStayOnTun0(t *testing.T) {
 	// The DNS listener is bound to tun0 at the socket layer. Firewall rules are
 	// therefore exclusively tunnel-matching and never use a broad "! -i tun0"
@@ -894,6 +912,24 @@ func TestHighCoverageAuditFirewallRulesStayOnTun0(t *testing.T) {
 		if !strings.Contains(joined, "FORWARD -i tun0") || !strings.Contains(joined, "-p "+want.proto) || !strings.Contains(joined, "--dport "+want.port) || !strings.Contains(joined, want.kind) || !strings.Contains(joined, "-j REJECT") {
 			t.Fatalf("egress block escaped its strict tun0 boundary: %q", joined)
 		}
+		if want.kind == webAuditQUICBlockComment && webAuditBlockUDP443() {
+			t.Fatal("legacy QUIC block must never be enabled")
+		}
+	}
+}
+
+func TestAuditIPTablesCandidatesCoverLegacyNftAndDefault(t *testing.T) {
+	for _, test := range []struct {
+		ipv6 bool
+		want []string
+	}{
+		{want: []string{"iptables-legacy", "iptables-nft", "iptables"}},
+		{ipv6: true, want: []string{"ip6tables-legacy", "ip6tables-nft", "ip6tables"}},
+	} {
+		got := auditIPTablesCandidates(test.ipv6)
+		if strings.Join(got, ",") != strings.Join(test.want, ",") {
+			t.Fatalf("ipv6=%v candidates=%v, want %v", test.ipv6, got, test.want)
+		}
 	}
 }
 
@@ -914,6 +950,14 @@ func TestAuditRuleConvergenceRemovesStrictAndDisabledRules(t *testing.T) {
 	if len(remove) != len(current) || len(add) != 0 {
 		t.Fatalf("disable must remove every feature-owned desired rule: remove=%v add=%v", remove, add)
 	}
+
+	// Repeated reconciliation must also converge duplicate rules left by an
+	// interrupted upgrade or a backend switch.
+	duplicated := append(append([][]string{}, normal...), normal[0])
+	remove, add = reconcileAuditRules(duplicated, normal)
+	if len(remove) != 1 || len(add) != 0 || strings.Join(remove[0], " ") != strings.Join(normal[0], " ") {
+		t.Fatalf("duplicate rule was not selected for cleanup: remove=%v add=%v", remove, add)
+	}
 }
 
 func TestWebAuditCoverageDiagnosticsExplainEncryptedDNSGaps(t *testing.T) {
@@ -929,7 +973,7 @@ func TestWebAuditCoverageDiagnosticsExplainEncryptedDNSGaps(t *testing.T) {
 			t.Fatalf("diagnostics missing %q: %s", want, joined)
 		}
 	}
-	for _, want := range []string{"严格普通 DNS", "TCP/853", "UDP/443"} {
+	for _, want := range []string{"严格普通 DNS", "TCP/853", "UDP/443", "始终放行"} {
 		if !strings.Contains(actions, want) {
 			t.Fatalf("recommended actions missing %q: %s", want, actions)
 		}
@@ -938,12 +982,9 @@ func TestWebAuditCoverageDiagnosticsExplainEncryptedDNSGaps(t *testing.T) {
 		t.Fatalf("coverage note overpromises privacy/coverage: %q", service.status.CoverageNote)
 	}
 
-	// Blocking QUIC only affects UDP/443. DoH still runs over TCP/443 and must
-	// remain an explicit coverage limitation rather than disappearing from AI/UI.
-	service.status.UDP443BlockEnabled = true
-	service.updateCoverageLocked()
-	joined = strings.Join(service.status.DetectedGaps, "\n")
-	if !strings.Contains(joined, "DoH（TCP/443）") || strings.Contains(joined, "完整网页") {
-		t.Fatalf("QUIC fallback diagnostics must retain DoH boundary: %s", joined)
+	// QUIC remains a coverage limitation because UDP/443 is intentionally
+	// permitted for client compatibility. DoH over TCP/443 is also explicit.
+	if !strings.Contains(joined, "Google") || !strings.Contains(joined, "DoH（TCP/443）") || strings.Contains(joined, "完整网页") {
+		t.Fatalf("QUIC compatibility diagnostics are incomplete: %s", joined)
 	}
 }

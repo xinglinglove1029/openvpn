@@ -241,7 +241,6 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.web_audit_enabled'] = String(base.web_audit_enabled ?? false);
   out['system.base.web_audit_strict_dns'] = String(base.web_audit_strict_dns ?? false);
   out['system.base.web_audit_block_dot'] = String(base.web_audit_block_dot ?? false);
-  out['system.base.web_audit_block_udp_443'] = String(base.web_audit_block_udp_443 ?? false);
   out['system.base.suricata_eve_enabled'] = String(base.suricata_eve_enabled ?? false);
   out['system.base.suricata_eve_path'] = String(base.suricata_eve_path ?? '/data/suricata/eve.json');
   out['system.base.suricata_eve_poll_seconds'] = String(base.suricata_eve_poll_seconds ?? 5);
@@ -629,13 +628,6 @@ export default function SettingsPage() {
                     description="仅阻断 tun0 的加密 DNS 端口 853，减少 DoT 绕过；DNS 审计关闭或规则异常时自动撤销，保持 VPN 基本联通。"
                     checked={base.web_audit_block_dot ?? false}
                     settingKey="system.base.web_audit_block_dot"
-                    store={store}
-                  />
-                  <SettingSwitch
-                    label="阻断 UDP/443 以回退 TCP/TLS"
-                    description="可减少 HTTP/3/QUIC 导致的域名漏记，但会降低部分网站性能或兼容性；默认关闭，仅作用于 tun0，不能用于拦截 DoH。"
-                    checked={base.web_audit_block_udp_443 ?? false}
-                    settingKey="system.base.web_audit_block_udp_443"
                     store={store}
                   />
                 </div>

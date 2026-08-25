@@ -1612,7 +1612,7 @@ func Run(info BuildInfo) {
 			}
 
 			// Domain-audit settings are hot-reloaded after persistence succeeds. Disabling
-			// removes every feature-owned DNS/DoT/QUIC rule before returning; enabling
+			// removes every feature-owned DNS/DoT rule and any legacy QUIC rule before returning; enabling
 			// binds DNS listeners to tun0 before any DNS redirect is installed.
 			if webAuditConfigChanged {
 				syncWebAuditDNS(context.Background(), &ov)

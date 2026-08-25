@@ -62,6 +62,11 @@ grep -Fq 'ensure_env_setting OPENVPN_WEB_SECURE_DATA_PERMISSIONS true' "$ROOT/re
 grep -Fq '[ "${OPENVPN_WEB_SECURE_DATA_PERMISSIONS:-false}" = "true" ] || return 0' "$ROOT/build/docker-entrypoint.sh" || fail 'runtime secure-permission mode is not opt-in'
 grep -Fq 'chmod 0600 "$profile"' "$ROOT/build/docker-entrypoint.sh" || fail 'client profiles are not restricted'
 grep -Fq 'find "$OVPN_DATA/pki/private" -type f -exec chmod 0600 {} +' "$ROOT/build/docker-entrypoint.sh" || fail 'PKI private keys are not restricted'
+for runtime in "$ROOT/build/docker-entrypoint.sh" "$ROOT/release/linux/openvpn-web-entrypoint.sh"; do
+  grep -Fq 'cleanup_retired_web_audit_rules' "$runtime" || fail "$runtime does not clean retired web-audit rules"
+  grep -Fq 'iptables-legacy iptables-nft iptables' "$runtime" || fail "$runtime does not scan every IPv4 iptables backend"
+  grep -Fq 'ip6tables-legacy ip6tables-nft ip6tables' "$runtime" || fail "$runtime does not scan every IPv6 iptables backend"
+done
 
 if command -v bash >/dev/null 2>&1; then
   bash -n \

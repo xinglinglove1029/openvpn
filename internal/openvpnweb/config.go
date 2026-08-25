@@ -33,9 +33,6 @@ type SysBeseConfig struct {
 	WebAuditStrictDNS bool `json:"web_audit_strict_dns" mapstructure:"web_audit_strict_dns"`
 	// WebAuditBlockDoT blocks only tun0 TCP/853 while domain auditing is enabled.
 	WebAuditBlockDoT bool `json:"web_audit_block_dot" mapstructure:"web_audit_block_dot"`
-	// WebAuditBlockUDP443 asks clients to fall back from QUIC/HTTP3 to TCP/TLS.
-	// It is deliberately off by default because it can reduce web performance.
-	WebAuditBlockUDP443 bool `json:"web_audit_block_udp_443" mapstructure:"web_audit_block_udp_443"`
 	// Suricata EVE import is intentionally disabled by default. The container
 	// control process creates this persistent JSONL file only for local capture.
 	SuricataEVEEnabled     bool   `json:"suricata_eve_enabled" mapstructure:"suricata_eve_enabled"`
@@ -248,7 +245,6 @@ func initConfig() {
 	// the legacy, resolver-scoped DNS audit behavior until an administrator opts in.
 	viper.SetDefault("system.base.web_audit_strict_dns", false)
 	viper.SetDefault("system.base.web_audit_block_dot", false)
-	viper.SetDefault("system.base.web_audit_block_udp_443", false)
 	viper.SetDefault("system.base.suricata_eve_enabled", false)
 	viper.SetDefault("system.base.suricata_eve_path", suricataBuiltInEVEPath)
 	viper.SetDefault("system.base.suricata_eve_poll_seconds", 5)
@@ -335,6 +331,17 @@ func initConfig() {
 		panic(fmt.Sprintf("read config from %s: %v", ovData, err))
 	}
 
+	// Earlier releases could install a tun0 UDP/443 REJECT rule to force
+	// HTTP/3 clients back to TCP for DNS-domain auditing. In production this
+	// breaks or severely degrades Google, YouTube and other QUIC-first sites.
+	// Retire the switch during upgrade so an existing config cannot preserve the
+	// unsafe policy; the audit reconciler removes the old commented rules.
+	if retireWebAuditQUICBlock() {
+		if err := viper.WriteConfig(); err != nil {
+			panic(fmt.Sprintf("disable retired web audit UDP/443 block: %v", err))
+		}
+	}
+
 	if !viper.IsSet("system.base.token") {
 		viper.Set("system.base.token", "ovpntoken"+genRandomString(16))
 		viper.WriteConfig()
@@ -348,6 +355,14 @@ func initConfig() {
 		}
 		lastEventTime = now
 
+		// External edits or an older cached UI must not re-enable the retired
+		// QUIC block. Keep the persisted config converged as well.
+		if retireWebAuditQUICBlock() {
+			if err := viper.WriteConfig(); err != nil {
+				fmt.Printf("disable retired web audit UDP/443 block: %v\n", err)
+			}
+		}
+
 		loadConfig()
 		upadteOvpnConfig()
 		// Apply external config-file edits too. The reconciler is a no-op when
@@ -357,6 +372,18 @@ func initConfig() {
 	})
 
 	viper.WatchConfig()
+}
+
+// retireWebAuditQUICBlock disables the legacy setting in memory. It returns
+// true when callers should persist the migration. The web-audit runtime also
+// hard-disables this policy, so a failed write never reintroduces blocking.
+func retireWebAuditQUICBlock() bool {
+	const key = "system.base.web_audit_block_udp_443"
+	if !viper.GetBool(key) {
+		return false
+	}
+	viper.Set(key, false)
+	return true
 }
 
 func upadteOvpnConfig() {
