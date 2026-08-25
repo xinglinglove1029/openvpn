@@ -17,7 +17,12 @@ export function Layout() {
   const [browserFullscreen, setBrowserFullscreen] = useState(() =>
     typeof document !== 'undefined' && Boolean(document.fullscreenElement)
   );
-  const screenOnlyMode = browserFullscreen && (location.pathname === '/screen' || location.pathname.startsWith('/screen/'));
+  const isScreenRoute = location.pathname === '/screen' || location.pathname.startsWith('/screen/');
+  const screenOnlyMode = browserFullscreen && isScreenRoute;
+  // The operations screen contains its own interactive Three.js globe. Do not
+  // run a second full-window WebGL animation behind it on normal (non-fullscreen)
+  // visits, especially on small 1-core/2-GB deployments.
+  const showAmbientEffects = !isScreenRoute;
   // 桌面端 Sidebar 折叠状态（仅图标模式），持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -132,10 +137,10 @@ export function Layout() {
   return (
     <div className="relative flex h-screen h-dvh min-h-screen min-h-dvh min-w-0 overflow-hidden bg-background">
       {/* 全屏 three.js 背景层（z-0） */}
-      {!screenOnlyMode && <BackgroundScene />}
+      {showAmbientEffects && <BackgroundScene />}
       {/* CSS 动态光晕层 - 呼吸+漂浮效果，与全站风格统一
           移动端：减小尺寸/降低透明度，提升性能并避免视觉过载 */}
-      {!screenOnlyMode && <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
+      {showAmbientEffects && <div aria-hidden className="pointer-events-none absolute inset-0 z-[1]">
         <div
           className={`absolute -top-32 -right-32 w-[28rem] h-[28rem] sm:w-[40rem] sm:h-[40rem] lg:w-[50rem] lg:h-[50rem] rounded-full blur-3xl ${isMobile ? 'opacity-10 dark:opacity-8' : 'opacity-20 dark:opacity-15 sm:opacity-25 sm:dark:opacity-20 lg:opacity-30 lg:dark:opacity-20'} animate-pulse`}
           style={{
@@ -163,7 +168,7 @@ export function Layout() {
         )}
       </div>}
       {/* 遮罩让背景不抢戏（z-5） */}
-      {!screenOnlyMode && <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />}
+      {showAmbientEffects && <div className="app-bg-mask pointer-events-none absolute inset-0 z-[5]" aria-hidden="true" />}
 
       {/* 移动端 Sidebar 抽屉遮罩 */}
       {!screenOnlyMode && sidebarOpen && (

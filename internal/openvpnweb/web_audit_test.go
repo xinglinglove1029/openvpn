@@ -828,24 +828,30 @@ func TestReserveAuditStorageDropsOnlyAuditEventsAtCapacity(t *testing.T) {
 	}
 }
 
-func TestAuditRedirectRuleArgsRecognizesOnlyCommentOwnedRules(t *testing.T) {
-	owned := "-A PREROUTING -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect -d 8.8.8.8 --dport 53 -j REDIRECT --to-ports 5353"
-	rule, ok := auditRedirectRuleArgs(owned)
-	if !ok {
-		t.Fatalf("expected comment-owned audit redirect rule for %q", owned)
-	}
-	joined := strings.Join(rule, " ")
-	if !strings.HasPrefix(joined, "PREROUTING ") || !strings.Contains(joined, "-i tun0") || !strings.Contains(joined, webAuditRedirectComment) || !strings.Contains(joined, "--to-ports 5353") {
-		t.Fatalf("unexpected removable rule args: %q", joined)
+func TestAuditRedirectRuleArgsRecognizesOwnedAndLegacyRules(t *testing.T) {
+	for _, owned := range []string{
+		"-A PREROUTING -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect -d 8.8.8.8 --dport 53 -j REDIRECT --to-ports 5353",
+		// A stale commented rule must be removable even if an old release used
+		// a different interface/port shape. The unique comment is ownership.
+		"-A PREROUTING -i eth0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 54 -j REDIRECT --to-ports 5353",
+		// Pre-comment releases created exactly this broad tunnel DNS redirect.
+		"-A PREROUTING -i tun0 -p tcp --dport 53 -j REDIRECT --to-ports 5353",
+	} {
+		rule, ok := auditRedirectRuleArgs(owned)
+		if !ok {
+			t.Fatalf("expected removable audit redirect rule for %q", owned)
+		}
+		if !strings.HasPrefix(strings.Join(rule, " "), "PREROUTING ") {
+			t.Fatalf("unexpected removable rule args: %q", strings.Join(rule, " "))
+		}
 	}
 
 	for _, line := range []string{
-		// Previous releases and external components can have a matching shape.
-		// Without our explicit owner comment they must not be discovered as ours.
-		"-A PREROUTING -d 8.8.8.8/32 -i tun0 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5353",
-		"-A PREROUTING -i eth0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 53 -j REDIRECT --to-ports 5353",
+		// External redirects without our owner comment only remain removable when
+		// they exactly match the old web-audit tun0/53/5353 signature above.
+		"-A PREROUTING -d 8.8.8.8/32 -i tun0 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5354",
+		"-A PREROUTING -i eth0 -p udp --dport 53 -j REDIRECT --to-ports 5353",
 		"-A PREROUTING -i tun0 -p udp -m comment --comment other-component --dport 53 -j REDIRECT --to-ports 5353",
-		"-A PREROUTING -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 54 -j REDIRECT --to-ports 5353",
 		"-A OUTPUT -i tun0 -p udp -m comment --comment openvpn-web:web-audit:dns-redirect --dport 53 -j REDIRECT --to-ports 5353",
 	} {
 		if rule, ok := auditRedirectRuleArgs(line); ok {

@@ -1615,7 +1615,10 @@ func Run(info BuildInfo) {
 			// removes every feature-owned DNS/DoT rule and any legacy QUIC rule before returning; enabling
 			// binds DNS listeners to tun0 before any DNS redirect is installed.
 			if webAuditConfigChanged {
-				syncWebAuditDNS(context.Background(), &ov)
+				if err := syncWebAuditDNS(context.Background(), &ov); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "设置已保存，但网站审计防火墙规则未完全同步：" + err.Error()})
+					return
+				}
 			}
 			if suricataEVEConfigChanged {
 				suricataEVE.reconcile()

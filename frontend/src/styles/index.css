@@ -121,6 +121,24 @@
   box-shadow: 0 24px 60px -35px color-mix(in srgb, var(--primary) 72%, transparent);
 }
 
+/* Keep the WebGL drawing buffer and its layout box in lockstep. Without an
+   explicit block-sized canvas Safari may preserve an early intrinsic size after
+   fullscreen/toolbar changes and visually shift the globe inside its panel. */
+.geo-globe-shell {
+  contain: layout paint;
+}
+
+.geo-globe-shell > .geo-globe-canvas,
+.geo-globe-shell > [tabindex] > .geo-globe-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none;
+  max-height: none;
+}
+
 .geo-globe-grid {
   background-image:
     linear-gradient(color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px),

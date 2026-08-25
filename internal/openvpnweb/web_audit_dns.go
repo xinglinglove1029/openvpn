@@ -124,22 +124,23 @@ type webAuditDNSService struct {
 	ov *ovpn
 	mu sync.RWMutex
 
-	run                    *webAuditDNSRun
-	clients                map[string]auditClientIdentity
-	status                 WebAuditDNSStatus
-	rate                   map[string]auditRateBucket
-	forwardRate            map[string]forwardRateBucket
-	forwardGlobal          forwardRateBucket
-	auditMinute            int64
-	auditCount             int
-	storedAuditRows        int64
-	storageCheckedMinute   int64
-	storageInitialized     bool
-	storageMu              sync.Mutex
-	startRecoveryScheduled bool
-	forwardFailureStreak   int
-	lastErrorIsForward     bool
-	recoveryScheduled      bool
+	run                      *webAuditDNSRun
+	clients                  map[string]auditClientIdentity
+	status                   WebAuditDNSStatus
+	rate                     map[string]auditRateBucket
+	forwardRate              map[string]forwardRateBucket
+	forwardGlobal            forwardRateBucket
+	auditMinute              int64
+	auditCount               int
+	storedAuditRows          int64
+	storageCheckedMinute     int64
+	storageInitialized       bool
+	storageMu                sync.Mutex
+	startRecoveryScheduled   bool
+	cleanupRecoveryScheduled bool
+	forwardFailureStreak     int
+	lastErrorIsForward       bool
+	recoveryScheduled        bool
 }
 
 var webAuditDNSLifecycleMu sync.Mutex
@@ -287,16 +288,19 @@ func configuredDNSUpstreams() []string {
 // syncWebAuditDNS is the only lifecycle entry point after startup. It makes a
 // saved enable/disable setting take effect immediately; stopping always removes
 // both IPv4 and IPv6 interception rules before returning.
-func syncWebAuditDNS(ctx context.Context, ov *ovpn) {
+func syncWebAuditDNS(ctx context.Context, ov *ovpn) error {
 	// Settings saves and fsnotify reloads may arrive together. Serialize the
 	// stop/start pair so they can never leave a listener running without its
 	// matching redirect state.
 	webAuditDNSLifecycleMu.Lock()
 	defer webAuditDNSLifecycleMu.Unlock()
-	stopWebAuditDNS()
+	if err := stopWebAuditDNS(); err != nil {
+		return err
+	}
 	if webAuditEnabled() {
 		startWebAuditDNS(ctx, ov)
 	}
+	return nil
 }
 
 // reconcileWebAuditDNSConfig applies direct config-file edits as well as UI
@@ -324,10 +328,10 @@ func reconcileWebAuditDNSConfig() {
 		status.UDP443BlockEnabled == wantedUDP443Block {
 		return
 	}
-	if !wantedEnabled && run == nil && !status.Enabled {
+	if !wantedEnabled && run == nil && !status.Enabled && status.LastError == "" {
 		return
 	}
-	syncWebAuditDNS(context.Background(), ov)
+	_ = syncWebAuditDNS(context.Background(), ov)
 }
 
 func equalStringSlices(left, right []string) bool {
@@ -351,7 +355,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		webAuditDNS.mu.Unlock()
 	}
 	if !webAuditEnabled() {
-		stopWebAuditDNS()
+		_ = stopWebAuditDNS()
 		return
 	}
 
@@ -573,7 +577,7 @@ func closeWebAuditDNSRun(run *webAuditDNSRun) {
 	}
 }
 
-func stopWebAuditDNS() {
+func stopWebAuditDNS() error {
 	webAuditDNS.mu.Lock()
 	run := webAuditDNS.run
 	webAuditDNS.run = nil
@@ -590,6 +594,7 @@ func stopWebAuditDNS() {
 	webAuditDNS.lastErrorIsForward = false
 	webAuditDNS.recoveryScheduled = false
 	webAuditDNS.startRecoveryScheduled = false
+	webAuditDNS.cleanupRecoveryScheduled = false
 	upstreams := append([]string(nil), webAuditDNS.status.UpstreamDNS...)
 	webAuditDNS.status.Enabled = false
 	webAuditDNS.status.ListenerReady = false
@@ -618,8 +623,39 @@ func stopWebAuditDNS() {
 	closeWebAuditDNSRun(run)
 	// Always remove rules, including rules for the previous DNS servers. Snapshot
 	// them before clearing status so a config change cannot leave old interception.
-	_ = webAuditDNS.ensureRedirectWithUpstreams(false, upstreams)
-	_ = webAuditDNS.ensureEgressBlocks(false)
+	redirectErr := webAuditDNS.ensureRedirectWithUpstreams(false, upstreams)
+	egressErr := webAuditDNS.ensureEgressBlocks(false)
+	if err := firstAuditRuleError(redirectErr, egressErr); err != nil {
+		webAuditDNS.setError(fmt.Errorf("关闭网站审计后清理防火墙规则失败: %w", err))
+		webAuditDNS.scheduleCleanupRecovery()
+		return err
+	}
+	return nil
+}
+
+// scheduleCleanupRecovery keeps retrying disabled-state reconciliation after a
+// transient xtables failure. The service remains stopped and never re-adds a
+// redirect/block rule while this runs; it only converges every backend to empty.
+func (s *webAuditDNSService) scheduleCleanupRecovery() {
+	s.mu.Lock()
+	if s.cleanupRecoveryScheduled || webAuditEnabled() {
+		s.mu.Unlock()
+		return
+	}
+	s.cleanupRecoveryScheduled = true
+	s.mu.Unlock()
+	go func() {
+		time.Sleep(5 * time.Second)
+		webAuditDNSLifecycleMu.Lock()
+		defer webAuditDNSLifecycleMu.Unlock()
+		if !webAuditEnabled() {
+			_ = stopWebAuditDNS()
+			return
+		}
+		s.mu.Lock()
+		s.cleanupRecoveryScheduled = false
+		s.mu.Unlock()
+	}()
 }
 
 func (s *webAuditDNSService) isCurrentRun(run *webAuditDNSRun) bool {
@@ -1399,10 +1435,11 @@ func auditIPTablesCandidates(ipv6 bool) []string {
 	return []string{base + "-legacy", base + "-nft", base}
 }
 
-// availableAuditIPTables returns every usable xtables backend. Rules are only
-// installed into the preferred backend, but cleanup must inspect all backends:
-// an upgrade can leave an old rule in iptables-legacy while iptables-nft is now
-// selected (or the other way around).
+// availableAuditIPTables returns every usable xtables backend. The audit
+// reconciler applies each policy to every independent legacy/nft backend and
+// removes it from every backend again. Containers upgraded across iptables
+// alternatives otherwise end up with split rule state: one backend redirects
+// DNS while another is queried during cleanup.
 func availableAuditIPTables(ipv6 bool, table string) []string {
 	available := make([]string, 0, 3)
 	seen := make(map[string]struct{}, 3)
@@ -1424,18 +1461,6 @@ func availableAuditIPTables(ipv6 bool, table string) []string {
 		available = append(available, binary)
 	}
 	return available
-}
-
-func preferredAuditIPTables(ipv6 bool, table string) (string, error) {
-	available := availableAuditIPTables(ipv6, table)
-	if len(available) > 0 {
-		return available[0], nil
-	}
-	base := "iptables"
-	if ipv6 {
-		base = "ip6tables"
-	}
-	return "", fmt.Errorf("未找到可用的 %s %s 表，网站审计不会操作该协议族规则", base, table)
 }
 
 const (
@@ -1512,27 +1537,54 @@ func auditRuleArgs(line, chain, comment string) ([]string, bool) {
 // signature is handled separately during controlled upgrade cleanup so an
 // unrelated future tun0 DNS redirect is not accidentally removed.
 func auditRedirectRuleArgs(line string) ([]string, bool) {
-	rule, ok := auditRuleArgs(line, "PREROUTING", webAuditRedirectComment)
-	if !ok || auditRuleValue(rule, "-i") != "tun0" || (auditRuleValue(rule, "-p") != "udp" && auditRuleValue(rule, "-p") != "tcp") || auditRuleValue(rule, "--dport") != "53" || auditRuleValue(rule, "-j") != "REDIRECT" || auditRuleValue(rule, "--to-ports") != "5353" {
+	// The comment is this service's ownership marker. During reconciliation,
+	// remove every comment-owned PREROUTING rule, even if an older release used
+	// a slightly different redirect syntax. Restricting cleanup to the current
+	// exact rule shape is what lets stale DNS interception survive upgrades.
+	if rule, ok := auditRuleArgs(line, "PREROUTING", webAuditRedirectComment); ok {
+		return rule, true
+	}
+
+	// v0.1.80 and earlier installed the exact tun0 DNS -> 5353 redirect without
+	// a comment. It must be removed during a live toggle too, not only on the
+	// next container restart. The full legacy signature is intentionally narrow
+	// so unrelated NAT rules are never selected.
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != "-A" || fields[1] != "PREROUTING" {
+		return nil, false
+	}
+	rule := append([]string{"PREROUTING"}, fields[2:]...)
+	// A different explicit comment belongs to another component, even when it
+	// happens to use the same transport/port tuple.
+	if auditRuleValue(rule, "--comment") != "" {
+		return nil, false
+	}
+	proto := auditRuleValue(rule, "-p")
+	if auditRuleValue(rule, "-i") != "tun0" || (proto != "udp" && proto != "tcp") ||
+		auditRuleValue(rule, "--dport") != "53" || auditRuleValue(rule, "-j") != "REDIRECT" ||
+		auditRuleValue(rule, "--to-ports") != "5353" {
 		return nil, false
 	}
 	return rule, true
 }
 
 func auditEgressBlockRuleArgs(line, comment, proto, port string) ([]string, bool) {
-	rule, ok := auditRuleArgs(line, "FORWARD", comment)
-	if !ok || auditRuleValue(rule, "-i") != "tun0" || auditRuleValue(rule, "-p") != proto || auditRuleValue(rule, "--dport") != port || auditRuleValue(rule, "-j") != "REJECT" {
-		return nil, false
-	}
-	return rule, true
+	// As with DNS redirect rules, the unique comment is the ownership boundary.
+	// proto/port are retained at the call site to document the expected policy;
+	// cleanup intentionally accepts every rule with this service-owned comment.
+	return auditRuleArgs(line, "FORWARD", comment)
 }
 
 type auditRuleParser func(string) ([]string, bool)
 
-func discoverAuditRules(ipt, table, chain string, parse auditRuleParser) [][]string {
-	out, err := exec.Command(ipt, "-t", table, "-S", chain).Output()
+func discoverAuditRules(ipt, table, chain string, parse auditRuleParser) ([][]string, error) {
+	out, err := exec.Command(ipt, "-t", table, "-S", chain).CombinedOutput()
 	if err != nil {
-		return nil
+		message := strings.TrimSpace(string(out))
+		if message == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, message)
 	}
 	rules := make([][]string, 0)
 	for _, line := range strings.Split(string(out), "\n") {
@@ -1540,11 +1592,12 @@ func discoverAuditRules(ipt, table, chain string, parse auditRuleParser) [][]str
 			rules = append(rules, rule)
 		}
 	}
-	return rules
+	return rules, nil
 }
 
 func discoverAuditRedirectRules(ipt string) [][]string {
-	return discoverAuditRules(ipt, "nat", "PREROUTING", auditRedirectRuleArgs)
+	rules, _ := discoverAuditRules(ipt, "nat", "PREROUTING", auditRedirectRuleArgs)
+	return rules
 }
 
 func ruleKey(rule []string) string { return strings.Join(rule, "\x00") }
@@ -1603,48 +1656,82 @@ func auditRuleReconciliationPlan(enable bool, desired [][]string) (chain string,
 	return chain, desired
 }
 
-func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
-	chain, desired := auditRuleReconciliationPlan(enable, desired)
-	var iptables []string
-	if enable {
-		ipt, err := preferredAuditIPTables(ipv6, table)
-		if err != nil {
-			return err
-		}
-		// New rules belong to one deterministic backend. Installing them in both
-		// backends could apply NAT/policy twice when a host exposes both tools.
-		iptables = []string{ipt}
-	} else {
-		// Disabled and retired policies must be removed from legacy, nft and the
-		// generic alternatives target; choosing only the preferred command leaves
-		// stale rules active after a backend migration.
-		iptables = availableAuditIPTables(ipv6, table)
+func reconcileAuditRuleBackend(ipt, table, chain string, desired [][]string, parse auditRuleParser) error {
+	current, err := discoverAuditRules(ipt, table, chain, parse)
+	if err != nil {
+		return fmt.Errorf("读取 %s %s 规则失败: %w", ipt, table, err)
 	}
-
-	for _, ipt := range iptables {
-		current := discoverAuditRules(ipt, table, chain, parse)
-		remove, add := reconcileAuditRules(current, desired)
-		for _, rule := range remove {
-			_ = runAuditRuleCommand(ipt, table, "-D", rule)
+	remove, add := reconcileAuditRules(current, desired)
+	var failures []string
+	for _, rule := range remove {
+		if err := runAuditRuleCommand(ipt, table, "-D", rule); err != nil {
+			failures = append(failures, fmt.Sprintf("删除 %s 规则失败: %v", ipt, err))
 		}
-		if !enable {
+	}
+	for _, rule := range add {
+		if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
 			continue
 		}
-		added := make([][]string, 0, len(add))
-		for _, rule := range add {
-			if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
-				continue
-			}
-			if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
-				for _, installed := range added {
-					_ = runAuditRuleCommand(ipt, table, "-D", installed)
-				}
-				return fmt.Errorf("安装 %s 网站审计规则失败: %w", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], err)
-			}
-			added = append(added, rule)
+		if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
+			failures = append(failures, fmt.Sprintf("添加 %s 规则失败: %v", ipt, err))
 		}
 	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+
+	// Verify after every change. A successful command is insufficient when
+	// legacy and nft coexist: a backend can reject a mutation while another
+	// backend continues to carry an active policy.
+	actual, err := discoverAuditRules(ipt, table, chain, parse)
+	if err != nil {
+		return fmt.Errorf("复核 %s %s 规则失败: %w", ipt, table, err)
+	}
+	left, missing := reconcileAuditRules(actual, desired)
+	if len(left) > 0 || len(missing) > 0 {
+		return fmt.Errorf("%s %s 规则未收敛（残留=%d，缺失=%d）", ipt, table, len(left), len(missing))
+	}
 	return nil
+}
+
+func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
+	chain, desired := auditRuleReconciliationPlan(enable, desired)
+	iptables := availableAuditIPTables(ipv6, table)
+	if len(iptables) == 0 {
+		if !enable {
+			// No usable backend means there is no reachable table to contain a
+			// managed rule for this protocol family (common for IPv6 NAT).
+			return nil
+		}
+		base := "iptables"
+		if ipv6 {
+			base = "ip6tables"
+		}
+		return fmt.Errorf("未找到可用的 %s %s 表，网站审计不会操作该协议族规则", base, table)
+	}
+
+	// Reconcile every independent backend on both enable and disable. This is
+	// deliberate: mixed legacy/nft images must never have "enabled in legacy,
+	// disabled in nft" state. The same DNS REDIRECT target / DoT REJECT is
+	// installed consistently, and disabled state is verified as absent in all.
+	var failures []string
+	for _, ipt := range iptables {
+		if err := reconcileAuditRuleBackend(ipt, table, chain, desired, parse); err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+
+	// Fail open if enabling could not converge every backend. Do not leave DNS
+	// interception or egress blocking partly active while reporting it enabled.
+	if enable {
+		for _, ipt := range iptables {
+			_ = reconcileAuditRuleBackend(ipt, table, chain, nil, parse)
+		}
+	}
+	return fmt.Errorf("%s 网站审计规则同步失败: %s", map[bool]string{false: "IPv4", true: "IPv6"}[ipv6], strings.Join(failures, "; "))
 }
 
 func desiredChain(desired [][]string) string {

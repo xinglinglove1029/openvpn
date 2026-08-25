@@ -55,6 +55,54 @@ const THEME_GLOBE_COLORS: Record<ThemeKey, { orbit: string; stars: string; light
 
 const EARTH_TEXTURE_BASE = `${import.meta.env.BASE_URL}maps/earth/`;
 
+type RenderQuality = {
+  antialias: boolean;
+  decoration: boolean;
+  frameInterval: number;
+  globeHeightSegments: number;
+  globeWidthSegments: number;
+  markerSegments: number;
+  maxAnisotropy: number;
+  maxFlightMarkers: number;
+  pixelRatio: number;
+  starCount: number;
+};
+
+// The operations screen can be opened on laptops, thin clients and small
+// management servers. Keep the rich experience on capable devices while
+// avoiding a 4K/60 FPS renderer on 1-core / 2 GB installations.
+function getRenderQuality(): RenderQuality {
+  const device = navigator as Navigator & { deviceMemory?: number };
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  const constrained = reducedMotion || (device.hardwareConcurrency ?? 4) <= 2 || (device.deviceMemory ?? 4) <= 2;
+
+  return constrained
+    ? {
+        antialias: false,
+        decoration: false,
+        frameInterval: 1000 / 24,
+        globeHeightSegments: 32,
+        globeWidthSegments: 48,
+        markerSegments: 12,
+        maxAnisotropy: 1,
+        maxFlightMarkers: 3,
+        pixelRatio: 1,
+        starCount: 160,
+      }
+    : {
+        antialias: true,
+        decoration: true,
+        frameInterval: 1000 / 30,
+        globeHeightSegments: 48,
+        globeWidthSegments: 72,
+        markerSegments: 16,
+        maxAnisotropy: 4,
+        maxFlightMarkers: 6,
+        pixelRatio: 1.25,
+        starCount: 360,
+      };
+}
+
 type CountryLabel = GeoGlobeCountry;
 
 // Country labels are intentionally limited to large and commonly recognised
@@ -207,14 +255,20 @@ export function InteractiveGeoGlobe({
           const scene = new THREE.Scene();
           const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
           const defaultZoom = view === 'china' ? 4.25 : 4.7;
-          camera.position.set(0, 0.05, defaultZoom);
+          const sceneCenter = new THREE.Vector3(0, 0, 0);
+          const quality = getRenderQuality();
+          camera.position.set(0, 0, defaultZoom);
+          camera.lookAt(sceneCenter);
 
           const renderer = new THREE.WebGLRenderer({
             alpha: true,
-            antialias: true,
-            powerPreference: 'high-performance',
+            antialias: quality.antialias,
+            // A low-power context is friendlier to integrated GPUs and avoids
+            // contending with the OpenVPN server on small deployments.
+            powerPreference: quality.decoration ? 'high-performance' : 'low-power',
           });
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          renderer.domElement.className = 'geo-globe-canvas';
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatio));
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           renderer.setClearColor(0x000000, 0);
           mount.appendChild(renderer.domElement);
@@ -225,87 +279,97 @@ export function InteractiveGeoGlobe({
           const globe = new THREE.Group();
           scene.add(globe);
 
-          // The dashboard keeps Earth imagery in the application bundle rather than
-          // depending on an external tile service. This uses the same public texture
-          // set as the Three.js Earth example, while remaining WebGL compatible.
+          // 1024px equirectangular assets are deliberately used here. The globe
+          // is displayed in a ~500px panel, so 4K maps only consumed GPU memory
+          // (roughly 64 MB per decoded texture) without a visible benefit.
           const textureLoader = new THREE.TextureLoader();
           const configureTexture = (texture: import('three').Texture, srgb = false) => {
             if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
-            texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+            texture.anisotropy = Math.min(quality.maxAnisotropy, renderer.capabilities.getMaxAnisotropy());
             texture.wrapS = THREE.ClampToEdgeWrapping;
             texture.wrapT = THREE.ClampToEdgeWrapping;
             return texture;
           };
-          const earthDayTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_day_4096.jpg`), true);
-          const earthNightTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_night_4096.jpg`), true);
-          const earthBumpTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_bump_roughness_clouds_4096.jpg`));
-
+          const earthDayTexture = configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_day_1024.jpg`), true);
+          const earthNightTexture = quality.decoration
+            ? configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_night_1024.jpg`), true)
+            : null;
+          const earthBumpTexture = quality.decoration
+            ? configureTexture(textureLoader.load(`${EARTH_TEXTURE_BASE}earth_bump_roughness_clouds_1024.jpg`))
+            : null;
+          const surfaceMaterial = quality.decoration
+            ? new THREE.MeshPhongMaterial({
+                map: earthDayTexture,
+                bumpMap: earthBumpTexture,
+                bumpScale: 0.038,
+                specularMap: earthBumpTexture,
+                specular: new THREE.Color('#35506d'),
+                shininess: 7,
+                emissiveMap: earthNightTexture,
+                emissive: new THREE.Color('#18233f'),
+                emissiveIntensity: 0.34,
+              })
+            : new THREE.MeshBasicMaterial({ map: earthDayTexture });
           const surface = new THREE.Mesh(
-            new THREE.SphereGeometry(1.42, 128, 128),
-            new THREE.MeshPhongMaterial({
-              map: earthDayTexture,
-              bumpMap: earthBumpTexture,
-              bumpScale: 0.038,
-              specularMap: earthBumpTexture,
-              specular: new THREE.Color('#35506d'),
-              shininess: 7,
-              emissiveMap: earthNightTexture,
-              emissive: new THREE.Color('#18233f'),
-              emissiveIntensity: 0.34,
-            })
+            new THREE.SphereGeometry(1.42, quality.globeWidthSegments, quality.globeHeightSegments),
+            surfaceMaterial
           );
           surface.rotation.y = Math.PI;
           globe.add(surface);
 
           // Keep the operations-console grid as a quiet overlay; it must not obscure
           // the terrain texture or turn the globe back into a synthetic wireframe.
-          const grid = new THREE.Mesh(
-            new THREE.SphereGeometry(1.435, 38, 24),
-            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.055, wireframe: true, depthWrite: false })
-          );
-          grid.rotation.y = Math.PI;
-          globe.add(grid);
+          if (quality.decoration) {
+            const grid = new THREE.Mesh(
+              new THREE.SphereGeometry(1.435, 38, 24),
+              new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.055, wireframe: true, depthWrite: false })
+            );
+            grid.rotation.y = Math.PI;
+            globe.add(grid);
+          }
 
-          // Keep a restrained atmospheric rim. The previous large back-face
-          // sphere produced an obvious turquoise outer ring around the Earth,
-          // so it is deliberately omitted in favour of the real surface texture.
-
-          const scanRing = new THREE.Mesh(
-            new THREE.TorusGeometry(1.61, 0.009, 10, 132),
-            new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false })
-          );
-          scanRing.rotation.x = Math.PI / 2;
-          globe.add(scanRing);
+          // Decorative scan rings are skipped on constrained devices. The
+          // textured surface and interactive markers remain available.
+          if (quality.decoration) {
+            const scanRing = new THREE.Mesh(
+              new THREE.TorusGeometry(1.61, 0.009, 10, 96),
+              new THREE.MeshBasicMaterial({ color: accentLight, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false })
+            );
+            scanRing.rotation.x = Math.PI / 2;
+            globe.add(scanRing);
+          }
 
           const orbitGroup = new THREE.Group();
           const orbitOne = new THREE.Mesh(
-            new THREE.TorusGeometry(1.92, 0.008, 10, 180),
+            new THREE.TorusGeometry(1.92, 0.008, 8, quality.decoration ? 132 : 72),
             new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.45 })
           );
           orbitOne.rotation.x = Math.PI / 2.25;
           orbitGroup.add(orbitOne);
-          const orbitTwo = new THREE.Mesh(
-            new THREE.TorusGeometry(2.26, 0.006, 10, 180),
-            new THREE.MeshBasicMaterial({ color: palette.orbit, transparent: true, opacity: 0.22 })
-          );
-          orbitTwo.rotation.x = Math.PI / 2.8;
-          orbitTwo.rotation.z = 0.55;
-          orbitGroup.add(orbitTwo);
-          const satellite = new THREE.Group();
-          const satelliteCore = new THREE.Mesh(
-            new THREE.IcosahedronGeometry(0.052, 1),
-            new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95 })
-          );
-          const solarPanel = new THREE.Mesh(
-            new THREE.BoxGeometry(0.16, 0.012, 0.06),
-            new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.88 })
-          );
-          satellite.add(satelliteCore, solarPanel);
-          orbitGroup.add(satellite);
+          if (quality.decoration) {
+            const orbitTwo = new THREE.Mesh(
+              new THREE.TorusGeometry(2.26, 0.006, 8, 132),
+              new THREE.MeshBasicMaterial({ color: palette.orbit, transparent: true, opacity: 0.22 })
+            );
+            orbitTwo.rotation.x = Math.PI / 2.8;
+            orbitTwo.rotation.z = 0.55;
+            orbitGroup.add(orbitTwo);
+            const satellite = new THREE.Group();
+            const satelliteCore = new THREE.Mesh(
+              new THREE.IcosahedronGeometry(0.052, 1),
+              new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95 })
+            );
+            const solarPanel = new THREE.Mesh(
+              new THREE.BoxGeometry(0.16, 0.012, 0.06),
+              new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.88 })
+            );
+            satellite.add(satelliteCore, solarPanel);
+            orbitGroup.add(satellite);
+          }
           scene.add(orbitGroup);
 
-          const stars = new Float32Array(760 * 3);
-          for (let index = 0; index < 760; index += 1) {
+          const stars = new Float32Array(quality.starCount * 3);
+          for (let index = 0; index < quality.starCount; index += 1) {
             const radius = 2.55 + Math.random() * 2.35;
             const phi = Math.acos(2 * Math.random() - 1);
             const theta = Math.random() * Math.PI * 2;
@@ -359,7 +423,7 @@ export function InteractiveGeoGlobe({
           // Curved data links and moving signal particles make the global view
           // readable as a live network rather than a static collection of pins.
           const flightParticles: Array<{ curve: import('three').CatmullRomCurve3; particle: import('three').Mesh; speed: number; offset: number }> = [];
-          const flightMarkers = [...markers].sort((a, b) => b.count - a.count).slice(0, 7);
+          const flightMarkers = [...markers].sort((a, b) => b.count - a.count).slice(0, quality.maxFlightMarkers);
           if (flightMarkers.length > 1) {
             const hub = flightMarkers[0];
             flightMarkers.slice(1).forEach((marker, index) => {
@@ -369,12 +433,12 @@ export function InteractiveGeoGlobe({
               const midpoint = start.clone().add(end).normalize().multiplyScalar(1.72 + Math.min(0.2, start.distanceTo(end) * 0.06));
               const curve = new THREE.CatmullRomCurve3([start, midpoint, end]);
               const path = new THREE.Line(
-                new THREE.BufferGeometry().setFromPoints(curve.getPoints(46)),
+                new THREE.BufferGeometry().setFromPoints(curve.getPoints(quality.decoration ? 34 : 20)),
                 new THREE.LineBasicMaterial({ color: accentLight, transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false })
               );
               globe.add(path);
               const particle = new THREE.Mesh(
-                new THREE.SphereGeometry(0.018, 10, 10),
+                new THREE.SphereGeometry(0.018, quality.markerSegments, quality.markerSegments),
                 new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending })
               );
               globe.add(particle);
@@ -406,7 +470,7 @@ export function InteractiveGeoGlobe({
               new THREE.LineBasicMaterial({ color: accent, transparent: true, opacity: 0.76 })
             );
             const halo = new THREE.Mesh(
-              new THREE.RingGeometry(size * 0.95, size * 1.42, 28),
+              new THREE.RingGeometry(size * 0.95, size * 1.42, quality.markerSegments * 2),
               new THREE.MeshBasicMaterial({
                 color: accent,
                 transparent: true,
@@ -417,12 +481,12 @@ export function InteractiveGeoGlobe({
             );
             halo.position.z = 0.012;
             const core = new THREE.Mesh(
-              new THREE.SphereGeometry(size * 0.55, 18, 18),
+              new THREE.SphereGeometry(size * 0.55, quality.markerSegments, quality.markerSegments),
               new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.98 })
             );
             core.position.z = 0.15 + size;
             const beacon = new THREE.Mesh(
-              new THREE.SphereGeometry(size * 0.24, 16, 16),
+              new THREE.SphereGeometry(size * 0.24, quality.markerSegments, quality.markerSegments),
               new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.98 })
             );
             beacon.position.z = 0.15 + size;
@@ -444,6 +508,10 @@ export function InteractiveGeoGlobe({
           const raycaster = new THREE.Raycaster();
           const pointer = new THREE.Vector2();
           let animationFrame = 0;
+          let resizeFrame = 0;
+          let lastRenderAt = 0;
+          let lastWidth = 0;
+          let lastHeight = 0;
           let dragging = false;
           let pointerStart = { x: 0, y: 0 };
           let lastPointer = { x: 0, y: 0 };
@@ -481,12 +549,28 @@ export function InteractiveGeoGlobe({
             pauseUntil = performance.now() + 1600;
           };
 
+          // Use the actual painted box instead of a fixed fallback. Safari can
+          // initialise ResizeObserver before a flex/grid item receives its final
+          // width; stretching that first backing buffer is what caused the globe
+          // to appear off-centre on macOS.
           const resize = () => {
-            const width = mount.clientWidth || 420;
-            const height = mount.clientHeight || 330;
+            resizeFrame = 0;
+            const rect = mount.getBoundingClientRect();
+            const width = Math.max(1, Math.round(rect.width));
+            const height = Math.max(1, Math.round(rect.height));
+            if (width === lastWidth && height === lastHeight) return;
+            lastWidth = width;
+            lastHeight = height;
             renderer.setSize(width, height, false);
+            renderer.domElement.style.width = `${width}px`;
+            renderer.domElement.style.height = `${height}px`;
             camera.aspect = width / height;
             camera.updateProjectionMatrix();
+            camera.lookAt(sceneCenter);
+          };
+          const scheduleResize = () => {
+            if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+            resizeFrame = window.requestAnimationFrame(resize);
           };
 
           const setRayPointer = (event: PointerEvent) => {
@@ -546,7 +630,7 @@ export function InteractiveGeoGlobe({
             pauseUntil = performance.now() + 1600;
           };
 
-          const observer = new ResizeObserver(resize);
+          const observer = new ResizeObserver(scheduleResize);
           observer.observe(mount);
           mount.addEventListener('pointerdown', handlePointerDown);
           mount.addEventListener('pointermove', handlePointerMove);
@@ -555,20 +639,28 @@ export function InteractiveGeoGlobe({
           mount.addEventListener('wheel', handleWheel, { passive: false });
           mount.addEventListener('keydown', handleKeyDown);
           resize();
+          // Recheck after the browser completes flex/grid layout. This makes the
+          // canvas centring deterministic after Safari fullscreen/toolbar changes.
+          scheduleResize();
 
-          const animate = () => {
-            animationFrame = window.requestAnimationFrame(animate);
-            const now = performance.now();
+          const animate = (now: number) => {
+            animationFrame = 0;
+            if (disposed || document.hidden) return;
+            if (now - lastRenderAt < quality.frameInterval) {
+              animationFrame = window.requestAnimationFrame(animate);
+              return;
+            }
+            lastRenderAt = now;
             const elapsed = now * 0.001;
-            if (!dragging && !motionPausedRef.current && !reducedMotion && now > pauseUntil) targetY += 0.0019;
+            if (!dragging && !motionPausedRef.current && !reducedMotion && now > pauseUntil) targetY += quality.decoration ? 0.0019 : 0.00125;
             globe.rotation.x += (targetX - globe.rotation.x) * 0.08;
             globe.rotation.y += (targetY - globe.rotation.y) * 0.08;
             currentZoom += (targetZoom - currentZoom) * 0.1;
             camera.position.z = currentZoom;
-            camera.lookAt(0, 0, 0);
-            orbitGroup.rotation.z = elapsed * 0.12;
-            orbitGroup.rotation.y = elapsed * 0.05;
-            starField.rotation.y = -elapsed * 0.018;
+            camera.lookAt(sceneCenter);
+            orbitGroup.rotation.z = elapsed * (quality.decoration ? 0.12 : 0.055);
+            orbitGroup.rotation.y = elapsed * (quality.decoration ? 0.05 : 0.025);
+            starField.rotation.y = -elapsed * 0.012;
             globe.getWorldPosition(globeWorldPosition);
             countryLabelSprites.forEach((sprite) => {
               sprite.getWorldPosition(labelWorldPosition);
@@ -588,11 +680,24 @@ export function InteractiveGeoGlobe({
               (halo.material as import('three').MeshBasicMaterial).opacity = marker.id === selectedId ? 0.7 : 0.34;
             });
             renderer.render(scene, camera);
+            animationFrame = window.requestAnimationFrame(animate);
           };
-          animate();
+          const handleVisibilityChange = () => {
+            if (document.hidden) {
+              if (animationFrame) window.cancelAnimationFrame(animationFrame);
+              animationFrame = 0;
+              return;
+            }
+            lastRenderAt = 0;
+            if (!animationFrame) animationFrame = window.requestAnimationFrame(animate);
+          };
+          document.addEventListener('visibilitychange', handleVisibilityChange);
+          if (!document.hidden) animationFrame = window.requestAnimationFrame(animate);
 
           cleanup = () => {
             window.cancelAnimationFrame(animationFrame);
+            window.cancelAnimationFrame(resizeFrame);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             observer.disconnect();
             mount.removeEventListener('pointerdown', handlePointerDown);
             mount.removeEventListener('pointermove', handlePointerMove);
@@ -611,8 +716,8 @@ export function InteractiveGeoGlobe({
             countryLabelTextures.forEach((texture) => texture.dispose());
             markerLabelTextures.forEach((texture) => texture.dispose());
             earthDayTexture.dispose();
-            earthNightTexture.dispose();
-            earthBumpTexture.dispose();
+            earthNightTexture?.dispose();
+            earthBumpTexture?.dispose();
             renderer.dispose();
             renderer.domElement.remove();
           };
