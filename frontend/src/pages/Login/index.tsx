@@ -273,6 +273,7 @@ export default function LoginPage() {
                       clearError('username');
                     }}
                     placeholder="请输入 OpenVPN 管理账号"
+                    autoComplete="username"
                     autoFocus
                     aria-invalid={errors.username ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))]"
@@ -298,6 +299,7 @@ export default function LoginPage() {
                       clearError('password');
                     }}
                     placeholder="请输入登录密码"
+                    autoComplete="current-password"
                     aria-invalid={errors.password ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] focus:border-[color-mix(in_srgb,var(--accent)_64%,var(--login-input-border))] pr-12"
                   />
@@ -353,6 +355,8 @@ export default function LoginPage() {
                       clearError('passcode');
                     }}
                     placeholder="请输入 6 位动态验证码"
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
                     autoFocus
                     aria-invalid={errors.passcode ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)]"
@@ -402,6 +406,7 @@ export default function LoginPage() {
                       clearError('newPassword');
                     }}
                     placeholder="至少 12 位强密码"
+                    autoComplete="new-password"
                     autoFocus
                     aria-invalid={errors.newPassword ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-12"
@@ -436,6 +441,7 @@ export default function LoginPage() {
                       clearError('newPasswordAgain');
                     }}
                     placeholder="请再次输入新密码"
+                    autoComplete="new-password"
                     aria-invalid={errors.newPasswordAgain ? 'true' : undefined}
                     className="h-[46px] rounded-lg bg-[var(--login-input-bg)] border-[var(--login-input-border)] text-[var(--login-heading-text)] placeholder:text-[var(--login-placeholder-text)] focus:bg-[var(--login-input-focus-bg)] pr-12"
                   />

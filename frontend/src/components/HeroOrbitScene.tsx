@@ -2,25 +2,26 @@ import { useEffect, useRef } from 'react';
 
 export function HeroOrbitScene() {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return;
+    const canvas = canvasRef.current;
+    if (!mount || !canvas) return;
 
     let cleanup: (() => void) | undefined;
     let disposed = false;
 
     import('three').then((THREE) => {
-      if (disposed || !mountRef.current) return;
+      if (disposed || mountRef.current !== mount || canvasRef.current !== canvas) return;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
     camera.position.set(0, 0.15, 5.6);
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    mount.appendChild(renderer.domElement);
 
     const rootStyles = getComputedStyle(document.documentElement);
     const accent = new THREE.Color(rootStyles.getPropertyValue('--accent').trim() || '#6df3ff');
@@ -107,7 +108,6 @@ export function HeroOrbitScene() {
       window.cancelAnimationFrame(animationFrame);
       window.removeEventListener('resize', resize);
       mount.removeEventListener('pointermove', handlePointerMove);
-      if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
       planet.geometry.dispose();
       atmosphere.geometry.dispose();
       innerOrbit.geometry.dispose();
@@ -128,5 +128,9 @@ export function HeroOrbitScene() {
     };
   }, []);
 
-  return <div className="hero-orbit-scene" ref={mountRef} />;
+  return (
+    <div className="hero-orbit-scene" ref={mountRef}>
+      <canvas ref={canvasRef} />
+    </div>
+  );
 }

@@ -221,6 +221,7 @@ export function InteractiveGeoGlobe({
 }: InteractiveGeoGlobeProps) {
   const { theme } = useTheme();
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controlsRef = useRef<((command: GlobeCommand) => void) | null>(null);
   const motionPausedRef = useRef(false);
   const [motionPaused, setMotionPaused] = useState(false);
@@ -241,7 +242,8 @@ export function InteractiveGeoGlobe({
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return;
+    const canvas = canvasRef.current;
+    if (!mount || !canvas) return;
 
     let disposed = false;
     let cleanup: (() => void) | undefined;
@@ -249,7 +251,7 @@ export function InteractiveGeoGlobe({
 
     import('three')
       .then((THREE) => {
-        if (disposed || mountRef.current !== mount) return;
+        if (disposed || mountRef.current !== mount || canvasRef.current !== canvas) return;
 
         try {
           const scene = new THREE.Scene();
@@ -261,17 +263,16 @@ export function InteractiveGeoGlobe({
           camera.lookAt(sceneCenter);
 
           const renderer = new THREE.WebGLRenderer({
+            canvas,
             alpha: true,
             antialias: quality.antialias,
             // A low-power context is friendlier to integrated GPUs and avoids
             // contending with the OpenVPN server on small deployments.
             powerPreference: quality.decoration ? 'high-performance' : 'low-power',
           });
-          renderer.domElement.className = 'geo-globe-canvas';
           renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality.pixelRatio));
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           renderer.setClearColor(0x000000, 0);
-          mount.appendChild(renderer.domElement);
 
           const palette = THEME_GLOBE_COLORS[theme];
           const accent = new THREE.Color(TONE_COLORS[tone]);
@@ -719,7 +720,6 @@ export function InteractiveGeoGlobe({
             earthNightTexture?.dispose();
             earthBumpTexture?.dispose();
             renderer.dispose();
-            renderer.domElement.remove();
           };
         } catch (error) {
           if (!disposed) {
@@ -759,7 +759,9 @@ export function InteractiveGeoGlobe({
           'absolute inset-0 cursor-grab touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset active:cursor-grabbing',
           renderError && 'pointer-events-none cursor-default'
         )}
-      />
+      >
+        <canvas ref={canvasRef} className="geo-globe-canvas" />
+      </div>
 
       {renderError ? (
         <div className="absolute inset-0 z-10 grid place-items-center px-8 text-center" role="alert">

@@ -4,19 +4,21 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 
 export function BackgroundScene() {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMobile = useIsMobile();
 
   useEffect(() => {
     if (isMobile) return;
 
     const mount = mountRef.current;
-    if (!mount) return;
+    const canvas = canvasRef.current;
+    if (!mount || !canvas) return;
 
     let cleanup: (() => void) | undefined;
     let disposed = false;
 
     import('three').then((THREE) => {
-      if (disposed || !mountRef.current) return;
+      if (disposed || mountRef.current !== mount || canvasRef.current !== canvas) return;
 
       const rootStyles = getComputedStyle(document.documentElement);
       const accent = new THREE.Color(rootStyles.getPropertyValue('--accent').trim() || '#6df3ff');
@@ -28,10 +30,9 @@ export function BackgroundScene() {
       camera.position.set(0, 0.6, 9);
       camera.lookAt(0, 0, 0);
 
-      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
-      mount.appendChild(renderer.domElement);
 
       // ---- 粒子：分两层，远近错落
       function buildPoints(count: number, spread: number, size: number, color: THREE.Color, opacity: number) {
@@ -159,7 +160,6 @@ export function BackgroundScene() {
         window.cancelAnimationFrame(animationFrame);
         window.removeEventListener('resize', resize);
         window.removeEventListener('pointermove', handlePointerMove);
-        if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
 
         [farLayer, nearLayer].forEach((layer) => {
           layer.geometry.dispose();
@@ -195,5 +195,9 @@ export function BackgroundScene() {
     );
   }
 
-  return <div className="app-bg-scene" ref={mountRef} aria-hidden="true" />;
+  return (
+    <div className="app-bg-scene" ref={mountRef} aria-hidden="true">
+      <canvas ref={canvasRef} />
+    </div>
+  );
 }
