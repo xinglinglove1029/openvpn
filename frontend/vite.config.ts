@@ -95,6 +95,34 @@ export default defineConfig(({ command }) => ({
         // operations dashboard (Three.js, globe textures and geographic maps) is
         // never downloaded unless the feature is enabled and /screen is opened.
         codeSplitting: true,
+        // app.js is intentionally a stable server-template entry. Never let a
+        // lazy route import runtime code back from it: nested imports do not carry
+        // the template cache-busting query string and can therefore resolve an old
+        // cached app.js after an upgrade. Shared runtime modules must live in
+        // content-hashed chunks instead.
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/');
+          if (normalized.includes('/node_modules/')) {
+            if (
+              normalized.includes('/node_modules/react/') ||
+              normalized.includes('/node_modules/react-dom/') ||
+              normalized.includes('/node_modules/scheduler/') ||
+              normalized.includes('/node_modules/use-sync-external-store/')
+            ) {
+              return 'runtime-react';
+            }
+            if (normalized.includes('/node_modules/react-router/')) {
+              return 'runtime-router';
+            }
+            if (normalized.includes('/node_modules/react-router-dom/')) {
+              return 'runtime-router-dom';
+            }
+            if (normalized.includes('/node_modules/sonner/')) {
+              return 'runtime-sonner';
+            }
+          }
+          if (normalized.endsWith('/src/store/auth.tsx')) return 'runtime-auth';
+        },
         entryFileNames: 'assets/app.js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: (assetInfo) => {
