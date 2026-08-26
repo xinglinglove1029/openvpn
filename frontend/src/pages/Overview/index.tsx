@@ -302,7 +302,7 @@ export default function OverviewPage() {
               {executiveDashboardEnabled && (
                 <Button type="button" variant="outline" className="shrink-0" onClick={() => navigate('/screen')}>
                   <MonitorUp className="mr-2 h-4 w-4" />
-                  打开运营大屏
+                  运营大屏
                 </Button>
               )}
             </div>
