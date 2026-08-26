@@ -391,10 +391,6 @@ func (u *User) Login(clogin bool) error {
 				}
 			}
 
-			if u.IpAddr != "" {
-				os.WriteFile(path.Join(ovData, ".ovip"), []byte(u.IpAddr), 0644)
-			}
-
 			var ovconfig sql.NullString
 			// 跨方言：不使用 GROUP_CONCAT（MySQL 语法不同、PostgreSQL 无此函数），
 			// 改为取出分组链上的全部 config，在 Go 侧按行替换 \n 并拼接
@@ -431,8 +427,12 @@ func (u *User) Login(clogin bool) error {
 				ovconfig = sql.NullString{String: strings.Join(parts, "\n"), Valid: true}
 			}
 
+			options := ""
 			if ovconfig.Valid {
-				os.WriteFile(path.Join(ovData, ".ovc"), []byte(ovconfig.String), 0644)
+				options = ovconfig.String
+			}
+			if err := writeClientConnectOptions(u.Username, commonName, u.IpAddr, options); err != nil {
+				return fmt.Errorf("prepare client connection options: %w", err)
 			}
 		}
 

@@ -367,6 +367,37 @@ check_config() {
 	grep -q "^learn-address" $config || echo "learn-address $OPENVPN_WEB_ENTRYPOINT" >>$config
 }
 
+separate_static_ipv4_address_pool() {
+	config="$OVPN_DATA/server.conf"
+	[ -f "$config" ] || return 0
+
+	# The --server helper allocates the complete subnet (.2-.253 for a /24).
+	# A fixed ifconfig-push address inside that pool can therefore be handed to
+	# an unrelated dynamic client at the same time. Replace the unchanged legacy
+	# /24 helper form with its explicit equivalent and reserve .2-.127 for
+	# per-user fixed addresses; dynamic clients receive .128-.253.
+	local subnet base legacy_line tmp
+	subnet=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
+	[[ "$subnet" =~ ^([0-9]{1,3}\.){3}0/24$ ]] || return 0
+	base="${subnet%.*}"
+	legacy_line="server $(getsubnet "$subnet")"
+	grep -Fqx "$legacy_line" "$config" || return 0
+
+	tmp=$(mktemp "${config}.pool.XXXXXX") || return 1
+	awk -v old="$legacy_line" -v base="$base" '
+		$0 == old {
+			print "mode server"
+			print "ifconfig " base ".1 255.255.255.0"
+			print "ifconfig-pool " base ".128 " base ".253 255.255.255.0"
+			print "route " base ".0 255.255.255.0"
+			print "push \"route-gateway " base ".1\""
+			next
+		}
+		{ print }
+	' "$config" >"$tmp" && mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
+	echo "[OPENVPN-CONFIG] reserved ${base}.2-${base}.127 for fixed client IPs; dynamic pool is ${base}.128-${base}.253" >&2
+}
+
 add_history() {
 	#https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html#environmental-variables
 	set +e
@@ -393,29 +424,23 @@ send_notify() {
 }
 
 
-set_ovip() {
-	cc_file="$1"
-	ip_file="$ovpn_data/.ovip"
-
-	if [ -f "$ip_file" ]; then
-		ipaddr=$(cat $ip_file)
-		if [ -n "$ipaddr" ]; then
-			echo "ifconfig-push $ipaddr $ifconfig_netmask" >$cc_file
-			rm -rf $ip_file
-		fi
-	fi
+client_option_key() {
+	# Keep this hash input in sync with clientConnectOptionsPath in Go. A NUL
+	# separator prevents identities such as (ab, c) and (a, bc) from colliding.
+	printf '%s\0%s' "${username:-}" "${common_name:-}" | sha256sum | awk '{print $1}'
 }
 
-set_ovconfig() {
+apply_authenticated_client_options() {
 	cc_file="$1"
-	ovc_file="$ovpn_data/.ovc"
+	options_dir="$ovpn_data/.client-connect-options"
+	key=$(client_option_key)
+	options_file="$options_dir/$key.conf"
 
-	if [ -f "$ovc_file" ]; then
-		ovconfig=$(cat $ovc_file)
-		if [ -n "$ovconfig" ]; then
-			echo "$ovconfig" >>$cc_file
-			rm -rf $ovc_file
-		fi
+	# Authentication stores its result per identity. Do not consume/delete it:
+	# a user may reconnect or open multiple sessions, and global .ovip/.ovc
+	# files previously let concurrent logins assign one user's options to another.
+	if [ -f "$options_file" ]; then
+		cat "$options_file" >>"$cc_file"
 	fi
 }
 
@@ -550,6 +575,13 @@ case $1 in
 		init_config
 	fi
 
+	# Versions before v0.1.92 used global files for authentication results.
+	# They can survive an image upgrade and would incorrectly affect the first
+	# connection if any old hook/script is still present, so remove them here.
+	rm -f "$OVPN_DATA/.ovip" "$OVPN_DATA/.ovc"
+	install -d -m 0700 "$OVPN_DATA/.client-connect-options"
+
+	separate_static_ipv4_address_pool
 	load_nftconfig
 	check_config
 	run_server
