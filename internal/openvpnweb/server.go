@@ -1308,6 +1308,13 @@ func Run(info BuildInfo) {
 		public.GET("/ai-status", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"enabled": isAIEnabled(db)})
 		})
+
+		// This intentionally exposes only a feature flag, not system settings. It
+		// lets every logged-in role hide the operations-screen entry without
+		// requiring settings:base permission or loading the 3D page first.
+		public.GET("/features", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"executiveDashboardEnabled": executiveDashboardEnabled()})
+		})
 	}
 
 	r.Use(AuthMiddleWare())
@@ -1359,11 +1366,11 @@ func Run(info BuildInfo) {
 	{
 		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
-		ovpn.GET("/dashboard/traffic-users", RequirePermission("menu:overview"), ov.dashboardTrafficUsers)
-		ovpn.GET("/dashboard/geo-map", RequirePermission("menu:overview"), ov.dashboardGeo)
-		ovpn.GET("/dashboard/geo-map/ips", RequirePermission("menu:overview"), ov.dashboardGeoIPs)
-		ovpn.GET("/dashboard/geo-boundary/:iso3/:level", RequirePermission("menu:overview"), ov.dashboardGeoBoundary)
-		ovpn.GET("/dashboard/china-boundary/:adcode", RequirePermission("menu:overview"), ov.dashboardChinaBoundary)
+		ovpn.GET("/dashboard/traffic-users", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardTrafficUsers)
+		ovpn.GET("/dashboard/geo-map", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardGeo)
+		ovpn.GET("/dashboard/geo-map/ips", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardGeoIPs)
+		ovpn.GET("/dashboard/geo-boundary/:iso3/:level", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardGeoBoundary)
+		ovpn.GET("/dashboard/china-boundary/:adcode", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardChinaBoundary)
 		ovpn.GET("/system-stats/history", RequirePermission("menu:overview"), func(c *gin.Context) {
 			history, latest := GetSystemStatsHistory()
 			c.JSON(http.StatusOK, gin.H{
@@ -1477,8 +1484,14 @@ func Run(info BuildInfo) {
 			}
 
 			savedCount := 0 // 记录实际保存的字段数
+			// Keep every in-memory value so a web-audit firewall sync timeout can
+			// roll back the requested target before this handler returns an error.
+			// A failed rule convergence must never silently become the new runtime
+			// configuration or be persisted for the next container restart.
+			previousSettingValues := make(map[string]interface{})
 			webAuditConfigChanged := false
 			suricataEVEConfigChanged := false
+			executiveDashboardConfigChanged := false
 			if c.PostForm("system.base.suricata_eve_enabled") == "true" {
 				path := c.PostForm("system.base.suricata_eve_path")
 				if path == "" {
@@ -1505,6 +1518,9 @@ func Run(info BuildInfo) {
 					continue
 				}
 
+				if _, captured := previousSettingValues[k]; !captured {
+					previousSettingValues[k] = viper.Get(k)
+				}
 				savedCount++
 				if strings.HasPrefix(k, "system.base.web_audit_") {
 					// All domain-audit policies share one lifecycle so a live change
@@ -1513,6 +1529,9 @@ func Run(info BuildInfo) {
 				}
 				if strings.HasPrefix(k, "system.base.suricata_eve_") {
 					suricataEVEConfigChanged = true
+				}
+				if k == "system.base.executive_dashboard_enabled" {
+					executiveDashboardConfigChanged = true
 				}
 				val := vs[0]
 
@@ -1606,22 +1625,52 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			if err := viper.WriteConfig(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
+			restoreRuntimeSettings := func() {
+				for key, previous := range previousSettingValues {
+					viper.Set(key, previous)
+				}
 			}
 
-			// Domain-audit settings are hot-reloaded after persistence succeeds. Disabling
-			// removes every feature-owned DNS/DoT rule and any legacy QUIC rule before returning; enabling
-			// binds DNS listeners to tun0 before any DNS redirect is installed.
+			// Firewall convergence precedes persistence. The settings page keeps its
+			// loading state and receives success only
+			// after every web-audit rule has actually converged. On failure restore
+			// the old runtime target and its rule state rather than reporting the
+			// misleading half-success that older versions returned.
 			if webAuditConfigChanged {
+				// Do not bind the convergence transaction to the client connection. A
+				// reverse proxy or a briefly interrupted browser connection must not
+				// cancel a half-finished firewall transition and leave legacy/nft
+				// tables inconsistent. The UI naturally remains in its loading state
+				// until this call returns; this call returns only after all owned
+				// IPv4/IPv6 legacy/nft rules have been verified as converged.
 				if err := syncWebAuditDNS(context.Background(), &ov); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": "设置已保存，但网站审计防火墙规则未完全同步：" + err.Error()})
+					// Background synchronization retries indefinitely for operational
+					// errors, so this branch is only defensive (for example, if a
+					// future implementation adds a terminal validation error). Keep
+					// the former configuration and never persist a partial transition.
+					restoreRuntimeSettings()
+					_ = syncWebAuditDNS(context.Background(), &ov)
+					c.JSON(http.StatusInternalServerError, gin.H{"message": "网站审计防火墙规则同步失败，设置未生效：" + err.Error()})
 					return
 				}
 			}
+
+			if err := viper.WriteConfig(); err != nil {
+				if webAuditConfigChanged {
+					restoreRuntimeSettings()
+					_ = syncWebAuditDNS(context.Background(), &ov)
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "设置未保存：" + err.Error()})
+				return
+			}
+
 			if suricataEVEConfigChanged {
 				suricataEVE.reconcile()
+			}
+			if executiveDashboardConfigChanged && executiveDashboardEnabled() {
+				// The traffic sampler is dashboard-specific and may not exist on a
+				// low-spec first start. Start it only after an explicit enable.
+				StartExecutiveDashboardTrafficSampler(&ov)
 			}
 
 			c.JSON(http.StatusOK, gin.H{"message": "更新成功"})

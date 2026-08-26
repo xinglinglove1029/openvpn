@@ -65,7 +65,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed = false }: SidebarProps) {
   const location = useLocation();
-  const { hasPermission, permissionTree } = useAuth();
+  const { hasPermission, permissionTree, executiveDashboardEnabled } = useAuth();
 
   // 从 permissionTree 动态构建菜单项：
   // - 仅展示 type=menu 的根节点（parentId 为空或 0）
@@ -84,6 +84,8 @@ export function Sidebar({ collapsed = false }: SidebarProps) {
     }))
     .filter((item) => {
       if (!hasPermission(item.permission)) return false;
+      // 运营大屏关闭时不展示入口，避免低配服务器用户误触发 3D 资源加载。
+      if (item.path === '/screen' && !executiveDashboardEnabled) return false;
       // settings 菜单特殊处理：需检查至少有一个 Tab 权限
       if (item.isSettings) {
         return settingsTabPermissions.some((p) => hasPermission(p));

@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense, ReactNode } from 'react';
 import { ThemeProvider, useTheme } from './store/theme';
-import { AuthProvider } from './store/auth';
+import { AuthProvider, useAuth } from './store/auth';
 import { SystemStatusProvider } from './store/systemStatus';
 import { Layout } from './layout/Layout';
 import { Toaster } from './ui/sonner';
@@ -38,6 +38,17 @@ function SuspenseWrap({ children }: { children: ReactNode }) {
   return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
 }
 
+
+function ExecutiveDashboardRoute() {
+  const { executiveDashboardEnabled, executiveDashboardLoading } = useAuth();
+
+  // Do not resolve the lazy import while the feature is disabled. This keeps
+  // Three.js, globe textures and map code out of low-spec deployments.
+  if (executiveDashboardLoading) return <LoadingSpinner />;
+  if (!executiveDashboardEnabled) return <Navigate to="/overview" replace />;
+  return <SuspenseWrap><ExecutiveDashboardPage /></SuspenseWrap>;
+}
+
 function App() {
   return (
     <ThemeProvider>
@@ -61,7 +72,7 @@ function App() {
               <Route path="/" element={<Layout />}>
                 <Route index element={<Navigate to="/overview" replace />} />
                 <Route path="overview" element={<SuspenseWrap><OverviewPage /></SuspenseWrap>} />
-                <Route path="screen" element={<SuspenseWrap><ExecutiveDashboardPage /></SuspenseWrap>} />
+                <Route path="screen" element={<ExecutiveDashboardRoute />} />
                 <Route path="users" element={<SuspenseWrap><UsersPage /></SuspenseWrap>} />
                 <Route path="clients" element={<SuspenseWrap><ClientsPage /></SuspenseWrap>} />
                 <Route path="firewall" element={<SuspenseWrap><FirewallPage /></SuspenseWrap>} />

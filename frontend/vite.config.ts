@@ -91,9 +91,12 @@ export default defineConfig(({ command }) => ({
     assetsDir: 'assets',
     rollupOptions: {
       output: {
-        codeSplitting: false,
+        // Keep the application shell stable, but split lazy routes so the optional
+        // operations dashboard (Three.js, globe textures and geographic maps) is
+        // never downloaded unless the feature is enabled and /screen is opened.
+        codeSplitting: true,
         entryFileNames: 'assets/app.js',
-        chunkFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: (assetInfo) => {
           if (assetInfo.name?.endsWith('.css')) {
             return 'assets/app.css';

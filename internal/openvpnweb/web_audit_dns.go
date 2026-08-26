@@ -42,6 +42,11 @@ const (
 	webAuditXTablesWaitSeconds       = 5
 	webAuditXTablesReconcileAttempts = 3
 	webAuditXTablesRetryDelay        = 250 * time.Millisecond
+	// A settings save is not successful until legacy/nft and IPv4/IPv6 rules
+	// have converged. Keep retrying while the request remains open so temporary
+	// Docker, OpenVPN, or xtables activity is absorbed while the UI is loading.
+	webAuditSettingsSyncInitialDelay = 250 * time.Millisecond
+	webAuditSettingsSyncMaxDelay     = 3 * time.Second
 )
 
 type WebAuditDNSStatus struct {
@@ -295,22 +300,68 @@ func configuredDNSUpstreams() []string {
 	return out
 }
 
-// syncWebAuditDNS is the only lifecycle entry point after startup. It makes a
-// saved enable/disable setting take effect immediately; stopping always removes
-// both IPv4 and IPv6 interception rules before returning.
+// syncWebAuditDNS is the only lifecycle entry point after startup. A settings
+// request does not finish until every owned legacy/nft and IPv4/IPv6 rule has
+// converged.  Docker/OpenVPN can legitimately hold the xtables lock while its
+// hooks run, so retry the whole stop/start transaction instead of exposing a
+// misleading "saved but not fully synchronized" state to the UI.
 func syncWebAuditDNS(ctx context.Context, ov *ovpn) error {
 	// Settings saves and fsnotify reloads may arrive together. Serialize the
 	// stop/start pair so they can never leave a listener running without its
 	// matching redirect state.
 	webAuditDNSLifecycleMu.Lock()
 	defer webAuditDNSLifecycleMu.Unlock()
-	if err := stopWebAuditDNS(); err != nil {
-		return err
+
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if webAuditEnabled() {
-		startWebAuditDNS(ctx, ov)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		err := stopWebAuditDNS()
+		if err == nil && webAuditEnabled() {
+			// The DNS listener must outlive this HTTP request. Its lifecycle is
+			// therefore rooted in Background; ctx only bounds firewall convergence.
+			err = startWebAuditDNS(context.Background(), ov)
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		// Keep the HTTP request visibly pending while transient Docker/OpenVPN
+		// activity owns xtables. Log sparingly so operators can see that the
+		// reconciler is still working without flooding the container log every
+		// 250ms. The next iteration always re-runs the full stop/start transaction
+		// and verifies every legacy/nft IPv4/IPv6 backend before it can succeed.
+		if attempt == 0 || (attempt+1)%5 == 0 {
+			fmt.Printf("网站审计防火墙规则同步未完成，继续重试（第 %d 次）：%v\n", attempt+1, err)
+		}
+
+		delay := webAuditSettingsRetryDelay(attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return fmt.Errorf("网站审计防火墙规则同步在请求取消前未完成: %w", lastErr)
+		case <-timer.C:
+		}
 	}
-	return nil
+}
+
+func webAuditSettingsRetryDelay(attempt int) time.Duration {
+	delay := webAuditSettingsSyncInitialDelay
+	for i := 0; i < attempt && delay < webAuditSettingsSyncMaxDelay; i++ {
+		delay *= 2
+	}
+	if delay > webAuditSettingsSyncMaxDelay {
+		return webAuditSettingsSyncMaxDelay
+	}
+	return delay
 }
 
 // reconcileWebAuditDNSConfig applies direct config-file edits as well as UI
@@ -356,7 +407,7 @@ func equalStringSlices(left, right []string) bool {
 	return true
 }
 
-func startWebAuditDNS(ctx context.Context, ov *ovpn) {
+func startWebAuditDNS(ctx context.Context, ov *ovpn) error {
 	// Remember the OpenVPN runtime before binding sockets. A service that starts
 	// before tun0 exists can then retry safely once the interface is ready.
 	if ov != nil {
@@ -365,8 +416,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		webAuditDNS.mu.Unlock()
 	}
 	if !webAuditEnabled() {
-		_ = stopWebAuditDNS()
-		return
+		return stopWebAuditDNS()
 	}
 
 	upstreams := configuredDNSUpstreams()
@@ -388,7 +438,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		webAuditDNS.mu.Unlock()
 		_ = webAuditDNS.ensureRedirect(false)
 		_ = webAuditDNS.ensureEgressBlocks(false)
-		return
+		return fmt.Errorf("未配置有效上游 DNS，DNS 审计不会启动")
 	}
 
 	child, cancel := context.WithCancel(ctx)
@@ -404,7 +454,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		cancel()
 		webAuditDNS.setStartFailure(fmt.Errorf("DNS IPv4 UDP 监听失败: %w", err), upstreams)
 		_ = webAuditDNS.ensureRedirect(false)
-		return
+		return err
 	}
 	tcp4, err := listenWebAuditTCP(ctx, "tcp4", webAuditDNSListenAddress4)
 	if err != nil {
@@ -412,7 +462,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 		cancel()
 		webAuditDNS.setStartFailure(fmt.Errorf("DNS IPv4 TCP 监听失败: %w", err), upstreams)
 		_ = webAuditDNS.ensureRedirect(false)
-		return
+		return err
 	}
 	run.udp4, run.tcp4 = udp4, tcp4
 
@@ -436,7 +486,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	if webAuditDNS.run != nil {
 		webAuditDNS.mu.Unlock()
 		closeWebAuditDNSRun(run)
-		return
+		return nil
 	}
 	webAuditDNS.ov = ov
 	webAuditDNS.run = run
@@ -505,7 +555,7 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	if err := webAuditDNS.ensureRedirect(true); err != nil {
 		webAuditDNS.setError(err)
 		webAuditDNS.scheduleRedirectRecovery(run)
-		return
+		return err
 	}
 	// Optional DoT policy is installed only after the DNS listener and ingress
 	// guard are ready. Legacy QUIC rules are only removed, never installed. A
@@ -514,7 +564,9 @@ func startWebAuditDNS(ctx context.Context, ov *ovpn) {
 	if err := webAuditDNS.ensureEgressBlocks(true); err != nil {
 		webAuditDNS.setError(err)
 		webAuditDNS.scheduleRedirectRecovery(run)
+		return err
 	}
+	return nil
 }
 
 func (s *webAuditDNSService) setStartFailure(err error, upstreams []string) {
@@ -563,7 +615,7 @@ func (s *webAuditDNSService) scheduleStartRecovery() {
 		shouldRetry := webAuditEnabled() && s.run == nil && ov != nil
 		s.mu.Unlock()
 		if shouldRetry {
-			startWebAuditDNS(context.Background(), ov)
+			_ = startWebAuditDNS(context.Background(), ov)
 		}
 	}()
 }
@@ -722,7 +774,7 @@ func (s *webAuditDNSService) listenerUnavailable(run *webAuditDNSRun, ipv6 bool,
 			webAuditDNSLifecycleMu.Lock()
 			defer webAuditDNSLifecycleMu.Unlock()
 			if webAuditEnabled() && webAuditDNS.run == nil && webAuditDNS.ov != nil {
-				startWebAuditDNS(context.Background(), webAuditDNS.ov)
+				_ = startWebAuditDNS(context.Background(), webAuditDNS.ov)
 			}
 		}()
 	})
@@ -1538,8 +1590,24 @@ func auditRuleHas(fields []string, value string) bool {
 	return false
 }
 
+func normalizeAuditRuleToken(token string) string {
+	return strings.Trim(strings.TrimSpace(token), "\\\"")
+}
+
+func normalizeAuditRuleTokens(fields []string) []string {
+	normalized := make([]string, len(fields))
+	for i, field := range fields {
+		normalized[i] = normalizeAuditRuleToken(field)
+	}
+	return normalized
+}
+
 func auditRuleArgs(line, chain, comment string) ([]string, bool) {
-	fields := strings.Fields(line)
+	// iptables -S quotes comments (for example --comment "openvpn-web:...").
+	// exec.Command does not invoke a shell, so retaining those quote bytes makes
+	// -D fail to match the very rule we just discovered. Normalize first so
+	// discovery, comparison, -C and -D all use the same canonical arguments.
+	fields := normalizeAuditRuleTokens(strings.Fields(line))
 	if len(fields) < 3 || fields[0] != "-A" || fields[1] != chain || !auditRuleHas(fields, comment) {
 		return nil, false
 	}
@@ -1562,7 +1630,7 @@ func auditRedirectRuleArgs(line string) ([]string, bool) {
 	// a comment. It must be removed during a live toggle too, not only on the
 	// next container restart. The full legacy signature is intentionally narrow
 	// so unrelated NAT rules are never selected.
-	fields := strings.Fields(line)
+	fields := normalizeAuditRuleTokens(strings.Fields(line))
 	if len(fields) < 3 || fields[0] != "-A" || fields[1] != "PREROUTING" {
 		return nil, false
 	}

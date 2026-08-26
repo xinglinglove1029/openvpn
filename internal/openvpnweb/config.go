@@ -26,7 +26,11 @@ type SysBeseConfig struct {
 	HistoryMaxDays       int    `json:"history_max_days" mapstructure:"history_max_days"`
 	RenewDays            int    `json:"renew_days" mapstructure:"renew_days"`
 	ValidateClientConfig bool   `json:"validate_client_config" mapstructure:"validate_client_config"`
-	WebAuditEnabled      bool   `json:"web_audit_enabled" mapstructure:"web_audit_enabled"`
+	// ExecutiveDashboardEnabled controls the optional 3D operations dashboard.
+	// It defaults off only on constrained (<=1 core and <=2 GiB) deployments,
+	// while administrators can always opt in later from System Settings.
+	ExecutiveDashboardEnabled bool `json:"executive_dashboard_enabled" mapstructure:"executive_dashboard_enabled"`
+	WebAuditEnabled           bool `json:"web_audit_enabled" mapstructure:"web_audit_enabled"`
 	// WebAuditStrictDNS captures all ordinary DNS requests from tun0 rather than
 	// only the configured upstream resolvers. It remains opt-in because it can
 	// override a client's hard-coded DNS configuration.
@@ -237,6 +241,11 @@ func initConfig() {
 	viper.SetDefault("system.base.auto_update_ovpn_config", false)
 	viper.SetDefault("system.base.max_duplicate_login", 0)
 	viper.SetDefault("system.base.validate_client_config", false)
+	// The 3D globe and geographic drill-down are useful on normal servers but
+	// noticeably expensive on a 1-core/2-GiB deployment. This is evaluated
+	// only when the config key is first created; it never overrides an
+	// administrator's explicit choice on future starts.
+	viper.SetDefault("system.base.executive_dashboard_enabled", executiveDashboardDefaultEnabled())
 	viper.SetDefault("system.base.history_max_days", 90)
 	// DNS domain auditing is privacy-sensitive. Existing and fresh deployments
 	// stay opt-in until an administrator explicitly enables it in Settings.
@@ -329,6 +338,16 @@ func initConfig() {
 	err = viper.ReadInConfig()
 	if err != nil {
 		panic(fmt.Sprintf("read config from %s: %v", ovData, err))
+	}
+
+	// Configurations created before the operations-screen switch have no explicit
+	// preference. Persist the detected first-start default once, so later restarts
+	// always preserve the administrator's choice instead of re-evaluating hardware.
+	if !viper.InConfig("system.base.executive_dashboard_enabled") {
+		viper.Set("system.base.executive_dashboard_enabled", executiveDashboardDefaultEnabled())
+		if err := viper.WriteConfig(); err != nil {
+			panic(fmt.Sprintf("persist executive dashboard default in %s: %v", ovData, err))
+		}
 	}
 
 	// Earlier releases could install a tun0 UDP/443 REJECT rule to force

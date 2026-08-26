@@ -3,6 +3,7 @@ package openvpnweb
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,11 @@ type DashboardStatsPayload struct {
 }
 
 const dashboardStatsTopic = "dashboard:stats"
+
+// Traffic sampling is only consumed by the optional operations dashboard. Keep
+// it completely unstarted on low-spec deployments until an administrator opts
+// in, while a later enable can safely start exactly one sampler.
+var executiveDashboardTrafficSamplerOnce sync.Once
 
 // dashboardStatsCollector 周期采集概览数据并通过 EventBus 广播 dashboard:stats。
 // 设计要点：
@@ -55,7 +61,19 @@ func StartDashboardStatsCollector(ov *ovpn, interval time.Duration) {
 	}()
 
 	go c.loop()
-	go c.trafficLoop()
+	StartExecutiveDashboardTrafficSampler(ov)
+}
+
+// StartExecutiveDashboardTrafficSampler starts the dashboard-only traffic
+// persistence loop on demand. It is deliberately separate from overview
+// stats, which continue to power the lightweight main overview page.
+func StartExecutiveDashboardTrafficSampler(ov *ovpn) {
+	if ov == nil || !executiveDashboardEnabled() {
+		return
+	}
+	executiveDashboardTrafficSamplerOnce.Do(func() {
+		go (&dashboardStatsCollector{ov: ov}).trafficLoop()
+	})
 }
 
 // trafficLoop samples cumulative management counters once per minute. The
@@ -63,6 +81,12 @@ func StartDashboardStatsCollector(ov *ovpn, interval time.Duration) {
 // five seconds for UI updates.
 func (c *dashboardStatsCollector) trafficLoop() {
 	sample := func() {
+		// An administrator may disable the screen at runtime. Leave the idle
+		// ticker in place so a later enable can reuse this single worker, but
+		// do not query OpenVPN or write traffic samples while it is off.
+		if !executiveDashboardEnabled() {
+			return
+		}
 		clients, ok := c.ov.safeOnlineClients()
 		if !ok {
 			return

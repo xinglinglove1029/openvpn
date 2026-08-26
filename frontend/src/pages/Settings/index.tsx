@@ -238,6 +238,7 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
   out['system.base.history_max_days'] = String(base.history_max_days ?? '');
   out['system.base.max_duplicate_login'] = String(base.max_duplicate_login ?? '');
   out['system.base.renew_days'] = String(base.renew_days ?? 365);
+  out['system.base.executive_dashboard_enabled'] = String(base.executive_dashboard_enabled ?? false);
   out['system.base.web_audit_enabled'] = String(base.web_audit_enabled ?? false);
   out['system.base.web_audit_strict_dns'] = String(base.web_audit_strict_dns ?? false);
   out['system.base.web_audit_block_dot'] = String(base.web_audit_block_dot ?? false);
@@ -270,7 +271,7 @@ function flattenSettings(settings: SettingsResponse): Record<string, string> {
 
 export default function SettingsPage() {
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, reloadExecutiveDashboardEnabled } = useAuth();
   const [settings, setSettings] = useState<SettingsResponse>();
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -345,7 +346,6 @@ export default function SettingsPage() {
   }, [drafts, originals]);
 
   const isDirty = dirtyKeys.length > 0;
-
   // 过滤出用户有保存权限的 dirty keys（仅这些会被提交保存）
   const saveableDirtyKeys = useMemo(() => {
     return dirtyKeys.filter((key) => {
@@ -357,6 +357,8 @@ export default function SettingsPage() {
       return true;
     });
   }, [dirtyKeys, canSaveBase, canSaveLdap, canSaveOvpn, canSaveServiceAuth]);
+
+  const savingWebAuditSettings = saving && saveableDirtyKeys.some((key) => key.startsWith('system.base.web_audit_'));
 
   const validateAll = useCallback((): boolean => {
     const next: Record<string, string | undefined> = {};
@@ -415,6 +417,9 @@ export default function SettingsPage() {
       });
       // 重新拉一次数据，确保与服务端同步
       await loadSettings();
+      if (saveableDirtyKeys.includes('system.base.executive_dashboard_enabled')) {
+        await reloadExecutiveDashboardEnabled();
+      }
     } catch (err) {
       toast.error(messageOf(err));
     } finally {
@@ -607,6 +612,13 @@ export default function SettingsPage() {
                     description="登录时校验用户绑定的配置文件"
                     checked={base.validate_client_config}
                     settingKey="system.base.validate_client_config"
+                    store={store}
+                  />
+                  <SettingSwitch
+                    label="运营大屏"
+                    description="启用 Three.js 地球、地图下钻、实时连接态势和运营统计。低配服务器（≤1 核且≤2GB）首次初始化默认关闭；关闭后不会加载大屏资源或相关接口。"
+                    checked={base.executive_dashboard_enabled ?? false}
+                    settingKey="system.base.executive_dashboard_enabled"
                     store={store}
                   />
                   <SettingSwitch
@@ -884,6 +896,7 @@ export default function SettingsPage() {
         <SaveBar
           dirtyCount={saveableDirtyKeys.length}
           saving={saving}
+          loadingText={savingWebAuditSettings ? '正在同步防火墙规则…' : '保存中…'}
           disabled={saveableDirtyKeys.length === 0}
           onSave={handleSave}
           onReset={handleReset}
@@ -898,12 +911,14 @@ export default function SettingsPage() {
 function SaveBar({
   dirtyCount,
   saving,
+  loadingText,
   disabled,
   onSave,
   onReset,
 }: {
   dirtyCount: number;
   saving: boolean;
+  loadingText: string;
   disabled: boolean;
   onSave: () => void | Promise<void>;
   onReset: () => void;
@@ -939,7 +954,7 @@ function SaveBar({
           type="button"
           onClick={onSave}
           loading={saving}
-          loadingText="保存中…"
+          loadingText={loadingText}
           disabled={disabled}
           icon={<Save className="h-4 w-4" />}
         >

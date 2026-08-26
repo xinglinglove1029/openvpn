@@ -46,6 +46,7 @@ import SystemMonitor from '@/components/SystemMonitor';
 import { useAsync } from '@/hooks/useAsync';
 import { usePagination } from '@/hooks/usePagination';
 import { api } from '@/api';
+import { useAuth } from '@/store/auth';
 import { HasPermission } from '@/components/HasPermission';
 import {
   formatBytes,
@@ -75,6 +76,7 @@ type ModalState =
 
 export default function OverviewPage() {
   const navigate = useNavigate();
+  const { executiveDashboardEnabled } = useAuth();
   const [confirmState, setConfirmState] = useState<ConfirmState>();
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
 
@@ -297,10 +299,12 @@ export default function OverviewPage() {
               <CardDescription>
                 账号、客户端、防火墙、连接历史、证书与系统设置已统一接入，日常 VPN 管理都可以在这里完成。
               </CardDescription>
-              <Button type="button" variant="outline" className="shrink-0" onClick={() => navigate('/screen')}>
-                <MonitorUp className="mr-2 h-4 w-4" />
-                打开运营大屏
-              </Button>
+              {executiveDashboardEnabled && (
+                <Button type="button" variant="outline" className="shrink-0" onClick={() => navigate('/screen')}>
+                  <MonitorUp className="mr-2 h-4 w-4" />
+                  打开运营大屏
+                </Button>
+              )}
             </div>
           </CardHeader>
         </Card>
@@ -377,7 +381,7 @@ export default function OverviewPage() {
       )}
 
       {/* ---- Time-range user traffic ---- */}
-      {dashboard && (
+      {executiveDashboardEnabled && dashboard && (
         <CardGlow>
           <Card>
             <CardHeader>

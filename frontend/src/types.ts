@@ -12,6 +12,7 @@ export interface SettingsResponse {
       history_max_days: number;
       renew_days: number;
       validate_client_config: boolean;
+      executive_dashboard_enabled: boolean;
       web_audit_enabled: boolean;
       web_audit_strict_dns: boolean;
       web_audit_block_dot: boolean;

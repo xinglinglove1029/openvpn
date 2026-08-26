@@ -29,6 +29,12 @@ interface AuthContextType {
   aiEnabled: boolean;
   /** 重新拉取 AI 助手启用状态（系统设置保存 AI 配置后调用） */
   reloadAiEnabled: () => Promise<void>;
+  /** 运营大屏是否启用；关闭时不展示入口、不加载 Three.js 页面。 */
+  executiveDashboardEnabled: boolean;
+  /** 运营大屏开关状态是否仍在读取，避免首次进入 /screen 时误跳转。 */
+  executiveDashboardLoading: boolean;
+  /** 系统设置保存运营大屏开关后刷新入口和路由保护状态。 */
+  reloadExecutiveDashboardEnabled: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -56,6 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading] = useState(false);
   const [permissionTree, setPermissionTree] = useState<PermissionTreeNode[]>([]);
   const [aiEnabled, setAiEnabled] = useState<boolean>(false);
+  const [executiveDashboardEnabled, setExecutiveDashboardEnabled] = useState<boolean>(false);
+  const [executiveDashboardLoading, setExecutiveDashboardLoading] = useState<boolean>(() => !!readStoredUser());
 
   // 监听跨标签页的 localStorage 变化，保持登录态一致
   useEffect(() => {
@@ -132,6 +140,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setUser(null);
     setPermissionTree([]);
+    setExecutiveDashboardEnabled(false);
+    setExecutiveDashboardLoading(false);
     window.localStorage.removeItem(STORAGE_KEY);
     // 强制整页刷新，跳回登录页（避免 SPA 内存中残留 user 状态）
     window.location.href = '/login';
@@ -186,6 +196,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user, reloadAiEnabled]);
 
+  const reloadExecutiveDashboardEnabled = useCallback(async () => {
+    try {
+      const res = await api.get<{ executiveDashboardEnabled?: boolean }>('/ovpn/public/features');
+      setExecutiveDashboardEnabled(!!res?.executiveDashboardEnabled);
+    } catch {
+      // Fail closed: a failed feature lookup must not load the heavy 3D screen.
+      setExecutiveDashboardEnabled(false);
+    } finally {
+      setExecutiveDashboardLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      setExecutiveDashboardLoading(true);
+      reloadExecutiveDashboardEnabled();
+    } else {
+      setExecutiveDashboardEnabled(false);
+      setExecutiveDashboardLoading(false);
+    }
+  }, [user, reloadExecutiveDashboardEnabled]);
+
   const updateUser = (updates: Partial<ClientUserInfo>) => {
     setUser((current) => {
       if (!current) return current;
@@ -228,6 +260,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         reloadPermissionTree,
         aiEnabled,
         reloadAiEnabled,
+        executiveDashboardEnabled,
+        executiveDashboardLoading,
+        reloadExecutiveDashboardEnabled,
       }}
     >
       {children}

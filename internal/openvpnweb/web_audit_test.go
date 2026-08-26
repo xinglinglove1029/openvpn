@@ -975,6 +975,32 @@ func TestAuditRuleReconciliationPlanKeepsForwardChainWhenDisabling(t *testing.T)
 	}
 }
 
+func TestAuditRuleArgsNormalizesQuotedIPTablesOutput(t *testing.T) {
+	line := `-A PREROUTING -i tun0 -p udp -m comment --comment "openvpn-web:web-audit:dns-redirect" -d 2001:4860:4860::8888 --dport 53 -j REDIRECT --to-ports 5353`
+	got, ok := auditRedirectRuleArgs(line)
+	if !ok {
+		t.Fatal("quoted iptables -S rule was not recognized")
+	}
+	want := auditRedirectRules(true, []string{"2001:4860:4860::8888"}, false)[0]
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("canonical rule=%q, want %q", got, want)
+	}
+
+	remove, add := reconcileAuditRules([][]string{got}, nil)
+	if len(remove) != 1 || len(add) != 0 {
+		t.Fatalf("disabled cleanup must remove quoted rule exactly once: remove=%v add=%v", remove, add)
+	}
+}
+
+func TestWebAuditSettingsRetryDelayIsBounded(t *testing.T) {
+	if got := webAuditSettingsRetryDelay(0); got != webAuditSettingsSyncInitialDelay {
+		t.Fatalf("first retry delay=%s, want %s", got, webAuditSettingsSyncInitialDelay)
+	}
+	if got := webAuditSettingsRetryDelay(20); got != webAuditSettingsSyncMaxDelay {
+		t.Fatalf("bounded retry delay=%s, want %s", got, webAuditSettingsSyncMaxDelay)
+	}
+}
+
 func TestAuditRuleConvergenceRemovesStrictAndDisabledRules(t *testing.T) {
 	strict := auditRedirectRules(false, nil, true)
 	normal := auditRedirectRules(false, []string{"1.1.1.1"}, false)

@@ -8,7 +8,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import AIWidget from '@/components/AIWidget';
 
 export function Layout() {
-  const { user, isLoading, hasPermission, permissionTree } = useAuth();
+  const { user, isLoading, hasPermission, permissionTree, executiveDashboardEnabled } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   // 移动端 Sidebar 抽屉开关
@@ -19,10 +19,10 @@ export function Layout() {
   );
   const isScreenRoute = location.pathname === '/screen' || location.pathname.startsWith('/screen/');
   const screenOnlyMode = browserFullscreen && isScreenRoute;
-  // The operations screen contains its own interactive Three.js globe. Do not
-  // run a second full-window WebGL animation behind it on normal (non-fullscreen)
-  // visits, especially on small 1-core/2-GB deployments.
-  const showAmbientEffects = !isScreenRoute;
+  // The decorative full-window WebGL scene is coupled to the operations-screen
+  // feature. Keeping it off until an administrator enables the feature avoids
+  // loading or initializing Three.js on constrained deployments.
+  const showAmbientEffects = executiveDashboardEnabled && !isScreenRoute;
   // 桌面端 Sidebar 折叠状态（仅图标模式），持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
