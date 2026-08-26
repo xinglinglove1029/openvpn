@@ -37,6 +37,11 @@ const (
 	webAuditMaxStoredRows            int64 = 1000000
 	webAuditHookMappingGrace               = 15 * time.Second
 	webAuditRecoveryDelay                  = 30 * time.Second
+	// Every xtables operation waits for a concurrent Docker/OpenVPN firewall
+	// update instead of failing immediately with xtables.lock contention.
+	webAuditXTablesWaitSeconds       = 5
+	webAuditXTablesReconcileAttempts = 3
+	webAuditXTablesRetryDelay        = 250 * time.Millisecond
 )
 
 type WebAuditDNSStatus struct {
@@ -144,6 +149,11 @@ type webAuditDNSService struct {
 }
 
 var webAuditDNSLifecycleMu sync.Mutex
+
+// Serializes this process's audit-rule reads and mutations. The kernel lock
+// still protects against Docker/OpenVPN and other processes; each command also
+// uses iptables -w so a short external update does not surface as a save error.
+var webAuditXTablesMu sync.Mutex
 
 var webAuditDNS = &webAuditDNSService{
 	clients:     map[string]auditClientIdentity{},
@@ -1445,7 +1455,10 @@ func availableAuditIPTables(ipv6 bool, table string) []string {
 	seen := make(map[string]struct{}, 3)
 	for _, candidate := range auditIPTablesCandidates(ipv6) {
 		binary, err := exec.LookPath(candidate)
-		if err != nil || exec.Command(binary, "-L", "-n", "-t", table).Run() != nil {
+		if err != nil {
+			continue
+		}
+		if _, err := runAuditIPTablesCommand(binary, "-L", "-n", "-t", table); err != nil {
 			continue
 		}
 		// The generic binary can be an alternatives symlink to a backend already
@@ -1578,13 +1591,9 @@ func auditEgressBlockRuleArgs(line, comment, proto, port string) ([]string, bool
 type auditRuleParser func(string) ([]string, bool)
 
 func discoverAuditRules(ipt, table, chain string, parse auditRuleParser) ([][]string, error) {
-	out, err := exec.Command(ipt, "-t", table, "-S", chain).CombinedOutput()
+	out, err := runAuditIPTablesCommand(ipt, "-t", table, "-S", chain)
 	if err != nil {
-		message := strings.TrimSpace(string(out))
-		if message == "" {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s", err, message)
+		return nil, formatAuditIPTablesError(err, out)
 	}
 	rules := make([][]string, 0)
 	for _, line := range strings.Split(string(out), "\n") {
@@ -1632,17 +1641,52 @@ func reconcileAuditRules(current, desired [][]string) (remove, add [][]string) {
 	return remove, add
 }
 
-func runAuditRuleCommand(ipt, table, operation string, rule []string) error {
-	args := append([]string{"-t", table, operation}, rule...)
-	out, err := exec.Command(ipt, args...).CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	message := strings.TrimSpace(string(out))
+// runAuditIPTablesCommand adds iptables' built-in lock wait to every read and
+// mutation. The lock is shared by legacy/nft tooling and by container runtime
+// helpers, so failing immediately turns a harmless race into a false UI error.
+func runAuditIPTablesCommand(ipt string, args ...string) ([]byte, error) {
+	commandArgs := make([]string, 0, len(args)+2)
+	commandArgs = append(commandArgs, "-w", fmt.Sprint(webAuditXTablesWaitSeconds))
+	commandArgs = append(commandArgs, args...)
+	return exec.Command(ipt, commandArgs...).CombinedOutput()
+}
+
+func formatAuditIPTablesError(err error, output []byte) error {
+	message := strings.TrimSpace(string(output))
 	if message == "" {
 		return err
 	}
 	return fmt.Errorf("%w: %s", err, message)
+}
+
+func isXTablesLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "xtables.lock") ||
+		strings.Contains(message, "another app is currently holding the xtables lock") ||
+		strings.Contains(message, "resource temporarily unavailable")
+}
+
+// A concurrent cleaner can remove the exact rule after discovery but before
+// this delete. Treat that condition as an idempotent success and let the final
+// rule-list verification decide whether another reconciliation pass is needed.
+func isAuditRuleAlreadyAbsent(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "bad rule") && strings.Contains(message, "matching rule exist")
+}
+
+func runAuditRuleCommand(ipt, table, operation string, rule []string) error {
+	args := append([]string{"-t", table, operation}, rule...)
+	out, err := runAuditIPTablesCommand(ipt, args...)
+	if err == nil {
+		return nil
+	}
+	return formatAuditIPTablesError(err, out)
 }
 
 // auditRuleReconciliationPlan preserves the chain from a stable rule template
@@ -1657,6 +1701,20 @@ func auditRuleReconciliationPlan(enable bool, desired [][]string) (chain string,
 }
 
 func reconcileAuditRuleBackend(ipt, table, chain string, desired [][]string, parse auditRuleParser) error {
+	var lastErr error
+	for attempt := 0; attempt < webAuditXTablesReconcileAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * webAuditXTablesRetryDelay)
+		}
+		lastErr = reconcileAuditRuleBackendOnce(ipt, table, chain, desired, parse)
+		if lastErr == nil || !isXTablesLockError(lastErr) {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
+func reconcileAuditRuleBackendOnce(ipt, table, chain string, desired [][]string, parse auditRuleParser) error {
 	current, err := discoverAuditRules(ipt, table, chain, parse)
 	if err != nil {
 		return fmt.Errorf("读取 %s %s 规则失败: %w", ipt, table, err)
@@ -1664,12 +1722,15 @@ func reconcileAuditRuleBackend(ipt, table, chain string, desired [][]string, par
 	remove, add := reconcileAuditRules(current, desired)
 	var failures []string
 	for _, rule := range remove {
-		if err := runAuditRuleCommand(ipt, table, "-D", rule); err != nil {
+		if err := runAuditRuleCommand(ipt, table, "-D", rule); err != nil && !isAuditRuleAlreadyAbsent(err) {
 			failures = append(failures, fmt.Sprintf("删除 %s 规则失败: %v", ipt, err))
 		}
 	}
 	for _, rule := range add {
 		if err := runAuditRuleCommand(ipt, table, "-C", rule); err == nil {
+			continue
+		} else if isXTablesLockError(err) {
+			failures = append(failures, fmt.Sprintf("检查 %s 规则失败: %v", ipt, err))
 			continue
 		}
 		if err := runAuditRuleCommand(ipt, table, "-A", rule); err != nil {
@@ -1695,6 +1756,11 @@ func reconcileAuditRuleBackend(ipt, table, chain string, desired [][]string, par
 }
 
 func (s *webAuditDNSService) ensureAuditRuleFamily(enable, ipv6 bool, table string, desired [][]string, parse auditRuleParser) error {
+	// Prevent simultaneous lifecycle/recovery paths in this process from racing
+	// discovery against mutation. Other processes are handled by iptables -w.
+	webAuditXTablesMu.Lock()
+	defer webAuditXTablesMu.Unlock()
+
 	chain, desired := auditRuleReconciliationPlan(enable, desired)
 	iptables := availableAuditIPTables(ipv6, table)
 	if len(iptables) == 0 {

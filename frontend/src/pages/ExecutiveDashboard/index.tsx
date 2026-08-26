@@ -20,6 +20,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/ui/button';
+import { Tooltip } from '@/ui/tooltip';
 import { Badge } from '@/ui/badge';
 import { api } from '@/api';
 import { realtimeHub } from '@/lib/notificationHub';
@@ -284,12 +285,24 @@ function Topology({ online, state }: { online: OnlineClient[]; state: OnlineLoad
                     className="absolute left-1/2 top-1/2 h-px w-[clamp(70px,15vw,150px)] origin-left -translate-y-1/2 bg-gradient-to-r from-primary/65 to-transparent"
                     style={{ transform: `rotate(${Math.atan2(50 - top, 50 - left)}rad)` }}
                   />
-                  <div className="relative flex w-max max-w-[min(120px,28vw)] items-center gap-1.5 rounded-xl border border-border/60 bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-500">
-                      <Wifi className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="truncate text-[10px] font-medium">{getClientName(client)}</span>
-                  </div>
+                  <Tooltip
+                    side="top"
+                    delayMs={120}
+                    content={
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-muted-foreground">公网 IP</span>
+                        <code className="font-mono text-[11px] text-foreground">{client.rip?.trim() || client.rip6?.trim() || '暂不可用'}</code>
+                        {client.vip && <span className="text-muted-foreground">· VPN {client.vip}</span>}
+                      </span>
+                    }
+                  >
+                    <div className="relative flex w-max max-w-[min(120px,28vw)] cursor-help items-center gap-1.5 rounded-xl border border-border/60 bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur transition-colors hover:border-emerald-500/55 hover:bg-card">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-500">
+                        <Wifi className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="truncate text-[10px] font-medium">{getClientName(client)}</span>
+                    </div>
+                  </Tooltip>
                 </div>
               );
             })

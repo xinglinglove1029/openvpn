@@ -924,6 +924,26 @@ func TestHighCoverageAuditFirewallRulesStayOnTun0(t *testing.T) {
 	}
 }
 
+func TestAuditRuleTransientErrorClassification(t *testing.T) {
+	for _, message := range []string{
+		"exit status 4: Can't lock /run/xtables.lock: Resource temporarily unavailable",
+		"Another app is currently holding the xtables lock",
+	} {
+		if !isXTablesLockError(fmt.Errorf("%s", message)) {
+			t.Fatalf("lock error was not classified as retryable: %q", message)
+		}
+	}
+	if isXTablesLockError(fmt.Errorf("iptables: Bad rule (does a matching rule exist in that chain?)")) {
+		t.Fatal("missing rule must not be classified as an xtables lock error")
+	}
+	if !isAuditRuleAlreadyAbsent(fmt.Errorf("iptables: Bad rule (does a matching rule exist in that chain?)")) {
+		t.Fatal("already-absent delete was not classified as idempotent success")
+	}
+	if isAuditRuleAlreadyAbsent(fmt.Errorf("permission denied")) {
+		t.Fatal("unrelated error must not be classified as an already-absent rule")
+	}
+}
+
 func TestAuditIPTablesCandidatesCoverLegacyNftAndDefault(t *testing.T) {
 	for _, test := range []struct {
 		ipv6 bool

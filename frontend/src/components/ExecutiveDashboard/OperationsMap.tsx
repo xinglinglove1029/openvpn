@@ -129,6 +129,37 @@ function sameCountry(left: string, right: string) {
   return a === b || Boolean(countryDefinition(left) && countryDefinition(right) && countryDefinition(left)?.iso3 === countryDefinition(right)?.iso3);
 }
 
+// The map API is intentionally aggregated by city/province so the China and
+// country maps can drill down. On the globe those records share a country
+// centroid, though: rendering each one separately causes overlapping badges
+// (for example two Beijing IPs appear as a single “1” badge). Consolidate the
+// already de-duplicated region counts into one marker per country for the
+// global view, while keeping the original points for every administrative map.
+function countryAggregationKey(country: string) {
+  const normalized = normaliseCountryName(country);
+  if (country.includes('中国') || normalized === 'china' || normalized === "peoplesrepublicofchina") return 'CHN';
+  return countryDefinition(country)?.iso3 || normalized || 'unknown';
+}
+
+function aggregateWorldPoints(points: DashboardGeoPoint[]): DashboardGeoPoint[] {
+  const grouped = new Map<string, DashboardGeoPoint>();
+  points.forEach((point) => {
+    const key = countryAggregationKey(point.country);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += point.count;
+      return;
+    }
+    grouped.set(key, {
+      source: point.source,
+      country: point.country,
+      label: countryDefinition(point.country)?.label || point.country || point.label,
+      count: point.count,
+    });
+  });
+  return [...grouped.values()].sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, 'zh-CN'));
+}
+
 const CHINA_POSITIONS: MapPosition[] = [
   ['北京市', 116.41, 39.9],
   ['北京', 116.41, 39.9],
@@ -221,6 +252,10 @@ export function OperationsMap({
   );
   const countryPoints = countryDrill ? allPoints.filter((point) => sameCountry(point.country, countryDrill.country)) : [];
   const pointsForView = view === 'china' ? chinaPoints : view === 'country' ? countryPoints : allPoints;
+  const worldPoints = useMemo(() => aggregateWorldPoints(allPoints), [allPoints]);
+  // The globe needs one count per country centroid. Administrative views keep
+  // the original city/province aggregates for precise drill-down and IP detail.
+  const markerPoints = view === 'world' ? worldPoints : pointsForView;
   const displayPoints = pointsForView.slice(0, 12);
   const total = pointsForView.reduce((sum, point) => sum + point.count, 0);
   const max = Math.max(...displayPoints.map((point) => point.count), 1);
@@ -232,7 +267,7 @@ export function OperationsMap({
   // arrives, and prevents a refresh from unexpectedly changing their view.
   const mappedMarkers = useMemo<GeoGlobeMarker[]>(
     () =>
-      pointsForView.flatMap((point, index) => {
+      markerPoints.flatMap((point, index) => {
         const coordinate = coordinateForPoint(point, view);
         if (!coordinate) return [];
         return [
@@ -246,7 +281,7 @@ export function OperationsMap({
           },
         ];
       }),
-    [pointsForView, source, view]
+    [markerPoints, source, view]
   );
   const visibleMarkers = mappedMarkers.slice(0, 48);
   // The ranking doubles as an accessible fallback for the WebGL hit target:
