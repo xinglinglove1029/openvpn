@@ -217,9 +217,24 @@ run_server() {
 
 	config=$OVPN_DATA/server.conf
 
-	ovpn_subnet=$(awk '$1=="server"{print $2, $3}' $config)
-	$ipt -t nat -C POSTROUTING -s ${ovpn_subnet/ /\/} -j MASQUERADE >/dev/null 2>&1 || {
-		$ipt -t nat -A POSTROUTING -s ${ovpn_subnet/ /\/} -j MASQUERADE
+	# The v0.1.92 fixed-address reservation replaces the shorthand `server`
+	# directive with `mode server` + `ifconfig-pool`.  Never derive the NAT
+	# source from server.conf: after that safe conversion no `server` line
+	# remains, which previously produced `iptables ... -s /` and, because this
+	# script runs with `set -e`, prevented OpenVPN from starting at all.
+	# config.json remains the source of truth for the configured VPN subnet.
+	ovpn_subnet=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
+	if [[ ! "$ovpn_subnet" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]]; then
+		# Preserve compatibility with older/manual configurations whose subnet
+		# value may not be present in config.json.
+		ovpn_subnet=$(awk '$1=="server"{print $2 "/" $3; exit}' "$config")
+	fi
+	if [ -z "$ovpn_subnet" ]; then
+		echo "Unable to determine the OpenVPN IPv4 subnet; refusing to start with incomplete NAT rules" >&2
+		return 1
+	fi
+	$ipt -t nat -C POSTROUTING -s "$ovpn_subnet" -j MASQUERADE >/dev/null 2>&1 || {
+		$ipt -t nat -A POSTROUTING -s "$ovpn_subnet" -j MASQUERADE
 	}
 
 	if [ "$(jq -r '.openvpn.ovpn_ipv6 // false' "$SYSTEM_CONFIG")" = "true" ]; then
