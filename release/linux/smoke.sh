@@ -78,6 +78,57 @@ if command -v bash >/dev/null 2>&1; then
     "$ROOT/release/linux/package-postremove.sh"
 fi
 
+# An upgrade can already have converted `server` to an explicit address pool.
+# Ensure the startup migration repairs both a stale net30 directive and a
+# missing topology directive, and remains idempotent on Docker and native
+# Linux runtimes.
+if command -v bash >/dev/null 2>&1; then
+  topology_tmp=$(mktemp -d)
+  cleanup_smoke_tmp() { rm -rf "${tmp:-}" "${topology_tmp:-}"; }
+  trap cleanup_smoke_tmp EXIT
+  for runtime in "$ROOT/build/docker-entrypoint.sh" "$ROOT/release/linux/openvpn-web-entrypoint.sh"; do
+    for topology_case in net30 missing; do
+      case_dir="$topology_tmp/$(basename "$runtime")-$topology_case"
+      mkdir -p "$case_dir"
+      if [[ "$topology_case" == net30 ]]; then
+        topology_line='topology net30'
+      else
+        topology_line=''
+      fi
+      cat >"$case_dir/server.conf" <<EOF
+$topology_line
+mode server
+ifconfig 10.8.0.1 255.255.255.0
+ifconfig-pool 10.8.0.128 10.8.0.253 255.255.255.0
+EOF
+      (
+        export OVPN_DATA="$case_dir"
+        set -- smoke-noop
+        script_type=smoke-noop
+        # Prevent the entrypoint fallback from replacing this test shell.
+        exec() { :; }
+        # shellcheck disable=SC1090
+        source "$runtime"
+        ensure_subnet_topology_for_explicit_pool
+      )
+      grep -qx 'topology subnet' "$case_dir/server.conf" || fail "$runtime did not enforce subnet topology ($topology_case)"
+      [[ "$(grep -Ec '^[[:space:]]*topology[[:space:]]+' "$case_dir/server.conf")" == 1 ]] || fail "$runtime left duplicate topology directives ($topology_case)"
+      cp "$case_dir/server.conf" "$case_dir/server.conf.before"
+      (
+        export OVPN_DATA="$case_dir"
+        set -- smoke-noop
+        script_type=smoke-noop
+        # Prevent the entrypoint fallback from replacing this test shell.
+        exec() { :; }
+        # shellcheck disable=SC1090
+        source "$runtime"
+        ensure_subnet_topology_for_explicit_pool
+      )
+      cmp -s "$case_dir/server.conf.before" "$case_dir/server.conf" || fail "$runtime topology migration is not idempotent ($topology_case)"
+    done
+  done
+fi
+
 if ! grep -Fq 'openvpn-web-linux-*' "$ROOT/release/linux/README.md" || \
    ! grep -Fq 'openvpn-web-full-linux-*' "$ROOT/release/linux/README.md"; then
   fail 'README does not document both archive types'
@@ -86,7 +137,7 @@ fi
 # Reproduce the full archive's top-level layout and make sure install.sh finds
 # the renamed runtime files before touching the host.
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp" "${topology_tmp:-}"' EXIT
 bundle="$tmp/openvpn-web-full-linux-smoke"
 mkdir -p "$bundle"
 touch "$bundle/openvpn-web"

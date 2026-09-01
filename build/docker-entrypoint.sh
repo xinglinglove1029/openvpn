@@ -413,6 +413,44 @@ separate_static_ipv4_address_pool() {
 	echo "[OPENVPN-CONFIG] reserved ${base}.2-${base}.127 for fixed client IPs; dynamic pool is ${base}.128-${base}.253" >&2
 }
 
+ensure_subnet_topology_for_explicit_pool() {
+	config="$OVPN_DATA/server.conf"
+	[ -f "$config" ] || return 0
+
+	# `mode server` + `ifconfig-pool` is the explicit replacement for the
+	# legacy `server` helper above. It must use subnet topology: a previous
+	# net30 directive (or no topology directive, whose default is net30) makes
+	# OpenVPN hand out /24-style addresses which strict clients such as OpenVPN
+	# Connect for macOS reject as not belonging to the same /30.
+	grep -Eq '^[[:space:]]*mode[[:space:]]+server([[:space:]]|$)' "$config" || return 0
+	grep -Eq '^[[:space:]]*ifconfig-pool[[:space:]]+' "$config" || return 0
+
+	local tmp
+	tmp=$(mktemp "${config}.topology.XXXXXX") || return 1
+	awk '
+		BEGIN { emitted = 0 }
+		/^[[:space:]]*[#;]/ { print; next }
+		$1 == "topology" { next }
+		{
+			if (!emitted) {
+				print "topology subnet"
+				emitted = 1
+			}
+			print
+		}
+		END {
+			if (!emitted) print "topology subnet"
+		}
+	' "$config" >"$tmp" || { rm -f "$tmp"; return 1; }
+
+	if cmp -s "$config" "$tmp"; then
+		rm -f "$tmp"
+		return 0
+	fi
+	mv "$tmp" "$config"
+	echo "[OPENVPN-CONFIG] enforced topology subnet for explicit IPv4 address pool" >&2
+}
+
 add_history() {
 	#https://build.openvpn.net/man/openvpn-2.6/openvpn.8.html#environmental-variables
 	set +e
@@ -627,6 +665,7 @@ case $1 in
 	install -d -m 0700 "$OVPN_DATA/.client-connect-options"
 
 	separate_static_ipv4_address_pool
+	ensure_subnet_topology_for_explicit_pool
 	load_nftconfig
 	check_config
 	run_server

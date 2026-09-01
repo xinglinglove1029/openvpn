@@ -709,7 +709,10 @@ func TestAuditQueueDropsWithoutBlockingDNSPath(t *testing.T) {
 
 func TestAuditWorkerUsesIdentitySnapshotAfterVPNIPReuse(t *testing.T) {
 	originalDB := db
-	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:"}, "", gormlogger.Default)
+	// SQLite :memory: creates one database per connection. This test uses a
+	// worker goroutine and a polling reader, so keep them on the same connection
+	// and avoid an intermittent missing-table failure in CI.
+	database, err := OpenDatabase(DatabaseConfig{Type: "sqlite", Path: ":memory:", MaxOpenConns: 1}, "", gormlogger.Default)
 	if err != nil {
 		t.Fatal(err)
 	}
