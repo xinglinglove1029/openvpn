@@ -119,6 +119,7 @@ persist-key
 persist-tun
 keepalive 10 60
 topology subnet
+push "topology subnet"
 $([[ "$OVPN_IPV6" == "true" ]] && echo -e "server $(getsubnet $OVPN_SUBNET)\nserver-ipv6 $OVPN_SUBNET6" || echo "server $(getsubnet $OVPN_SUBNET)")
 $([[ "$OVPN_GATEWAY" == "true" ]] && printf 'push "dhcp-option DNS %s"\npush "dhcp-option DNS %s"\npush "redirect-gateway def1 ipv6 bypass-dhcp"' "$OVPN_DNS1" "$OVPN_DNS2" || printf '#push "dhcp-option DNS %s"\n#push "dhcp-option DNS %s"\n#push "redirect-gateway def1 ipv6 bypass-dhcp"' "$OVPN_DNS1" "$OVPN_DNS2")
 dh none
@@ -426,14 +427,15 @@ ensure_pushed_subnet_topology() {
 	config="$OVPN_DATA/server.conf"
 	[ -f "$config" ] || return 0
 	awk '
+		$1 == "server" { has_ipv4_pool = 1 }
 		$1 == "mode" && $2 == "server" { has_mode = 1 }
 		$1 == "ifconfig-pool" { has_pool = 1 }
-		END { exit(has_mode && has_pool ? 0 : 1) }
+		END { exit(has_ipv4_pool || (has_mode && has_pool) ? 0 : 1) }
 	' "$config" || return 0
 
-	# Explicit mode/ifconfig-pool configurations do not get the topology
-	# capability pushed automatically like the `server` helper does. Keep one
-	# canonical push so OpenVPN Connect does not fall back to net30.
+	# Do not rely on an implicit topology push from the `server` helper. Existing
+	# configurations and OpenVPN Connect imports can still resolve to net30.
+	# Keep one explicit, canonical push for every IPv4 address-pool layout.
 	local tmp
 	tmp=$(mktemp "${config}.push-topology.XXXXXX") || return 1
 	awk '

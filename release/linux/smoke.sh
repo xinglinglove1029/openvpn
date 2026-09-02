@@ -87,19 +87,23 @@ if command -v bash >/dev/null 2>&1; then
   cleanup_smoke_tmp() { rm -rf "${tmp:-}" "${topology_tmp:-}"; }
   trap cleanup_smoke_tmp EXIT
   for runtime in "$ROOT/build/docker-entrypoint.sh" "$ROOT/release/linux/openvpn-web-entrypoint.sh"; do
-    for topology_case in net30 missing; do
-      case_dir="$topology_tmp/$(basename "$runtime")-$topology_case"
-      mkdir -p "$case_dir"
-      if [[ "$topology_case" == net30 ]]; then
-        topology_line='topology net30'
-      else
-        topology_line=''
-      fi
-      cat >"$case_dir/server.conf" <<EOF
+    for pool_layout in helper explicit; do
+      for topology_case in net30 missing; do
+        case_dir="$topology_tmp/$(basename "$runtime")-$pool_layout-$topology_case"
+        mkdir -p "$case_dir"
+        if [[ "$topology_case" == net30 ]]; then
+          topology_line='topology net30'
+        else
+          topology_line=''
+        fi
+        if [[ "$pool_layout" == helper ]]; then
+          pool_lines='server 10.8.0.0 255.255.255.0'
+        else
+          pool_lines=$'mode server\nifconfig 10.8.0.1 255.255.255.0\nifconfig-pool 10.8.0.128 10.8.0.253 255.255.255.0'
+        fi
+        cat >"$case_dir/server.conf" <<EOF
 $topology_line
-mode server
-ifconfig 10.8.0.1 255.255.255.0
-ifconfig-pool 10.8.0.128 10.8.0.253 255.255.255.0
+$pool_lines
 EOF
       (
         export OVPN_DATA="$case_dir"
@@ -111,9 +115,9 @@ EOF
         source "$runtime"
         ensure_subnet_topology_for_explicit_pool
       )
-      grep -qx 'topology subnet' "$case_dir/server.conf" || fail "$runtime did not enforce subnet topology ($topology_case)"
-      [[ "$(grep -Ec '^[[:space:]]*topology[[:space:]]+' "$case_dir/server.conf")" == 1 ]] || fail "$runtime left duplicate topology directives ($topology_case)"
-      [[ "$(grep -Ec '^[[:space:]]*push[[:space:]]+\"topology[[:space:]]+subnet\"' "$case_dir/server.conf")" == 1 ]] || fail "$runtime did not push subnet topology ($topology_case)"
+      grep -qx 'topology subnet' "$case_dir/server.conf" || fail "$runtime did not enforce subnet topology ($pool_layout/$topology_case)"
+      [[ "$(grep -Ec '^[[:space:]]*topology[[:space:]]+' "$case_dir/server.conf")" == 1 ]] || fail "$runtime left duplicate topology directives ($pool_layout/$topology_case)"
+      [[ "$(grep -Ec '^[[:space:]]*push[[:space:]]+\"topology[[:space:]]+subnet\"' "$case_dir/server.conf")" == 1 ]] || fail "$runtime did not push subnet topology ($pool_layout/$topology_case)"
       cp "$case_dir/server.conf" "$case_dir/server.conf.before"
       (
         export OVPN_DATA="$case_dir"
@@ -125,7 +129,8 @@ EOF
         source "$runtime"
         ensure_subnet_topology_for_explicit_pool
       )
-      cmp -s "$case_dir/server.conf.before" "$case_dir/server.conf" || fail "$runtime topology migration is not idempotent ($topology_case)"
+        cmp -s "$case_dir/server.conf.before" "$case_dir/server.conf" || fail "$runtime topology migration is not idempotent ($pool_layout/$topology_case)"
+      done
     done
   done
 fi

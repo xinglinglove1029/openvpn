@@ -67,4 +67,7 @@ func TestNormalizeServerTopologyAddsSubnetForLegacyServer(t *testing.T) {
 	if !strings.Contains(joined, "topology subnet") || strings.Contains(joined, "topology net30") {
 		t.Fatalf("legacy topology was not normalized: %q", joined)
 	}
+	if strings.Count(joined, "topology ") != 2 || !strings.Contains(joined, `push "topology subnet"`) {
+		t.Fatalf("legacy server topology was not explicitly pushed: %q", joined)
+	}
 }

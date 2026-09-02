@@ -272,7 +272,10 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 	if !topologyWritten {
 		newLines = append([]string{"topology subnet"}, newLines...)
 	}
-	if hasExplicitPool && !hasPushedTopology && !pushedTopologyWritten {
+	// Explicitly push subnet topology for both the legacy `server` helper and
+	// the explicit address-pool layout. Relying on the helper's implicit push
+	// leaves some upgraded OpenVPN Connect profiles using their net30 default.
+	if !hasPushedTopology && !pushedTopologyWritten {
 		newLines = append(newLines, `push "topology subnet"`)
 	}
 	cfg.Lines = newLines
