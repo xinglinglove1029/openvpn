@@ -422,6 +422,36 @@ separate_static_ipv4_address_pool() {
 	echo "[OPENVPN-CONFIG] reserved ${base}.2-${base}.127 for fixed client IPs; dynamic pool is ${base}.128-${base}.253" >&2
 }
 
+ensure_pushed_subnet_topology() {
+	config="$OVPN_DATA/server.conf"
+	[ -f "$config" ] || return 0
+	awk '
+		$1 == "mode" && $2 == "server" { has_mode = 1 }
+		$1 == "ifconfig-pool" { has_pool = 1 }
+		END { exit(has_mode && has_pool ? 0 : 1) }
+	' "$config" || return 0
+
+	# Explicit mode/ifconfig-pool configurations do not get the topology
+	# capability pushed automatically like the `server` helper does. Keep one
+	# canonical push so OpenVPN Connect does not fall back to net30.
+	local tmp
+	tmp=$(mktemp "${config}.push-topology.XXXXXX") || return 1
+	awk '
+		/^[[:space:]]*[#;]/ { print; next }
+		$1 == "push" && $2 ~ /^"topology$/ {
+			if (!emitted) { print "push \"topology subnet\""; emitted = 1 }
+			next
+		}
+		{ print }
+		END { if (!emitted) print "push \"topology subnet\"" }
+	' "$config" >"$tmp" || { rm -f "$tmp"; return 1; }
+	if cmp -s "$config" "$tmp"; then
+		rm -f "$tmp"
+		return 0
+	fi
+	mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
+}
+
 ensure_subnet_topology_for_explicit_pool() {
 	config="$OVPN_DATA/server.conf"
 	[ -f "$config" ] || return 0
@@ -464,10 +494,12 @@ ensure_subnet_topology_for_explicit_pool() {
 
 	if cmp -s "$config" "$tmp"; then
 		rm -f "$tmp"
+		ensure_pushed_subnet_topology
 		return 0
 	fi
 	mv "$tmp" "$config"
 	echo "[OPENVPN-CONFIG] enforced topology subnet for IPv4 address pool" >&2
+	ensure_pushed_subnet_topology
 }
 
 add_history() {

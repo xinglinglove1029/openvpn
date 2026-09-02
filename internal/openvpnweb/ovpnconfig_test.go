@@ -50,8 +50,8 @@ func TestNormalizeServerTopologyRemovesLegacyDirectiveFromExplicitPool(t *testin
 	if strings.Contains(joined, "server 10.8.0.0") {
 		t.Fatalf("legacy server directive remains: %q", joined)
 	}
-	if strings.Count(joined, "topology ") != 1 || !strings.Contains(joined, "topology subnet") {
-		t.Fatalf("topology was not normalized: %q", joined)
+	if strings.Count(joined, "topology ") != 2 || !strings.Contains(joined, "topology subnet") || !strings.Contains(joined, `push "topology subnet"`) {
+		t.Fatalf("topology was not normalized and pushed: %q", joined)
 	}
 }
 

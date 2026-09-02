@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,23 @@ func TestGenerateClientConfigGoReplacesRevokedCertificateWhenNameIsReused(t *tes
 	}
 	if newRevoked {
 		t.Fatal("replacement client certificate is unexpectedly revoked")
+	}
+}
+
+func TestNormalizeClientTopology(t *testing.T) {
+	profile := "client\r\nproto udp\r\nremote vpn.example 1194\r\ndev tun\r\ntopology net30\r\ntopology net30\r\nverb 3\r\n"
+	normalized := normalizeClientTopology(profile)
+	if strings.Count(normalized, "topology ") != 1 {
+		t.Fatalf("expected exactly one topology directive, got %q", normalized)
+	}
+	if !strings.Contains(normalized, "topology subnet") || strings.Contains(normalized, "topology net30") {
+		t.Fatalf("profile was not normalized to subnet topology: %q", normalized)
+	}
+}
+
+func TestNormalizeClientTopologyAddsDirectiveAfterTun(t *testing.T) {
+	normalized := normalizeClientTopology("client\nproto udp\ndev tun\nverb 3\n")
+	if !strings.Contains(normalized, "dev tun\ntopology subnet\n") {
+		t.Fatalf("topology directive was not inserted after dev tun: %q", normalized)
 	}
 }

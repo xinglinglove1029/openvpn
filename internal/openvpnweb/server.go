@@ -2922,7 +2922,16 @@ func Run(info BuildInfo) {
 				return
 			}
 
-			c.JSON(http.StatusOK, gin.H{"content": string(data)})
+			// Migrate profiles created before subnet topology was enforced. Return
+			// the corrected content immediately and persist it for future downloads.
+			normalized := normalizeClientTopology(string(data))
+			if normalized != string(data) {
+				if writeErr := clientsRoot.WriteFile(name+".ovpn", []byte(normalized), 0644); writeErr != nil {
+					logger.Warn(context.Background(), "修复客户端 topology 配置失败: %s", writeErr.Error())
+				}
+			}
+
+			c.JSON(http.StatusOK, gin.H{"content": normalized})
 		})
 
 		ovpn.PUT("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {

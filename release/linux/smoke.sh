@@ -113,6 +113,7 @@ EOF
       )
       grep -qx 'topology subnet' "$case_dir/server.conf" || fail "$runtime did not enforce subnet topology ($topology_case)"
       [[ "$(grep -Ec '^[[:space:]]*topology[[:space:]]+' "$case_dir/server.conf")" == 1 ]] || fail "$runtime left duplicate topology directives ($topology_case)"
+      [[ "$(grep -Ec '^[[:space:]]*push[[:space:]]+\"topology[[:space:]]+subnet\"' "$case_dir/server.conf")" == 1 ]] || fail "$runtime did not push subnet topology ($topology_case)"
       cp "$case_dir/server.conf" "$case_dir/server.conf.before"
       (
         export OVPN_DATA="$case_dir"

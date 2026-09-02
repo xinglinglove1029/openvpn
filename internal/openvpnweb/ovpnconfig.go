@@ -206,6 +206,7 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 	hasServer := false
 	hasModeServer := false
 	hasIfconfigPool := false
+	hasPushedTopology := false
 	for _, line := range cfg.Lines {
 		trim := strings.TrimSpace(line)
 		if trim == "" || strings.HasPrefix(trim, "#") || strings.HasPrefix(trim, ";") {
@@ -218,6 +219,10 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 		switch fields[0] {
 		case "server":
 			hasServer = true
+		case "push":
+			if strings.HasPrefix(trim, `push "topology`) {
+				hasPushedTopology = true
+			}
 		case "mode":
 			hasModeServer = hasModeServer || (len(fields) > 1 && fields[1] == "server")
 		case "ifconfig-pool":
@@ -232,8 +237,9 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 	}
 	hasExplicitPool := hasModeServer && hasIfconfigPool
 
-	newLines := make([]string, 0, len(cfg.Lines)+1)
+	newLines := make([]string, 0, len(cfg.Lines)+2)
 	topologyWritten := false
+	pushedTopologyWritten := false
 	for _, line := range cfg.Lines {
 		trim := strings.TrimSpace(line)
 		if trim != "" && !strings.HasPrefix(trim, "#") && !strings.HasPrefix(trim, ";") {
@@ -243,6 +249,13 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 					if !topologyWritten {
 						newLines = append(newLines, "topology subnet")
 						topologyWritten = true
+					}
+					continue
+				}
+				if fields[0] == "push" && strings.HasPrefix(trim, `push "topology`) {
+					if !pushedTopologyWritten {
+						newLines = append(newLines, `push "topology subnet"`)
+						pushedTopologyWritten = true
 					}
 					continue
 				}
@@ -258,6 +271,9 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 	}
 	if !topologyWritten {
 		newLines = append([]string{"topology subnet"}, newLines...)
+	}
+	if hasExplicitPool && !hasPushedTopology && !pushedTopologyWritten {
+		newLines = append(newLines, `push "topology subnet"`)
 	}
 	cfg.Lines = newLines
 }
