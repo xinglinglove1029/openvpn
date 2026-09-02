@@ -194,6 +194,74 @@ func (cfg *VPNConfig) Save() {
 	os.WriteFile(cfg.ConfigPath, []byte(strings.Join(cfg.Lines, "\n")+"\n"), 0644)
 }
 
+// normalizeServerTopology removes directives that can reintroduce the legacy
+// net30 layout after the startup migration has converted server.conf to an
+// explicit subnet pool. The config watcher calls Update for every OpenVPN
+// setting; calling cfg.Set("server", ...) there used to append a second
+// server directive and made the effective topology depend on directive order.
+func (cfg *VPNConfig) normalizeServerTopology() {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	hasServer := false
+	hasModeServer := false
+	hasIfconfigPool := false
+	for _, line := range cfg.Lines {
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") || strings.HasPrefix(trim, ";") {
+			continue
+		}
+		fields := strings.Fields(trim)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "server":
+			hasServer = true
+		case "mode":
+			hasModeServer = hasModeServer || (len(fields) > 1 && fields[1] == "server")
+		case "ifconfig-pool":
+			hasIfconfigPool = true
+		}
+	}
+
+	// Only normalize configurations that are actually using an IPv4 server
+	// pool. server-ipv6 is deliberately not considered here.
+	if !hasServer && !(hasModeServer && hasIfconfigPool) {
+		return
+	}
+	hasExplicitPool := hasModeServer && hasIfconfigPool
+
+	newLines := make([]string, 0, len(cfg.Lines)+1)
+	topologyWritten := false
+	for _, line := range cfg.Lines {
+		trim := strings.TrimSpace(line)
+		if trim != "" && !strings.HasPrefix(trim, "#") && !strings.HasPrefix(trim, ";") {
+			fields := strings.Fields(trim)
+			if len(fields) > 0 {
+				if fields[0] == "topology" {
+					if !topologyWritten {
+						newLines = append(newLines, "topology subnet")
+						topologyWritten = true
+					}
+					continue
+				}
+				// A legacy server helper must not coexist with the explicit
+				// mode/ifconfig-pool layout. Keep server-ipv6 untouched because
+				// it has a different directive name.
+				if hasExplicitPool && fields[0] == "server" {
+					continue
+				}
+			}
+		}
+		newLines = append(newLines, line)
+	}
+	if !topologyWritten {
+		newLines = append([]string{"topology subnet"}, newLines...)
+	}
+	cfg.Lines = newLines
+}
+
 func (cfg *VPNConfig) Update(key string, val string) {
 	switch key {
 	case "openvpn.ovpn_port":
@@ -333,5 +401,6 @@ func (cfg *VPNConfig) Update(key string, val string) {
 		}
 	}
 
+	cfg.normalizeServerTopology()
 	cfg.Save()
 }

@@ -336,6 +336,8 @@ client
 proto $([[ "$OVPN_IPV6" == "true" ]] && [[ ! "$OVPN_PROTO" =~ 6 ]] && echo "${OVPN_PROTO}6" || echo $OVPN_PROTO)
 remote ${2:-$([[ "$OVPN_IPV6" == "true" ]] && ip -6 route get 2001:4860:4860::8888 | grep -oP 'src \K\S+' || ip -4 route get 8.8.8.8 | grep -oP 'src \K\S+')} ${3:-$OVPN_PORT}
 dev tun
+# Keep generated profiles explicit even when connecting to an upgraded server.
+topology subnet
 resolv-retry infinite
 nobind
 persist-key
@@ -391,25 +393,32 @@ separate_static_ipv4_address_pool() {
 	# an unrelated dynamic client at the same time. Replace the unchanged legacy
 	# /24 helper form with its explicit equivalent and reserve .2-.127 for
 	# per-user fixed addresses; dynamic clients receive .128-.253.
-	local subnet base legacy_line tmp
+	local subnet base network netmask tmp
 	subnet=$(jq -r '.openvpn.ovpn_subnet // "10.8.0.0/24"' "$SYSTEM_CONFIG")
 	[[ "$subnet" =~ ^([0-9]{1,3}\.){3}0/24$ ]] || return 0
 	base="${subnet%.*}"
-	legacy_line="server $(getsubnet "$subnet")"
-	grep -Fqx "$legacy_line" "$config" || return 0
+	network=$(getsubnet "$subnet" | awk '{print $1}')
+	netmask=$(getsubnet "$subnet" | awk '{print $2}')
 
 	tmp=$(mktemp "${config}.pool.XXXXXX") || return 1
-	awk -v old="$legacy_line" -v base="$base" '
-		$0 == old {
-			print "mode server"
-			print "ifconfig " base ".1 255.255.255.0"
-			print "ifconfig-pool " base ".128 " base ".253 255.255.255.0"
-			print "route " base ".0 255.255.255.0"
-			print "push \"route-gateway " base ".1\""
-			next
+	awk -v network="$network" -v netmask="$netmask" -v base="$base" '
+		{
+			line = $0
+			sub(/\r$/, "", line)
+			n = split(line, fields, /[[:space:]]+/)
+			if (n >= 3 && fields[1] == "server" && fields[2] == network && fields[3] == netmask) {
+				print "mode server"
+				print "ifconfig " base ".1 255.255.255.0"
+				print "ifconfig-pool " base ".128 " base ".253 255.255.255.0"
+				print "route " base ".0 255.255.255.0"
+				print "push \"route-gateway " base ".1\""
+				next
+			}
+			print line
 		}
-		{ print }
-	' "$config" >"$tmp" && mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
+	' "$config" >"$tmp" || { rm -f "$tmp"; return 1; }
+	cmp -s "$config" "$tmp" && { rm -f "$tmp"; return 0; }
+	mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
 	echo "[OPENVPN-CONFIG] reserved ${base}.2-${base}.127 for fixed client IPs; dynamic pool is ${base}.128-${base}.253" >&2
 }
 
@@ -417,30 +426,40 @@ ensure_subnet_topology_for_explicit_pool() {
 	config="$OVPN_DATA/server.conf"
 	[ -f "$config" ] || return 0
 
-	# `mode server` + `ifconfig-pool` is the explicit replacement for the
-	# legacy `server` helper above. It must use subnet topology: a previous
-	# net30 directive (or no topology directive, whose default is net30) makes
-	# OpenVPN hand out /24-style addresses which strict clients such as OpenVPN
-	# Connect for macOS reject as not belonging to the same /30.
-	grep -Eq '^[[:space:]]*mode[[:space:]]+server([[:space:]]|$)' "$config" || return 0
-	grep -Eq '^[[:space:]]*ifconfig-pool[[:space:]]+' "$config" || return 0
-
-	local tmp
-	tmp=$(mktemp "${config}.topology.XXXXXX") || return 1
+	# Existing installations can have either the old `server` helper or the
+	# newer explicit mode/ifconfig-pool layout. Both must advertise subnet
+	# topology. A missing/old topology directive makes OpenVPN Connect for macOS
+	# interpret the pushed address as net30 and fail with tun_prop_error.
 	awk '
+		$1 == "server" || ($1 == "mode" && $2 == "server") || $1 == "ifconfig-pool" { found = 1 }
+		END { exit(found ? 0 : 1) }
+	' "$config" || return 0
+
+	local tmp explicit
+	tmp=$(mktemp "${config}.topology.XXXXXX") || return 1
+	# Remove every active topology and write exactly one subnet directive. A
+	# stale server helper is also removed when the explicit pool is present, so
+	# directive order cannot switch the effective topology back to net30.
+	explicit=$(awk '
+		/^[[:space:]]*[#;]/ { next }
+		$1 == "mode" && $2 == "server" { has_mode = 1 }
+		$1 == "ifconfig-pool" { has_pool = 1 }
+		END { print (has_mode && has_pool) ? "1" : "0" }
+	' "$config")
+	awk -v explicit="$explicit" '
 		BEGIN { emitted = 0 }
 		/^[[:space:]]*[#;]/ { print; next }
-		$1 == "topology" { next }
 		{
-			if (!emitted) {
-				print "topology subnet"
-				emitted = 1
+			if ($1 == "topology") {
+				if (!emitted) { print "topology subnet"; emitted = 1 }
+				next
 			}
+			# Keep server-ipv6; only the IPv4 server helper is removed.
+			if (explicit == "1" && $1 == "server") next
+			if (!emitted) { print "topology subnet"; emitted = 1 }
 			print
 		}
-		END {
-			if (!emitted) print "topology subnet"
-		}
+		END { if (!emitted) print "topology subnet" }
 	' "$config" >"$tmp" || { rm -f "$tmp"; return 1; }
 
 	if cmp -s "$config" "$tmp"; then
@@ -448,7 +467,7 @@ ensure_subnet_topology_for_explicit_pool() {
 		return 0
 	fi
 	mv "$tmp" "$config"
-	echo "[OPENVPN-CONFIG] enforced topology subnet for explicit IPv4 address pool" >&2
+	echo "[OPENVPN-CONFIG] enforced topology subnet for IPv4 address pool" >&2
 }
 
 add_history() {

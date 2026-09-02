@@ -34,3 +34,37 @@ func TestSetDNSPushResolversReplacesLegacyAndDuplicateLines(t *testing.T) {
 		t.Fatalf("DNS push lines remain after gateway disable: %q", cfg.Lines)
 	}
 }
+
+func TestNormalizeServerTopologyRemovesLegacyDirectiveFromExplicitPool(t *testing.T) {
+	cfg := &VPNConfig{Lines: []string{
+		"port 1194",
+		"topology net30",
+		"mode server",
+		"ifconfig 10.8.0.1 255.255.255.0",
+		"ifconfig-pool 10.8.0.128 10.8.0.253 255.255.255.0",
+		"server 10.8.0.0 255.255.255.0",
+	}}
+
+	cfg.normalizeServerTopology()
+	joined := strings.Join(cfg.Lines, "\n")
+	if strings.Contains(joined, "server 10.8.0.0") {
+		t.Fatalf("legacy server directive remains: %q", joined)
+	}
+	if strings.Count(joined, "topology ") != 1 || !strings.Contains(joined, "topology subnet") {
+		t.Fatalf("topology was not normalized: %q", joined)
+	}
+}
+
+func TestNormalizeServerTopologyAddsSubnetForLegacyServer(t *testing.T) {
+	cfg := &VPNConfig{Lines: []string{
+		"port 1194",
+		"topology net30",
+		"server 10.8.0.0 255.255.255.0",
+	}}
+
+	cfg.normalizeServerTopology()
+	joined := strings.Join(cfg.Lines, "\n")
+	if !strings.Contains(joined, "topology subnet") || strings.Contains(joined, "topology net30") {
+		t.Fatalf("legacy topology was not normalized: %q", joined)
+	}
+}
