@@ -281,6 +281,74 @@ func (cfg *VPNConfig) normalizeServerTopology() {
 	cfg.Lines = newLines
 }
 
+// vpnIPTablesBackends returns every usable IPv4 xtables frontend. Docker and
+// host upgrades can leave nft and legacy tables active together; configuring
+// only the first command that happens to list a table can leave FORWARD blocked
+// in the other backend.
+func vpnIPTablesBackends() []string {
+	backends := make([]string, 0, 3)
+	for _, candidate := range []string{"iptables-nft", "iptables-legacy", "iptables"} {
+		path, err := exec.LookPath(candidate)
+		if err != nil {
+			continue
+		}
+		if err := exec.Command(path, "-t", "filter", "-L", "FORWARD").Run(); err != nil {
+			continue
+		}
+		backends = append(backends, path)
+	}
+	return backends
+}
+
+func serverDirectiveCIDR(value string) string {
+	fields := strings.Fields(value)
+	if len(fields) != 2 {
+		return ""
+	}
+	ip := net.ParseIP(fields[0]).To4()
+	maskIP := net.ParseIP(fields[1]).To4()
+	if ip == nil || maskIP == nil {
+		return ""
+	}
+	mask := net.IPMask(maskIP)
+	_, bits := mask.Size()
+	if bits != 32 {
+		return ""
+	}
+	return (&net.IPNet{IP: ip.Mask(mask), Mask: mask}).String()
+}
+
+func reconcileVPNFirewallRules(oldSubnet, newSubnet string) {
+	if newSubnet == "" {
+		return
+	}
+	for _, ipt := range vpnIPTablesBackends() {
+		if oldSubnet != "" && oldSubnet != newSubnet {
+			if err := exec.Command(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", oldSubnet, "-j", "MASQUERADE").Run(); err != nil {
+				// A missing old rule is expected during first start or after a
+				// backend switch; keep reconciling the active configuration.
+			}
+		}
+		ensure := [][]string{
+			{"-t", "filter", "-C", "FORWARD", "-i", "tun0", "-s", newSubnet, "-j", "ACCEPT"},
+			{"-t", "filter", "-C", "FORWARD", "-o", "tun0", "-d", newSubnet, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
+			{"-t", "nat", "-C", "POSTROUTING", "-s", newSubnet, "-j", "MASQUERADE"},
+		}
+		adds := [][]string{
+			{"-t", "filter", "-I", "FORWARD", "1", "-i", "tun0", "-s", newSubnet, "-j", "ACCEPT"},
+			{"-t", "filter", "-I", "FORWARD", "1", "-o", "tun0", "-d", newSubnet, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
+			{"-t", "nat", "-A", "POSTROUTING", "-s", newSubnet, "-j", "MASQUERADE"},
+		}
+		for i := range ensure {
+			if err := exec.Command(ipt, ensure[i]...).Run(); err != nil {
+				if out, addErr := exec.Command(ipt, adds[i]...).CombinedOutput(); addErr != nil {
+					logger.Error(context.Background(), fmt.Sprintf("reconcile VPN firewall with %s: %s", ipt, strings.TrimSpace(string(out))))
+				}
+			}
+		}
+	}
+}
+
 func (cfg *VPNConfig) Update(key string, val string) {
 	switch key {
 	case "openvpn.ovpn_port":
@@ -296,38 +364,11 @@ func (cfg *VPNConfig) Update(key string, val string) {
 			logger.Error(context.Background(), err.Error())
 			return
 		}
+		newSubnet := ipnet.String()
+		oldSubnetCIDR := serverDirectiveCIDR(oldSubnet)
 		val = fmt.Sprintf("%s %s", ip.String(), net.IP(ipnet.Mask).String())
 		cfg.Set("server", val)
-
-		ipt := "iptables-nft"
-		checkCmd := exec.Command("iptables-legacy", "-L", "-n", "-t", "nat")
-		if err := checkCmd.Run(); err == nil {
-			ipt = "iptables-legacy"
-		}
-
-		if oldSubnet != "" && oldSubnet != val {
-			getOldCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
-			if err := getOldCmd.Run(); err == nil {
-				delOldCmd := exec.Command(ipt, "-t", "nat", "-D", "POSTROUTING", "-s", strings.ReplaceAll(oldSubnet, " ", "/"), "-j", "MASQUERADE")
-				if out, err := delOldCmd.CombinedOutput(); err != nil {
-					if len(out) == 0 {
-						out = []byte(err.Error())
-					}
-					logger.Error(context.Background(), string(out))
-				}
-			}
-		}
-
-		getCmd := exec.Command(ipt, "-t", "nat", "-C", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
-		if err := getCmd.Run(); err != nil {
-			addCmd := exec.Command(ipt, "-t", "nat", "-A", "POSTROUTING", "-s", strings.ReplaceAll(val, " ", "/"), "-j", "MASQUERADE")
-			if out, err := addCmd.CombinedOutput(); err != nil {
-				if len(out) == 0 {
-					out = []byte(err.Error())
-				}
-				logger.Error(context.Background(), string(out))
-			}
-		}
+		reconcileVPNFirewallRules(oldSubnetCIDR, newSubnet)
 	case "openvpn.ovpn_gateway":
 		if val == "true" {
 			cfg.SetDNSPushResolvers(viper.GetString("openvpn.ovpn_push_dns1"), viper.GetString("openvpn.ovpn_push_dns2"))

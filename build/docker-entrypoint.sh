@@ -205,15 +205,58 @@ cleanup_retired_web_audit_rules() {
 	cleanup_retired_web_audit_quic_block
 }
 
+# Return every usable IPv4 xtables frontend. Docker and host packages can leave
+# nft and legacy tables active at the same time, so checking only one command
+# is insufficient when a FORWARD policy is installed by the other backend.
+vpn_iptables_backends() {
+	local candidate
+	for candidate in iptables-nft iptables-legacy iptables; do
+		command -v "$candidate" >/dev/null 2>&1 || continue
+		"$candidate" -t filter -L FORWARD >/dev/null 2>&1 || continue
+		printf '%s\n' "$candidate"
+	done
+}
+
+vpn_ip6tables_backends() {
+	local candidate
+	for candidate in ip6tables-nft ip6tables-legacy ip6tables; do
+		command -v "$candidate" >/dev/null 2>&1 || continue
+		"$candidate" -t filter -L FORWARD >/dev/null 2>&1 || continue
+		printf '%s\n' "$candidate"
+	done
+}
+
+ensure_vpn_firewall_rules() {
+	local subnet=$1 ipt
+	while IFS= read -r ipt; do
+		[ -n "$ipt" ] || continue
+		"$ipt" -t filter -C FORWARD -i tun0 -s "$subnet" -j ACCEPT >/dev/null 2>&1 || \
+			"$ipt" -t filter -I FORWARD 1 -i tun0 -s "$subnet" -j ACCEPT
+		"$ipt" -t filter -C FORWARD -o tun0 -d "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
+			"$ipt" -t filter -I FORWARD 1 -o tun0 -d "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+		"$ipt" -t nat -C POSTROUTING -s "$subnet" -j MASQUERADE >/dev/null 2>&1 || \
+			"$ipt" -t nat -A POSTROUTING -s "$subnet" -j MASQUERADE
+	done < <(vpn_iptables_backends)
+}
+
+ensure_vpn_ipv6_firewall_rules() {
+	local subnet=$1 ipt
+	[ -n "$subnet" ] || return 0
+	while IFS= read -r ipt; do
+		[ -n "$ipt" ] || continue
+		"$ipt" -t filter -C FORWARD -i tun0 -s "$subnet" -j ACCEPT >/dev/null 2>&1 || \
+			"$ipt" -t filter -I FORWARD 1 -i tun0 -s "$subnet" -j ACCEPT
+		"$ipt" -t filter -C FORWARD -o tun0 -d "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
+			"$ipt" -t filter -I FORWARD 1 -o tun0 -d "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+		"$ipt" -t nat -C POSTROUTING -s "$subnet" -j MASQUERADE >/dev/null 2>&1 || \
+			"$ipt" -t nat -A POSTROUTING -s "$subnet" -j MASQUERADE
+	done < <(vpn_ip6tables_backends)
+}
+
 run_server() {
 	mkdir -p /dev/net
 	if [ ! -c /dev/net/tun ]; then
 		mknod /dev/net/tun c 10 200
-	fi
-
-	ipt="iptables-nft"
-	if iptables-legacy -L -n -t nat >/dev/null 2>&1; then
-		ipt="iptables-legacy"
 	fi
 
 	config=$OVPN_DATA/server.conf
@@ -234,15 +277,15 @@ run_server() {
 		echo "Unable to determine the OpenVPN IPv4 subnet; refusing to start with incomplete NAT rules" >&2
 		return 1
 	fi
-	$ipt -t nat -C POSTROUTING -s "$ovpn_subnet" -j MASQUERADE >/dev/null 2>&1 || {
-		$ipt -t nat -A POSTROUTING -s "$ovpn_subnet" -j MASQUERADE
-	}
+	# Docker may install an nftables FORWARD chain with policy DROP while an
+	# older host upgrade still has an iptables-legacy table. Reconcile both
+	# backends so VPN forwarding does not depend on which backend happened to
+	# be selected by the distribution alternatives.
+	ensure_vpn_firewall_rules "$ovpn_subnet"
 
 	if [ "$(jq -r '.openvpn.ovpn_ipv6 // false' "$SYSTEM_CONFIG")" = "true" ]; then
 		ovpn_subnet6=$(awk '$1=="server-ipv6"{print $2, $3}' $config)
-		${ipt/iptables/ip6tables} -t nat -C POSTROUTING -s $ovpn_subnet6 -j MASQUERADE >/dev/null 2>&1 || {
-			${ipt/iptables/ip6tables} -t nat -A POSTROUTING -s $ovpn_subnet6 -j MASQUERADE
-		}
+		ensure_vpn_ipv6_firewall_rules "$ovpn_subnet6"
 	fi
 
 	# Clear retired website-audit rules from every xtables backend before OpenVPN
