@@ -27,13 +27,16 @@ func newFirewallNftCommand(executable string, args ...string) *firewallNftComman
 	return &firewallNftCommand{executable: executable, args: args, timeout: firewallNftTimeout}
 }
 
-type firewallNftOutput struct{ bytes.Buffer }
+type firewallNftOutput struct{ buffer bytes.Buffer }
+
+func (b *firewallNftOutput) Len() int      { return b.buffer.Len() }
+func (b *firewallNftOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *firewallNftOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > firewallNftMaxOutput {
 		return 0, fmt.Errorf("nft output exceeds %d bytes", firewallNftMaxOutput)
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 
 func (c *firewallNftCommand) execute(combined bool) ([]byte, error) {

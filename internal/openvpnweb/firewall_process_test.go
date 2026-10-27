@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +24,17 @@ func TestFirewallNftOutputRejectsOversizedSnapshot(t *testing.T) {
 	}
 	if output.Len() != firewallNftMaxOutput {
 		t.Fatalf("output grew beyond its bound: %d", output.Len())
+	}
+}
+
+func TestFirewallNftOutputBoundsPipeCopy(t *testing.T) {
+	var output firewallNftOutput
+	// os/exec copies the child's stdout pipe with io.Copy. Its ReaderFrom
+	// optimization must obey the same bound as direct Write calls.
+	source := io.LimitReader(strings.NewReader(strings.Repeat("x", firewallNftMaxOutput+1)), int64(firewallNftMaxOutput+1))
+	_, err := io.Copy(&output, source)
+	if err == nil || output.Len() > firewallNftMaxOutput {
+		t.Fatalf("pipe copy bypassed the output bound: bytes=%d err=%v", output.Len(), err)
 	}
 }
 
