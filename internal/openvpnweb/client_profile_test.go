@@ -52,3 +52,21 @@ func TestDownloadClientProfileMigratesOldFilesAndPreservesCredentials(t *testing
 		}
 	}
 }
+
+func TestReadCompatibleClientProfileAcceptsBareClientName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alice.ovpn"), []byte("client\npersist-tun\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	for _, name := range []string{"alice", "alice.ovpn"} {
+		got, err := readCompatibleClientProfile(root, name)
+		if err != nil || string(got) != "client\n" {
+			t.Fatalf("historical config name %q: %q %v", name, got, err)
+		}
+	}
+}

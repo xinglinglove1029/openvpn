@@ -14,6 +14,11 @@ import (
 // Every download path shares this migration, so old files and files edited by
 // an older client cannot reintroduce unsupported options on the next download.
 func readCompatibleClientProfile(root *os.Root, filename string) ([]byte, error) {
+	// Account creation historically persisted either a client CN or its full
+	// filename. Both refer to the same managed profile on disk.
+	if !strings.HasSuffix(filename, ".ovpn") {
+		filename += ".ovpn"
+	}
 	data, err := root.ReadFile(filename)
 	if err != nil {
 		return nil, err

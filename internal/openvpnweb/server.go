@@ -3729,6 +3729,9 @@ func Run(info BuildInfo) {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "该账号未指定配置文件，请联系管理员"})
 				return
 			}
+			if !strings.HasSuffix(configName, ".ovpn") {
+				configName += ".ovpn"
+			}
 
 			clientsDir := filepath.Join(ovData, "clients")
 
