@@ -30,6 +30,18 @@ jobs:
           OVPN_DATA: ${{ github.workspace }}/data
         run: go test -count=1 ./...
 
+      - name: Verify nftables reloads in isolated containers
+        run: |
+          docker build -t openvpn-nft-regression - <<'EOF'
+          FROM alpine:3.23.4
+          RUN apk add --no-cache bash coreutils jq nftables
+          EOF
+          for runtime in build/docker-entrypoint.sh release/linux/openvpn-web-entrypoint.sh; do
+            docker run --rm --network none --cap-add NET_ADMIN \
+              -v "$GITHUB_WORKSPACE:/src:ro" openvpn-nft-regression \
+              bash /src/scripts/test-nft-reload.sh "/src/$runtime"
+          done
+
   release:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     needs: test

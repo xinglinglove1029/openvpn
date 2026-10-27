@@ -617,7 +617,36 @@ table inet $TABLE {
 }
 EOF
 
-	nft -f $NFT_CONFIG
+	# `nft -f` adds rules to an existing table. Replaying a saved snapshot
+	# without replacing that table doubled the rules on every service restart.
+	# Save-on-connect then persisted the duplicates and eventually exhausted
+	# host memory. Normalize historical duplicates inside each chain, and
+	# replace only our table in one atomic batch (never flush the host ruleset).
+	[[ "$TABLE" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || return 1
+	local normalized batch
+	normalized=$(mktemp "${NFT_CONFIG}.normalized.XXXXXX") || return 1
+	batch=$(mktemp "${NFT_CONFIG}.batch.XXXXXX") || { rm -f "$normalized"; return 1; }
+	awk '
+		/^[[:space:]]*chain[[:space:]]+/ { chain = $2; delete seen }
+		chain != "" && /^[[:space:]]*}/ { chain = "" }
+		chain != "" && $0 !~ /^[[:space:]]*(chain[[:space:]]|$|#)/ {
+			key = $0; sub(/^[[:space:]]+/, "", key); sub(/[[:space:]]+$/, "", key)
+			if (seen[key]++) next
+		}
+		{ print }
+	' "$NFT_CONFIG" >"$normalized" || { rm -f "$normalized" "$batch"; return 1; }
+	# `add table` is idempotent, including on a fresh host after reboot.
+	if ! timeout 10 nft add table inet "$TABLE"; then
+		rm -f "$normalized" "$batch"; return 1
+	fi
+	printf 'delete table inet %s\n' "$TABLE" >"$batch"
+	cat "$normalized" >>"$batch"
+	if ! timeout 10 nft -f "$batch"; then
+		rm -f "$normalized" "$batch"; return 1
+	fi
+	rm -f "$batch"
+	chmod 0600 "$normalized"
+	mv "$normalized" "$NFT_CONFIG"
 }
 
 set_firewall() {

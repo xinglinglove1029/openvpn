@@ -57,8 +57,6 @@ type ClientData struct {
 	IsNftBlacklist bool    `json:"isNftBlacklist"`
 }
 
-const onlineClientStaleAfter = 90 * time.Second
-
 type ServerData struct {
 	RunDate    string
 	Status     string
@@ -203,27 +201,10 @@ func (ov *ovpn) getClient() []ClientData {
 	}
 
 	lines := strings.Split(data, "\r\n")
-	lastRefByClient := make(map[string]time.Time)
-	for _, v := range lines {
-		cdSlice := strings.Split(v, "\t")
-		if len(cdSlice) < 5 || cdSlice[0] != "ROUTING_TABLE" {
-			continue
-		}
-		lastRef, err := time.ParseInLocation("2006-01-02 15:04:05", cdSlice[4], time.Local)
-		if err != nil {
-			continue
-		}
-		// The common name is the stable key used by OpenVPN's status output.
-		lastRefByClient[cdSlice[2]] = lastRef
-	}
-
 	for _, v := range lines {
 		cdSlice := strings.Split(v, "\t")
 
 		if len(cdSlice) >= 11 && cdSlice[0] == "CLIENT_LIST" {
-			if lastRef, ok := lastRefByClient[cdSlice[1]]; ok && time.Since(lastRef) > onlineClientStaleAfter {
-				continue
-			}
 			recv, _ := strconv.ParseFloat(cdSlice[5], 64)
 			send, _ := strconv.ParseFloat(cdSlice[6], 64)
 			connDate, _ := time.ParseInLocation("2006-01-02 15:04:05", cdSlice[7], time.Local)

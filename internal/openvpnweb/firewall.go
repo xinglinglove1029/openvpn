@@ -3,13 +3,14 @@ package openvpnweb
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,7 @@ type FirewallSet struct {
 }
 
 func getNftQosChainRule(chain, ip string) ChainRuleData {
-	cmd := exec.Command(
+	cmd := newFirewallNftCommand(
 		"nft",
 		"-a",
 		"list",
@@ -93,12 +94,12 @@ func setNftQosChain(chain, ips, rate, unit string) error {
 			family = "ip6"
 		}
 
-		cmd := exec.Command("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
+		cmd := newFirewallNftCommand("nft", "add", "rule", "inet", nftTableName, chain, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
 		if qos.Handle != "" {
 			if r == 0 {
-				cmd = exec.Command("nft", "delete", "rule", "inet", nftTableName, chain, "handle", qos.Handle)
+				cmd = newFirewallNftCommand("nft", "delete", "rule", "inet", nftTableName, chain, "handle", qos.Handle)
 			} else {
-				cmd = exec.Command("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
+				cmd = newFirewallNftCommand("nft", "replace", "rule", "inet", nftTableName, chain, "handle", qos.Handle, family, addrField, ip, "limit", "rate", "over", rate, unit, "drop")
 			}
 		}
 
@@ -143,7 +144,7 @@ func setNftBlackList(ips, action string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := newFirewallNftCommand("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) == 0 {
@@ -157,7 +158,7 @@ func setNftBlackList(ips, action string) error {
 }
 
 func getNftChainRule(chain, comment string) ChainRuleData {
-	cmd := exec.Command(
+	cmd := newFirewallNftCommand(
 		"nft",
 		"-a",
 		"list",
@@ -229,7 +230,7 @@ func setNftChain(chain string, f Firewall) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := newFirewallNftCommand("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -266,7 +267,7 @@ func deleteNftChainRule(chain, fid string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := newFirewallNftCommand("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -316,7 +317,7 @@ func setNftTableSet(name, ips string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := newFirewallNftCommand("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -332,7 +333,7 @@ func setNftTableSet(name, ips string) error {
 
 func deleteNftTableSet(name string) error {
 	if getNftTableSet(name) {
-		cmd := exec.Command("nft", "delete", "set", "inet", nftTableName, name)
+		cmd := newFirewallNftCommand("nft", "delete", "set", "inet", nftTableName, name)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			if len(out) == 0 {
 				out = []byte(err.Error())
@@ -346,16 +347,19 @@ func deleteNftTableSet(name string) error {
 }
 
 func getNftTableSet(name string) bool {
-	return exec.Command("nft", "list", "set", "inet", nftTableName, name).Run() == nil
+	return newFirewallNftCommand("nft", "list", "set", "inet", nftTableName, name).Run() == nil
 }
 
 func getNftTableSetElement(name, ip string) bool {
+	if net.ParseIP(ip) == nil {
+		return false
+	}
 	setName := name + "_v4"
 	if strings.Contains(ip, ":") {
 		setName = name + "_v6"
 	}
 
-	cmd := exec.Command(
+	cmd := newFirewallNftCommand(
 		"nft", "get", "element", "inet",
 		nftTableName,
 		setName,
@@ -409,7 +413,7 @@ func addNftTableSetElement(name, ips string) error {
 		return nil
 	}
 
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := newFirewallNftCommand("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(sb.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if len(out) == 0 {
@@ -435,7 +439,7 @@ func deleteNftTableSetElement(name, ips string) error {
 		}
 
 		if getNftTableSetElement(name, ip) {
-			cmd := exec.Command(
+			cmd := newFirewallNftCommand(
 				"nft", "delete", "element", "inet",
 				nftTableName,
 				setName,
@@ -520,8 +524,14 @@ func setOnlineClinetNft(f Firewall) error {
 	return nil
 }
 
+var firewallSnapshotMu sync.Mutex
+
 func saveNftConfig() error {
-	cmd := exec.Command("nft", "list", "table", "inet", nftTableName)
+	// Serialize the complete read/write, and atomically publish a complete
+	// snapshot so simultaneous hooks cannot leave a truncated startup file.
+	firewallSnapshotMu.Lock()
+	defer firewallSnapshotMu.Unlock()
+	cmd := newFirewallNftCommand("nft", "list", "table", "inet", nftTableName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if len(out) == 0 {
@@ -531,7 +541,19 @@ func saveNftConfig() error {
 		return fmt.Errorf("%s", out)
 	}
 
-	return os.WriteFile(path.Join(ovData, "openvpn.nft"), out, 0644)
+	f, err := os.CreateTemp(ovData, ".openvpn.nft.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path.Join(ovData, "openvpn.nft"))
 }
 
 func getUserFirewallSetName(username string) []FirewallSet {
@@ -678,6 +700,10 @@ func FirewallHandler(c *gin.Context) {
 			vip6 := c.PostForm("vip6")
 
 			fs := getUserFirewallSetName(username)
+			if len(fs) == 0 {
+				c.JSON(http.StatusOK, gin.H{"message": "无需更新防火墙地址"})
+				return
+			}
 			for _, f := range fs {
 				err := addNftTableSetElement(f.SetName, fmt.Sprintf("%s,%s", vip, vip6))
 				if err != nil {
@@ -700,6 +726,10 @@ func FirewallHandler(c *gin.Context) {
 			vip6 := c.PostForm("vip6")
 
 			fs := getUserFirewallSetName(username)
+			if len(fs) == 0 {
+				c.JSON(http.StatusOK, gin.H{"message": "无需更新防火墙地址"})
+				return
+			}
 			for _, f := range fs {
 				err := deleteNftTableSetElement(f.SetName, fmt.Sprintf("%s,%s", vip, vip6))
 				if err != nil {
