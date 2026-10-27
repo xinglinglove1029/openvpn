@@ -1365,7 +1365,8 @@ func Run(info BuildInfo) {
 
 	ovpn := r.Group("/ovpn")
 	{
-		ovpn.StaticFS("/download", http.Dir(filepath.Join(ovData, "clients")))
+		ovpn.GET("/download/*filepath", downloadClientProfile)
+		ovpn.HEAD("/download/*filepath", downloadClientProfile)
 		ovpn.GET("/dashboard/summary", RequirePermission("menu:overview"), ov.dashboardSummary)
 		ovpn.GET("/dashboard/traffic-users", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardTrafficUsers)
 		ovpn.GET("/dashboard/geo-map", RequirePermission("menu:overview"), RequireExecutiveDashboard(), ov.dashboardGeo)
@@ -2917,22 +2918,13 @@ func Run(info BuildInfo) {
 			}
 			defer clientsRoot.Close()
 
-			data, err := clientsRoot.ReadFile(name + ".ovpn")
+			data, err := readCompatibleClientProfile(clientsRoot, name+".ovpn")
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
 
-			// Migrate profiles created before subnet topology was enforced. Return
-			// the corrected content immediately and persist it for future downloads.
-			normalized := normalizeClientTopology(string(data))
-			if normalized != string(data) {
-				if writeErr := clientsRoot.WriteFile(name+".ovpn", []byte(normalized), 0644); writeErr != nil {
-					logger.Warn(context.Background(), "修复客户端 topology 配置失败: %s", writeErr.Error())
-				}
-			}
-
-			c.JSON(http.StatusOK, gin.H{"content": normalized})
+			c.JSON(http.StatusOK, gin.H{"content": string(data)})
 		})
 
 		ovpn.PUT("/client/:name/ccd", RequirePermission("client:create"), func(c *gin.Context) {
@@ -3006,7 +2998,7 @@ func Run(info BuildInfo) {
 			}
 			defer clientsRoot.Close()
 
-			err = clientsRoot.WriteFile(name+".ovpn", []byte(content), 0644)
+			err = clientsRoot.WriteFile(name+".ovpn", []byte(normalizeClientProfile(content)), 0600)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
@@ -3748,7 +3740,7 @@ func Run(info BuildInfo) {
 			}
 			defer clientsRoot.Close()
 
-			data, err := clientsRoot.ReadFile(configName)
+			data, err := readCompatibleClientProfile(clientsRoot, configName)
 			if err != nil {
 				logger.Error(context.Background(), err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{"message": "读取配置文件失败"})
